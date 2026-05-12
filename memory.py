@@ -23,7 +23,22 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trades.db")
+# Путь к SQLite trades.db.
+# Приоритет: TRADES_DB_PATH (env) -> /app/data/trades.db если такой каталог
+# смонтирован (persistent volume на Fly.io/Docker) -> рядом с memory.py
+# (локальный запуск). Это даёт плавный переход между dev и prod без правок
+# кода: на Fly.io монтируем volume на /app/data и переменную не трогаем.
+def _resolve_db_path() -> str:
+    env_path = os.getenv("TRADES_DB_PATH", "").strip()
+    if env_path:
+        return env_path
+    persistent_dir = "/app/data"
+    if os.path.isdir(persistent_dir) and os.access(persistent_dir, os.W_OK):
+        return os.path.join(persistent_dir, "trades.db")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "trades.db")
+
+
+DB_PATH = _resolve_db_path()
 
 
 def _connect() -> sqlite3.Connection:

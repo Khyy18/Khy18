@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
-# Идемпотентный установщик Zenith-Control Ultimate для Ubuntu 22.04 и Debian 12.
-# Скрипт НЕ запускает сервис - владельцу нужно сначала заполнить /opt/zenith/.env.
+# Идемпотентный установщик Zenith-Control Ultimate.
+# Поддерживаемые ОС: Ubuntu 22.04/24.04/26.04, Debian 12/13.
+# Скрипт НЕ запускает сервис - владельцу нужно сначала заполнить
+# /opt/zenith/.env (реальные ключи OKX, Telegram, Groq, NewsAPI).
 #
 
 set -euo pipefail
@@ -23,7 +25,7 @@ fi
 echo "[INFO] Обнаружена ОС: ${OS_ID} ${OS_VERSION}"
 
 case "${OS_ID}:${OS_VERSION}" in
-    ubuntu:22.04|debian:12)
+    ubuntu:22.04|ubuntu:24.04|ubuntu:26.04|debian:12|debian:13)
         ;;
     *)
         echo "[WARN] Дистрибутив ${OS_ID} ${OS_VERSION} официально не протестирован."
@@ -36,39 +38,79 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y git curl ca-certificates software-properties-common
 
-# --- python3.11 + venv -----------------------------------------------------
-if [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION}" == "22.04" ]]; then
-    command -v python3.11 >/dev/null 2>&1 || {
-        echo "[INFO] python3.11 не найден, подключаем deadsnakes PPA"
+# --- Python 3.11+ ----------------------------------------------------------
+# Код бота совместим с любым Python >= 3.11. Алгоритм:
+#   1) Если системный python3 уже >= 3.11 - используем его (Ubuntu 24.04/26.04,
+#      Debian 13 поставляют 3.12/3.13 в main).
+#   2) Иначе ставим python3.11:
+#      - Ubuntu 22.04: через deadsnakes PPA.
+#      - Debian 12:    напрямую из main.
+#      - Иные apt-based: best effort.
+#
+# PYTHON_BIN - итоговый путь к интерпретатору, используется ниже.
+
+PYTHON_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+    SYS_VER="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "0.0")"
+    SYS_MAJOR="${SYS_VER%%.*}"
+    SYS_MINOR="${SYS_VER##*.}"
+    if [[ "${SYS_MAJOR}" == "3" && "${SYS_MINOR}" -ge 11 ]]; then
+        PYTHON_BIN="$(command -v python3)"
+        echo "[INFO] Используем системный python3 = ${SYS_VER} (${PYTHON_BIN})"
+        # venv-модуль может быть в отдельном пакете (python3.X-venv).
+        apt-get install -y "python3-venv" || true
+    fi
+fi
+
+if [[ -z "${PYTHON_BIN}" ]]; then
+    echo "[INFO] Системный python3 старее 3.11, ставим python3.11 вручную"
+    if [[ "${OS_ID}" == "ubuntu" && "${OS_VERSION}" == "22.04" ]]; then
         add-apt-repository -y ppa:deadsnakes/ppa
         apt-get update
         apt-get install -y python3.11 python3.11-venv
-    }
-elif [[ "${OS_ID}" == "debian" && "${OS_VERSION}" == "12" ]]; then
-    apt-get install -y python3.11 python3.11-venv python3.11-dev
-else
-    apt-get install -y python3.11 python3.11-venv || {
-        echo "[WARN] Установка python3.11 штатным способом не прошла."
-        echo "[WARN] Попробуйте вручную поставить python3.11 из backports/PPA."
-    }
+    elif [[ "${OS_ID}" == "debian" && "${OS_VERSION}" == "12" ]]; then
+        apt-get install -y python3.11 python3.11-venv python3.11-dev
+    else
+        apt-get install -y python3.11 python3.11-venv || {
+            echo "[WARN] Установка python3.11 штатным способом не прошла."
+            echo "[WARN] Попробуйте вручную поставить python3.11 из backports/PPA."
+        }
+    fi
+    if command -v python3.11 >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python3.11)"
+    else
+        echo "[ERR] Не удалось найти python3.11. Прерываемся."
+        exit 2
+    fi
 fi
+
+echo "[INFO] Интерпретатор для venv: ${PYTHON_BIN}"
 
 # --- Системный пользователь ------------------------------------------------
 id -u zenith >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/zenith --shell /bin/bash zenith
 install -d -o zenith -g zenith /opt/zenith
 
+# --- Persistent каталог для SQLite ----------------------------------------
+# trades.db хранится в /opt/zenith/data (а не рядом с кодом в /opt/zenith),
+# чтобы `git pull` / переустановка никогда не трогали БД. memory.py подхватит
+# этот путь через TRADES_DB_PATH в .env (или через автодетект /app/data).
+install -d -o zenith -g zenith /opt/zenith/data
+
 # --- Код ------------------------------------------------------------------
 REPO_URL="${REPO_URL:-https://github.com/Khy18/Khy18.git}"
+BRANCH="${BRANCH:-feat/zenith-control-ultimate}"
 if [[ ! -d /opt/zenith/.git ]]; then
-    echo "[INFO] Клонируем ${REPO_URL} -> /opt/zenith"
-    sudo -u zenith git clone "${REPO_URL}" /opt/zenith
+    echo "[INFO] Клонируем ${REPO_URL} (ветка ${BRANCH}) -> /opt/zenith"
+    sudo -u zenith git clone --branch "${BRANCH}" "${REPO_URL}" /opt/zenith
 else
-    echo "[INFO] Обновляем /opt/zenith"
-    sudo -u zenith git -C /opt/zenith pull --ff-only
+    echo "[INFO] Обновляем /opt/zenith (ветка ${BRANCH})"
+    sudo -u zenith git -C /opt/zenith fetch origin "${BRANCH}"
+    sudo -u zenith git -C /opt/zenith checkout "${BRANCH}"
+    sudo -u zenith git -C /opt/zenith pull --ff-only origin "${BRANCH}"
 fi
 
 # --- venv и зависимости ----------------------------------------------------
-sudo -u zenith python3.11 -m venv /opt/zenith/.venv
+sudo -u zenith "${PYTHON_BIN}" -m venv /opt/zenith/.venv
 sudo -u zenith /opt/zenith/.venv/bin/pip install --upgrade pip
 sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
 
@@ -86,11 +128,26 @@ cat <<'EOF'
   1. Скопируйте образец и заполните секреты:
          sudo -u zenith cp /opt/zenith/.env.example /opt/zenith/.env
          sudo -u zenith nano /opt/zenith/.env
+     Минимально обязательные переменные для EXCHANGE=okx:
+         OKX_API_KEY, OKX_API_SECRET, OKX_PASSPHRASE
+         TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
+         GROQ_API_KEY, NEWS_API_KEY
+     Рекомендуется также добавить:
+         TRADES_DB_PATH=/opt/zenith/data/trades.db
+         DRY_RUN=true  # на первые сутки - paper-trading без реальных ордеров
+
   2. Запустите сервис:
          sudo systemctl start zenith
+
   3. Смотрите журнал в реальном времени:
          sudo journalctl -u zenith -f
 
-ВАЖНО: без корректного .env (BYBIT_API_KEY, BYBIT_API_SECRET, TELEGRAM_TOKEN,
-TELEGRAM_CHAT_ID, GEMINI_API_KEY, NEWS_API_KEY) сервис не запустится.
+  4. Когда убедитесь, что всё работает (~24 часа наблюдений):
+         sudo -u zenith sed -i 's/^DRY_RUN=true/DRY_RUN=false/' /opt/zenith/.env
+         sudo systemctl restart zenith
+
+ВАЖНО: не запускайте бот на том же TELEGRAM_TOKEN, который уже используется
+другим процессом (локально или на другом сервере). Telegram выдаёт getUpdates
+только одному клиенту за раз - второй получит HTTP 409 Conflict и потеряет
+команды из чата.
 EOF
