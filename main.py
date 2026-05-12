@@ -38,6 +38,7 @@ import config
 import memory
 import news_engine
 import strategy_v2
+import strategy_v2_meanrevert
 import telegram_bot
 from exchanges import get_adapter
 
@@ -760,9 +761,20 @@ async def _process_symbol(
     if not raw_1h or not raw_4h or not raw_1d:
         return  # транзиентная ошибка
 
+    # 15m свечи нужны подсистеме strategy_v2_meanrevert (режим RANGING).
+    # Отсутствие этого таймфрейма НЕ должно ломать работу Donchian-подсистемы
+    # (она работает на 1h/4h/1d), поэтому при ошибке только логируем warning
+    # и оставляем candles_15m пустым.
+    try:
+        raw_15m = await EXCHANGE.get_klines(session, symbol, interval="15", limit=100)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: warning get_klines(15): {exc}")
+        raw_15m = []
+
     closed_1h = raw_1h[:-1]
     closed_4h = raw_4h[:-1]
     closed_1d = raw_1d[:-1]
+    closed_15m = raw_15m[:-1] if raw_15m else []
     if len(closed_1h) < 21 or len(closed_4h) < 50 or len(closed_1d) < 200:
         return
 
@@ -773,6 +785,12 @@ async def _process_symbol(
     except Exception as exc:  # noqa: BLE001
         print(f"[LOOP] {symbol}: ошибка парсинга свечей: {exc}")
         return
+
+    try:
+        candles_15m = [_bybit_kline_to_dict(k) for k in closed_15m]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: warning парсинга 15m свечей: {exc}")
+        candles_15m = []
 
     last_bar_ts = candles_1h[-1]["ts"]
 
@@ -807,17 +825,51 @@ async def _process_symbol(
         "candles_1h": candles_1h,
         "candles_4h": candles_4h,
         "candles_1d": candles_1d,
+        "candles_15m": candles_15m,
         "equity": state["global"].get("equity_start") or 0.0,
         "atr_1h_now": atr_1h_now,
         "blackout": bool(state["global"].get("blackout", {}).get("blackout")),
         "regime": (sym_state.get("regime") or {}).get("regime", "TRENDING"),
     }
 
-    order = strategy_v2.on_bar(ctx)
+    # Диспетчер подсистем по режиму: Donchian для TRENDING, BB mean-reversion
+    # для RANGING, CRISIS - не торгуем ни одной подсистемой. Выбор фиксируем
+    # один раз и используем одну и ту же подсистему для on_bar и последующего
+    # evaluate_signal (логирование rejected_checks).
+    regime_for_dispatch = (
+        (sym_state.get("regime") or {}).get("regime", "TRENDING")
+    )
+    regime_for_dispatch = str(regime_for_dispatch or "TRENDING").upper()
+    if regime_for_dispatch == "RANGING":
+        active_strategy = strategy_v2_meanrevert
+    elif regime_for_dispatch == "TRENDING":
+        active_strategy = strategy_v2
+    else:  # CRISIS / UNKNOWN - fail-CLOSED
+        active_strategy = None
+
+    order = active_strategy.on_bar(ctx) if active_strategy is not None else None
     if order is None:
         # Детерминированное отклонение - запомним последний фильтр.
+        if active_strategy is None:
+            # В CRISIS/UNKNOWN логируем вето регайма, используя схему
+            # strategy_v2 (пусть запись в rejection_ring останется консистентной).
+            rejection = {
+                "ts": _iso(now),
+                "symbol": symbol,
+                "filter": "regime_crisis",
+                "detail": f"Режим {regime_for_dispatch} - торговля приостановлена",
+                "indicators": {},
+            }
+            state["global"]["rejection_ring"].append(rejection)
+            try:
+                memory.record_rejected_check(
+                    symbol, "regime_crisis", rejection["detail"], {}
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LOOP] {symbol}: ошибка record_rejected_check: {exc}")
+            return
         try:
-            signal = strategy_v2.evaluate_signal(ctx)
+            signal = active_strategy.evaluate_signal(ctx)
         except Exception as exc:  # noqa: BLE001
             print(f"[LOOP] {symbol}: ошибка evaluate_signal: {exc}")
             return
