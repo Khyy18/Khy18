@@ -1,0 +1,38 @@
+"""Реестр биржевых адаптеров.
+
+Использование:
+    from exchanges import get_adapter
+    adapter = get_adapter('bybit')  # или config.EXCHANGE
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .base import ExchangeAdapter
+
+
+_REGISTRY: dict[str, type[ExchangeAdapter]] = {}
+
+
+def register(name: str, cls: type[ExchangeAdapter]) -> None:
+    """Зарегистрировать класс адаптера под именем."""
+    _REGISTRY[name.lower()] = cls
+
+
+def get_adapter(name: str, **kwargs: Any) -> ExchangeAdapter:
+    """Получить экземпляр адаптера по имени.
+    Выбрасывает KeyError если адаптер не зарегистрирован."""
+    key = name.lower()
+    if key not in _REGISTRY:
+        available = ", ".join(sorted(_REGISTRY.keys())) or "(нет)"
+        raise KeyError(
+            f"Биржа '{name}' не зарегистрирована. Доступные: {available}"
+        )
+    return _REGISTRY[key](**kwargs)
+
+
+# Авто-регистрация Bybit при импорте пакета.
+from .bybit import BybitAdapter  # noqa: E402
+
+register("bybit", BybitAdapter)

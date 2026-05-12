@@ -81,6 +81,9 @@ GLOBAL_RISK_CAP = 0.03              # суммарный открытый рис
 # PostOnly-лимитный вход: сколько ждать filла прежде чем свалиться в market IOC.
 POST_ONLY_TIMEOUT_SEC = 30
 
+# --- Биржа (переключается через переменную окружения) ---
+EXCHANGE = os.getenv("EXCHANGE", "bybit")
+
 # --- Bybit V5 ---
 BYBIT_BASE_URL_TESTNET = "https://api-testnet.bybit.com"
 BYBIT_BASE_URL_MAINNET = "https://api.bybit.com"
