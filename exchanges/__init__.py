@@ -32,7 +32,9 @@ def get_adapter(name: str, **kwargs: Any) -> ExchangeAdapter:
     return _REGISTRY[key](**kwargs)
 
 
-# Авто-регистрация Bybit при импорте пакета.
+# Авто-регистрация адаптеров при импорте пакета.
 from .bybit import BybitAdapter  # noqa: E402
+from .okx import OKXAdapter  # noqa: E402
 
 register("bybit", BybitAdapter)
+register("okx", OKXAdapter)
