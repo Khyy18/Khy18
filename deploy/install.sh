@@ -88,18 +88,19 @@ echo "[INFO] Интерпретатор для venv: ${PYTHON_BIN}"
 
 # --- Системный пользователь ------------------------------------------------
 id -u zenith >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/zenith --shell /bin/bash zenith
-install -d -o zenith -g zenith /opt/zenith
-
-# --- Persistent каталог для SQLite ----------------------------------------
-# trades.db хранится в /opt/zenith/data (а не рядом с кодом в /opt/zenith),
-# чтобы `git pull` / переустановка никогда не трогали БД. memory.py подхватит
-# этот путь через TRADES_DB_PATH в .env (или через автодетект /app/data).
-install -d -o zenith -g zenith /opt/zenith/data
 
 # --- Код ------------------------------------------------------------------
+# /opt/zenith создаёт сам git clone (иначе он ругается на непустой путь).
+# Родительский /opt в Ubuntu/Debian уже существует с системными правами.
 REPO_URL="${REPO_URL:-https://github.com/Khy18/Khy18.git}"
 BRANCH="${BRANCH:-feat/zenith-control-ultimate}"
 if [[ ! -d /opt/zenith/.git ]]; then
+    # Если /opt/zenith есть, но это не git-репо (недозавершённый прошлый
+    # запуск, мусор) - сносим, чтобы clone не падал на "not empty".
+    if [[ -d /opt/zenith ]]; then
+        echo "[INFO] /opt/zenith существует без .git, чистим перед клонированием"
+        rm -rf /opt/zenith
+    fi
     echo "[INFO] Клонируем ${REPO_URL} (ветка ${BRANCH}) -> /opt/zenith"
     sudo -u zenith git clone --branch "${BRANCH}" "${REPO_URL}" /opt/zenith
 else
@@ -108,6 +109,13 @@ else
     sudo -u zenith git -C /opt/zenith checkout "${BRANCH}"
     sudo -u zenith git -C /opt/zenith pull --ff-only origin "${BRANCH}"
 fi
+
+# --- Persistent каталог для SQLite ----------------------------------------
+# trades.db хранится в /opt/zenith/data (а не рядом с кодом в /opt/zenith),
+# чтобы `git pull` / переустановка никогда не трогали БД. memory.py подхватит
+# этот путь через TRADES_DB_PATH в .env (или через автодетект /app/data).
+# ВАЖНО: создаём ПОСЛЕ git clone, иначе clone падает на непустую директорию.
+install -d -o zenith -g zenith /opt/zenith/data
 
 # --- venv и зависимости ----------------------------------------------------
 sudo -u zenith "${PYTHON_BIN}" -m venv /opt/zenith/.venv
