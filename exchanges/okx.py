@@ -121,6 +121,23 @@ class OKXAdapter(ExchangeAdapter):
         self.base_url = _OKX_BASE_URL
         self._instrument_cache: dict[str, dict[str, float]] = {}
 
+    # --- ctVal конвертация ------------------------------------------------
+    # OKX SWAP-перпетуалы принимают/возвращают размер в КОНТРАКТАХ, не в
+    # базовой валюте. Один контракт = ctVal базовой валюты (например
+    # BTC-USDT-SWAP: ctVal=0.01 BTC; ETH=0.1 ETH; SOL=1 SOL). Стратегия и
+    # весь остальной код работают в базовой валюте (BTC/ETH/SOL), поэтому
+    # конвертация заперта внутри адаптера: base -> контракты при отправке
+    # ордеров, контракты -> base при чтении позиций / истории.
+
+    def _ct_val(self, norm_symbol: str) -> float:
+        """Размер одного контракта в базовой валюте. Читает из кэша, заполненного
+        get_instrument_info. Если кэш пуст (ещё не прогрели), возвращает 1.0 -
+        это превращает конвертацию в no-op и совпадает с поведением до фикса."""
+        info = self._instrument_cache.get(norm_symbol)
+        if not info:
+            return 1.0
+        return float(info.get("contractValue") or 1.0) or 1.0
+
     # --- Подпись и HTTP-обёртка -------------------------------------------
 
     def _sign(self, ts: str, method: str, path_with_query: str, body: str) -> str:
@@ -275,6 +292,14 @@ class OKXAdapter(ExchangeAdapter):
             "qtyStep": _safe_float(item.get("lotSz")),
             "minNotionalValue": 0.0,  # OKX не отдаёт этот фильтр напрямую.
             "tickSize": _safe_float(item.get("tickSz")),
+            # ctVal: размер одного контракта в базовой валюте (ctValCcy).
+            # Для BTC-USDT-SWAP = 0.01 BTC, ETH = 0.1 ETH, SOL = 1 SOL.
+            # Используется для конвертации base currency <-> контракты
+            # при размещении ордеров и чтении позиций. Если сервер не отдал
+            # ctVal (нестандартный инструмент), считаем 1.0 как безопасный
+            # дефолт (эквивалент "без конвертации").
+            "contractValue": _safe_float(item.get("ctVal"), 1.0) or 1.0,
+            "contractValueCcy": str(item.get("ctValCcy") or ""),
         }
         self._instrument_cache[norm] = info
         return info
@@ -346,6 +371,10 @@ class OKXAdapter(ExchangeAdapter):
                 print(f"[OKX] Ошибка get_positions: {resp.get('msg')}")
             return []
         data = resp.get("data") or []
+        # pos у OKX - количество КОНТРАКТОВ со знаком. Конвертируем размер
+        # в базовую валюту, наружу даём ту же семантику, что ожидает код
+        # main.py (long=Buy, short=Sell, size в base).
+        ct_val = self._ct_val(norm)
         out: list[dict[str, Any]] = []
         for item in data:
             pos = _safe_float(item.get("pos"))
@@ -354,7 +383,7 @@ class OKXAdapter(ExchangeAdapter):
             out.append({
                 "symbol": item.get("instId"),
                 "side": "Buy" if pos > 0 else "Sell",
-                "size": abs(pos),
+                "size": abs(pos) * ct_val,
                 "avgPrice": _safe_float(item.get("avgPx")),
                 "unrealisedPnl": _safe_float(item.get("upl")),
                 "raw": item,
@@ -374,13 +403,16 @@ class OKXAdapter(ExchangeAdapter):
                 print(f"[OKX] Ошибка get_closed_pnl: {resp.get('msg')}")
             return []
         data = resp.get("data") or []
+        # closeTotalPos у OKX - суммарный закрытый объём в КОНТРАКТАХ.
+        # Переводим в базовую валюту. realizedPnl уже в USDT, его не трогаем.
+        ct_val = self._ct_val(norm)
         out: list[dict[str, Any]] = []
         for item in data:
             out.append({
                 "symbol": item.get("instId"),
                 "closedPnl": _safe_float(item.get("realizedPnl") or item.get("pnl")),
                 "avgExitPrice": _safe_float(item.get("closeAvgPx")),
-                "closedSize": _safe_float(item.get("closeTotalPos")),
+                "closedSize": _safe_float(item.get("closeTotalPos")) * ct_val,
                 "createdTime": item.get("cTime"),
                 "raw": item,
             })
@@ -404,10 +436,14 @@ class OKXAdapter(ExchangeAdapter):
                 print(f"[OKX] Ошибка get_execution_history: {resp.get('msg')}")
             return []
         data = resp.get("data") or []
+        # fillSz у OKX - в контрактах. Конвертируем в базовую валюту,
+        # чтобы наружу уходили те же единицы, в которых стратегия считает
+        # qty/risk.
+        ct_val = self._ct_val(norm)
         out: list[dict[str, Any]] = []
         for item in data:
             out.append({
-                "execQty": _safe_float(item.get("fillSz")),
+                "execQty": _safe_float(item.get("fillSz")) * ct_val,
                 "execPrice": _safe_float(item.get("fillPx")),
                 "orderId": item.get("ordId"),
                 "ts": item.get("ts"),
@@ -504,12 +540,25 @@ class OKXAdapter(ExchangeAdapter):
         price: Optional[float] = None,
         reduce_only: bool = False,
     ) -> Optional[dict[str, Any]]:
+        # qty приходит в базовой валюте (например 0.05 BTC).
+        # OKX принимает размер в КОНТРАКТАХ (sz = qty / ctVal).
+        # Округляем вниз до целого числа контрактов - OKX не принимает
+        # дробные контракты для SWAP.
+        ct_val = self._ct_val(norm_symbol)
+        contracts = qty / ct_val if ct_val > 0 else qty
+        contracts_int = math.floor(contracts)
+        if contracts_int <= 0:
+            print(
+                f"[OKX] _place_raw_order: qty={qty} в base меньше одного "
+                f"контракта (ctVal={ct_val}) для {norm_symbol}"
+            )
+            return {"code": "-1", "msg": "qty below 1 contract", "data": []}
         body: dict[str, Any] = {
             "instId": norm_symbol,
             "tdMode": "cross",
             "side": side.lower(),
             "ordType": ord_type,
-            "sz": str(qty),
+            "sz": str(contracts_int),
         }
         if price is not None:
             body["px"] = str(price)
@@ -673,32 +722,48 @@ class OKXAdapter(ExchangeAdapter):
     def validate_and_round_qty(
         self, qty: float, info: dict[str, float], price: float
     ) -> float:
-        """Привести qty к биржевым фильтрам:
-          - округлить вниз до qtyStep;
-          - проверить qty >= minOrderQty;
-          - проверить qty * price >= minNotionalValue (если задан).
-        При провале любой проверки возвращаем 0.0 - это сигнал «не открывать»."""
+        """Привести qty (в базовой валюте) к биржевым фильтрам OKX SWAP.
+
+        OKX принимает размер в ЦЕЛЫХ контрактах. Поэтому мы:
+          1. Переводим base -> контракты через ctVal.
+          2. Округляем вниз до целого числа контрактов (floor).
+          3. Проверяем >= minSz (минимальный размер ордера, контракты).
+          4. Возвращаем ОБРАТНО в базовую валюту (контракты * ctVal),
+             чтобы верхний код (main.py::_sum_open_risk и т.п.) считал
+             риск в тех же единицах, что использовала стратегия.
+
+        При провале любой проверки возвращаем 0.0 - сигнал «не открывать».
+        minOrderQty/qtyStep в info хранятся в контрактах (как OKX их отдаёт
+        в minSz/lotSz), и используются без дополнительной конвертации.
+        """
         try:
-            q = float(qty)
+            q_base = float(qty)
             p = float(price)
         except (TypeError, ValueError):
             return 0.0
-        if q <= 0 or p <= 0 or not info:
+        if q_base <= 0 or p <= 0 or not info:
             return 0.0
 
-        step = _safe_float(info.get("qtyStep"))
-        min_qty = _safe_float(info.get("minOrderQty"))
+        ct_val = _safe_float(info.get("contractValue"), 1.0) or 1.0
+        min_sz_contracts = _safe_float(info.get("minOrderQty"))
+        lot_sz_contracts = _safe_float(info.get("qtyStep"))
         min_notional = _safe_float(info.get("minNotionalValue"))
 
-        if step > 0:
-            q = math.floor(q / step) * step
-            digits = max(0, -int(math.floor(math.log10(step)))) if step < 1 else 0
-            q = round(q, digits) if digits else float(int(q))
+        # 1-2. Переводим в контракты и округляем вниз до целого. Если lotSz
+        # дробный (<1), всё равно требуем целое: OKX SWAP принимает только
+        # целое число контрактов.
+        contracts = math.floor(q_base / ct_val) if ct_val > 0 else math.floor(q_base)
+        if lot_sz_contracts > 0 and lot_sz_contracts >= 1:
+            # На случай если OKX когда-то введёт lotSz > 1 для SWAP.
+            contracts = math.floor(contracts / lot_sz_contracts) * int(lot_sz_contracts)
 
-        if q <= 0:
+        if contracts <= 0:
             return 0.0
-        if min_qty > 0 and q < min_qty:
+        if min_sz_contracts > 0 and contracts < min_sz_contracts:
             return 0.0
-        if min_notional > 0 and (q * p) < min_notional:
+
+        q_rounded_base = contracts * ct_val
+
+        if min_notional > 0 and (q_rounded_base * p) < min_notional:
             return 0.0
-        return float(q)
+        return float(q_rounded_base)
