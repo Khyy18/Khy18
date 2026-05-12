@@ -56,6 +56,14 @@ CB_REGIMES = "zc:regimes"
 CB_KILL = "zc:kill"
 CB_RESUME_MDD = "zc:resume_mdd"
 
+# Двухэтапное подтверждение опасных действий (PANIC SELL и снятие MDD).
+# Основная кнопка (CB_PANIC / CB_RESUME_MDD) не выполняет действие,
+# а показывает диалог с двумя кнопками: подтвердить или отменить.
+CB_PANIC_CONFIRM = "zc:panic_ok"
+CB_PANIC_CANCEL = "zc:panic_no"
+CB_RESUME_MDD_CONFIRM = "zc:mdd_ok"
+CB_RESUME_MDD_CANCEL = "zc:mdd_no"
+
 
 def _bot_url(method: str) -> str:
     return f"{config.TELEGRAM_API_URL}/bot{config.TELEGRAM_TOKEN}/{method}"
@@ -286,7 +294,34 @@ async def _handle_positions(
 
 async def _handle_panic(
     session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Первый шаг: показать диалог подтверждения, позиции НЕ трогаем.
+
+    Возвращает (текст, клавиатура). Реальное исполнение - в _handle_panic_confirm
+    при нажатии кнопки «⚠️ ДА, ЗАКРЫТЬ ВСЁ».
+    """
+    text = (
+        "🚨 <b>PANIC SELL — подтверждение</b>\n\n"
+        "Будут закрыты <b>все открытые позиции</b> по "
+        f"{', '.join(config.SYMBOLS)} reduce-only маркетом, "
+        "и торговля будет поставлена на паузу.\n\n"
+        "Вы уверены?"
+    )
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "⚠️ ДА, ЗАКРЫТЬ ВСЁ", "callback_data": CB_PANIC_CONFIRM},
+                {"text": "Отмена", "callback_data": CB_PANIC_CANCEL},
+            ]
+        ]
+    }
+    return text, keyboard
+
+
+async def _handle_panic_confirm(
+    session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
+    """Второй шаг: реально закрываем все позиции и ставим торговлю на паузу."""
     _g(state)["bot_running"] = False
     total_orders = 0
     for sym in config.SYMBOLS:
@@ -302,6 +337,12 @@ async def _handle_panic(
         f"🚨 PANIC SELL выполнен: отправлено {total_orders} ордеров на закрытие "
         f"по {len(config.SYMBOLS)} символам. Торговля поставлена на паузу."
     )
+
+
+async def _handle_panic_cancel(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    return "Отменено. Позиции не тронуты, торговля продолжается."
 
 
 async def _handle_why(
@@ -429,14 +470,50 @@ async def _handle_kill_state(
 
 async def _handle_resume_mdd(
     session: aiohttp.ClientSession, state: dict[str, Any]
-) -> str:
+) -> tuple[str, dict[str, Any]]:
+    """Первый шаг: показать диалог подтверждения, kill-switch НЕ трогаем."""
     g = _g(state)
     if g.get("kill_switch_state") != "MDD":
-        return "✅ MDD не активен, сбрасывать нечего."
+        # Нечего снимать - диалог не нужен, сразу ответ без кнопок.
+        return (
+            "✅ MDD не активен, сбрасывать нечего.",
+            set_keyboard(),
+        )
+    text = (
+        "✅ <b>СНЯТЬ MDD kill-switch — подтверждение</b>\n\n"
+        "MDD активируется при просадке ≥ "
+        f"{config.MAX_DRAWDOWN * 100:.0f}% от HWM и снимается ТОЛЬКО вручную. "
+        "Убедитесь, что вы понимаете текущую просадку и готовы продолжить.\n\n"
+        "Снять блокировку?"
+    )
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ ДА, СНЯТЬ", "callback_data": CB_RESUME_MDD_CONFIRM},
+                {"text": "Отмена", "callback_data": CB_RESUME_MDD_CANCEL},
+            ]
+        ]
+    }
+    return text, keyboard
+
+
+async def _handle_resume_mdd_confirm(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Второй шаг: реально снимаем MDD (если он всё ещё активен)."""
+    g = _g(state)
+    if g.get("kill_switch_state") != "MDD":
+        return "✅ MDD уже не активен."
     g["kill_switch_state"] = "NONE"
     g["kill_until_utc"] = None
     g["kill_detail"] = ""
     return "✅ MDD kill-switch снят вручную. Торговля возобновится при bot_running=on."
+
+
+async def _handle_resume_mdd_cancel(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    return "Отменено. MDD kill-switch остаётся активным."
 
 
 _HANDLERS = {
@@ -445,11 +522,15 @@ _HANDLERS = {
     CB_STATS: _handle_stats,
     CB_POSITIONS: _handle_positions,
     CB_PANIC: _handle_panic,
+    CB_PANIC_CONFIRM: _handle_panic_confirm,
+    CB_PANIC_CANCEL: _handle_panic_cancel,
     CB_WHY: _handle_why,
     CB_REPORT: _handle_report,
     CB_REGIMES: _handle_regimes,
     CB_KILL: _handle_kill_state,
     CB_RESUME_MDD: _handle_resume_mdd,
+    CB_RESUME_MDD_CONFIRM: _handle_resume_mdd_confirm,
+    CB_RESUME_MDD_CANCEL: _handle_resume_mdd_cancel,
 }
 
 
@@ -466,13 +547,23 @@ async def _process_callback(
             await answer_callback(session, cb_id, "Неизвестная команда")
         return
     try:
-        text = await handler(session, state)
+        result = await handler(session, state)
     except Exception as exc:  # noqa: BLE001
         print(f"[TG] Ошибка обработчика {data}: {exc}")
-        text = f"Ошибка обработчика: {exc}"
+        result = f"Ошибка обработчика: {exc}"
+
+    # Handler может вернуть либо str (текст + дефолтная клавиатура),
+    # либо tuple (текст, кастомная клавиатура) - последнее используется
+    # для диалогов подтверждения PANIC SELL и СНЯТЬ MDD.
+    if isinstance(result, tuple) and len(result) == 2:
+        text, keyboard = result
+    else:
+        text = result
+        keyboard = set_keyboard()
+
     if cb_id:
         await answer_callback(session, cb_id, "Готово")
-    await send_message(session, text, reply_markup=set_keyboard())
+    await send_message(session, text, reply_markup=keyboard)
 
 
 async def _process_message(
@@ -497,8 +588,15 @@ async def _process_message(
         )
         return
     if lowered == "/resume_kill_switch":
-        reply = await _handle_resume_mdd(session, state)
-        await send_message(session, reply, reply_markup=set_keyboard())
+        result = await _handle_resume_mdd(session, state)
+        # Handler теперь возвращает либо str (MDD не активен), либо tuple
+        # (текст, клавиатура подтверждения). Оба случая поддерживаем.
+        if isinstance(result, tuple) and len(result) == 2:
+            reply, keyboard = result
+        else:
+            reply = result
+            keyboard = set_keyboard()
+        await send_message(session, reply, reply_markup=keyboard)
         return
     # Любое другое сообщение - просто показываем меню.
     await send_message(
