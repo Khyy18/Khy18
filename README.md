@@ -127,6 +127,29 @@ backtester/            # event-driven бэктестер + walk-forward
 deploy/                # install.sh, systemd unit, Dockerfile, compose
 ```
 
+## Поддерживаемые биржи
+
+| Биржа | Статус | Файл адаптера |
+|-------|--------|---------------|
+| Bybit V5 | реализован | `exchanges/bybit.py` |
+| (следующая) | в планах | - |
+
+Переключение биржи: переменная окружения `EXCHANGE=bybit` в `.env`.
+
+Архитектура: `exchanges/base.ExchangeAdapter` определяет единый интерфейс.
+Добавление новой биржи = один файл + регистрация. Подробнее: `exchanges/README.md`.
+
+## Изменения v2.1
+
+- Исправлен MDD self-trip: снимок эквити использует `cumulative_pnl` (не сбрасываемый).
+- PostOnly fill подтверждается через execution history (phantom-trade fix).
+- Entry price берётся из реального fill, а не из limit_price.
+- Exit price и PnL берутся из `/v5/position/closed-pnl` (fallback на 1m kline).
+- Дедупликация rejection ring: якорь бара продвигается безусловно.
+- SQLite временные фильтры через `datetime(ts)`.
+- Бэктестер совместим со strategy_v1 (on_bar/on_fill/set_params заглушки).
+- Введена абстракция `ExchangeAdapter` для замены биржи одним файлом.
+
 ## Дисклеймер
 
 Проект предназначен для обкатки на Bybit Testnet и образовательных целей.
