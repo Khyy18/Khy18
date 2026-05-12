@@ -31,11 +31,55 @@ def _safe_int(value: str, default: int = 0) -> int:
 TELEGRAM_CHAT_ID = _safe_int(_TELEGRAM_CHAT_ID_RAW, 0)
 
 
-# --- Торговые константы ---
+# --- Торговые константы (v1 legacy) ---
+# Следующие четыре константы сохранены для обратной совместимости со v1
+# (стратегия RSI-cross, ai_analyst.decide). Новый код v2 опирается на
+# блок "v2 constants" ниже: SYMBOLS/TIMEFRAMES/DONCHIAN/ATR/vol-targeting.
 SYMBOL = "BTCUSDT"
 IS_TESTNET = True
 MAX_DAILY_LOSS = 0.03   # 3% от стартового эквити - суточный стоп
 RISK_PER_TRADE = 0.01   # 1% на сделку
+
+# --- v2 constants (Zenith-Control Ultimate) ---
+# Мультисимвольный универсум и мультитаймфреймовое дерево.
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+TIMEFRAMES = ("1", "60", "240", "D")  # 1м (исполнение), 1ч/4ч (сигналы), день (тренд)
+
+# Vol-targeting: целевая годовая волатильность портфеля (20%).
+TARGET_ANNUAL_VOL = 0.20
+
+# Donchian-каналы: длинный - для входов (пробой хая/лоя N баров),
+# короткий - для выходов (обратный пробой на N баров).
+DONCHIAN_LONG_LOOKBACK = 20
+DONCHIAN_SHORT_LOOKBACK = 10
+
+# ATR-стопы: жёсткий стоп = 2.5 * ATR, трейлинг = 3.0 * ATR.
+ATR_STOP_MULT = 2.5
+ATR_TRAIL_MULT = 3.0
+
+# Таймаут на позицию (часы): если за это время сделка не закрылась
+# по TP/трейлу/обратному сигналу - закрываем принудительно.
+TIME_STOP_HOURS = 48
+
+# Ярусные kill-switches (сверх суточного MAX_DAILY_LOSS = 3%).
+MAX_WEEKLY_LOSS = 0.07   # 7% недельный убыток - пауза до ручного старта
+MAX_DRAWDOWN = 0.15      # 15% просадка от HWM - жёсткая остановка
+
+# TTL ответов ИИ-модулей (во избежание повторных дорогих вызовов Gemini).
+AI_BLACKOUT_TTL_SEC = 55 * 60      # macro-sentinel: новостной blackout, ~55 минут
+AI_REGIME_TTL_SEC = 4 * 3600       # режимный классификатор: 4 часа
+
+# Расписание еженедельного пост-мортема (UTC).
+# 0 = понедельник по стандарту Python (datetime.weekday()).
+POSTMORTEM_DAY_UTC = 0
+POSTMORTEM_HOUR_UTC = 0
+
+# Риск-лимиты портфеля.
+PER_SYMBOL_MAX_POSITIONS = 1        # не больше одной позиции на символ
+GLOBAL_RISK_CAP = 0.03              # суммарный открытый риск не больше 3% эквити
+
+# PostOnly-лимитный вход: сколько ждать filла прежде чем свалиться в market IOC.
+POST_ONLY_TIMEOUT_SEC = 30
 
 # --- Bybit V5 ---
 BYBIT_BASE_URL_TESTNET = "https://api-testnet.bybit.com"
