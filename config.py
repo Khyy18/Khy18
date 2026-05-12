@@ -42,7 +42,15 @@ RISK_PER_TRADE = 0.01   # 1% на сделку
 
 # --- v2 constants (Zenith-Control Ultimate) ---
 # Мультисимвольный универсум и мультитаймфреймовое дерево.
-SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+SYMBOLS = [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "BNBUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "AVAXUSDT",
+]
 TIMEFRAMES = ("1", "60", "240", "D")  # 1м (исполнение), 1ч/4ч (сигналы), день (тренд)
 
 # Vol-targeting: целевая годовая волатильность портфеля (20%).
@@ -67,6 +75,10 @@ MIN_ATR_PCT = {
     "BTCUSDT": 0.003,   # 0.30% - BTC самый крупный, волатильность ниже
     "ETHUSDT": 0.004,   # 0.40% - ETH чуть волатильнее BTC
     "SOLUSDT": 0.006,   # 0.60% - SOL существенно волатильнее
+    "BNBUSDT": 0.004,   # 0.40% - BNB близко к ETH по волатильности
+    "XRPUSDT": 0.006,   # 0.60% - XRP более рывковый, нужен фильтр повыше
+    "DOGEUSDT": 0.008,  # 0.80% - meme-coin, высокая шумность
+    "AVAXUSDT": 0.006,  # 0.60% - L1 alt, сравнимо с SOL
 }
 MIN_ATR_PCT_DEFAULT = 0.003
 
@@ -93,7 +105,7 @@ MAX_DRAWDOWN = 0.15      # 15% просадка от HWM - жёсткая ост
 
 # TTL ответов ИИ-модулей (во избежание повторных дорогих вызовов Groq).
 AI_BLACKOUT_TTL_SEC = 55 * 60      # macro-sentinel: новостной blackout, ~55 минут
-AI_REGIME_TTL_SEC = 1 * 3600       # режимный классификатор: 1 час
+AI_REGIME_TTL_SEC = 30 * 60        # режимный классификатор: 30 минут
 
 # Расписание еженедельного пост-мортема (UTC).
 # 0 = понедельник по стандарту Python (datetime.weekday()).
@@ -107,7 +119,7 @@ HEARTBEAT_INTERVAL_SEC = 6 * 3600
 
 # Риск-лимиты портфеля.
 PER_SYMBOL_MAX_POSITIONS = 1        # не больше одной позиции на символ
-GLOBAL_RISK_CAP = 0.03              # суммарный открытый риск не больше 3% эквити
+GLOBAL_RISK_CAP = 0.04              # суммарный открытый риск не больше 4% эквити
 
 # PostOnly-лимитный вход: сколько ждать filла прежде чем свалиться в market IOC.
 POST_ONLY_TIMEOUT_SEC = 30
