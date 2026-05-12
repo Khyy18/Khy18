@@ -67,6 +67,7 @@ def init_db() -> None:
                 """
             )
             conn.commit()
+        print(f"[MEMORY] База данных trades.db инициализирована: {DB_PATH}")
     except sqlite3.Error as exc:
         print(f"[MEMORY] Ошибка инициализации БД: {exc}")
 

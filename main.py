@@ -302,6 +302,27 @@ async def main() -> None:
 
     async with aiohttp.ClientSession() as session:
         print("[MAIN] Zenith-Control Ultimate запущен")
+        # --- Проверка авторизации на Bybit (запрос баланса) ---
+        try:
+            balance = await api_engine.get_balance(session, "USDT")
+        except Exception as exc:  # noqa: BLE001
+            balance = None
+            print(f"[MAIN] Ошибка при проверке авторизации Bybit: {exc}")
+
+        if balance is None:
+            print(
+                "[MAIN] Не удалось авторизоваться на Bybit: "
+                "проверьте BYBIT_API_KEY/BYBIT_API_SECRET и режим (testnet/mainnet)."
+            )
+        else:
+            mode = "TESTNET" if config.IS_TESTNET else "MAINNET"
+            print(
+                f"[MAIN] Успех авторизации на Bybit ({mode}). "
+                f"Баланс USDT: {balance:.4f}"
+            )
+            state["equity_start"] = balance
+
+        print("[MAIN] Telegram-бот запущен в режиме Long Polling")
         await telegram_bot.send_message(
             session,
             "🚀 <b>Zenith-Control Ultimate</b> запущен.\nВыберите действие ниже.",
