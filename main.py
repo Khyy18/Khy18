@@ -541,7 +541,7 @@ async def _check_closed_exchange_position(
     if positions:
         return  # позиция всё ещё открыта
 
-    # --- Пытаемся получить реальный PnL через Bybit closed-pnl ---
+    # --- Пытаемся получить реальный PnL через closed-pnl адаптера ---
     real_pnl = None
     real_exit_price = None
     try:
@@ -882,22 +882,24 @@ async def main() -> None:
     async with aiohttp.ClientSession() as session:
         print("[MAIN] Zenith-Control Ultimate v2 запущен")
 
-        # Стартовый баланс: ставим equity_start и HWM. На сбое Bybit - warn.
+        # Стартовый баланс: ставим equity_start и HWM. На сбое биржи - warn.
+        exch_label = config.EXCHANGE.upper()
         try:
             balance = await EXCHANGE.get_balance(session, "USDT")
         except Exception as exc:  # noqa: BLE001
             balance = None
-            print(f"[MAIN] Ошибка при проверке авторизации Bybit: {exc}")
+            print(f"[MAIN] Ошибка при проверке авторизации {exch_label}: {exc}")
 
         if balance is None:
             print(
-                "[MAIN] Не удалось получить баланс Bybit. Цикл всё равно стартует, "
-                "но входов не будет до ручной проверки ключей/сети."
+                f"[MAIN] Не удалось получить баланс {exch_label}. "
+                "Цикл всё равно стартует, но входов не будет до ручной "
+                "проверки ключей/сети."
             )
         else:
             mode = "TESTNET" if config.IS_TESTNET else "MAINNET"
             print(
-                f"[MAIN] Успех авторизации на Bybit ({mode}). "
+                f"[MAIN] Успех авторизации на {exch_label} ({mode}). "
                 f"Баланс USDT: {balance:.4f}"
             )
             state["global"]["equity_start"] = float(balance)
