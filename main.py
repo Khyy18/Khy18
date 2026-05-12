@@ -379,6 +379,82 @@ async def _regime_tick(
         )
 
 
+async def _heartbeat_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Раз в HEARTBEAT_INTERVAL_SEC шлём в Telegram короткую сводку "я жив".
+
+    Первый heartbeat отправляем отложенно: пропускаем самый первый тик
+    (чтобы не пришло сразу после стартового сообщения), второй тик через
+    HEARTBEAT_INTERVAL_SEC уже уйдёт. Это даёт пользователю контрольную
+    точку: если сообщение не пришло в срок - бот лёг.
+    """
+    g = state["global"]
+    last_epoch = float(g.get("last_heartbeat_epoch") or 0.0)
+    interval = float(getattr(config, "HEARTBEAT_INTERVAL_SEC", 6 * 3600))
+
+    # Первый вызов: не шлём, просто ставим якорь, чтобы следующий
+    # heartbeat улетел через полный интервал после старта процесса.
+    if last_epoch <= 0:
+        g["last_heartbeat_epoch"] = time.time()
+        return
+
+    if (time.time() - last_epoch) < interval:
+        return
+
+    # Собираем короткую сводку.
+    bot_running = "ON" if g.get("bot_running", True) else "OFF"
+    ks = str(g.get("kill_switch_state") or "NONE")
+    daily_pnl = float(g.get("daily_pnl", 0.0) or 0.0)
+    weekly_pnl = float(g.get("weekly_pnl", 0.0) or 0.0)
+    equity_start = g.get("equity_start")
+    cumulative_pnl = float(g.get("cumulative_pnl", 0.0) or 0.0)
+    proxy_equity = (
+        float(equity_start) + cumulative_pnl if equity_start is not None else None
+    )
+    blackout = bool((g.get("blackout") or {}).get("blackout"))
+    blackout_str = "ON" if blackout else "OFF"
+
+    # Количество открытых позиций и отклонений за последние 6ч.
+    open_positions = sum(
+        1 for s in state["symbols"].values() if s.get("open_trade")
+    )
+    rejection_ring = g.get("rejection_ring") or []
+    cutoff = now - timedelta(seconds=interval)
+    recent_rejections = 0
+    for r in rejection_ring:
+        ts = _from_iso(r.get("ts"))
+        if ts is not None and ts >= cutoff:
+            recent_rejections += 1
+
+    equity_line = (
+        f"{proxy_equity:.2f}" if proxy_equity is not None else "-"
+    )
+    parts = [
+        "💓 <b>Heartbeat</b> - бот жив",
+        f"Время: {now.strftime('%Y-%m-%d %H:%M UTC')}",
+        f"Торговля: {bot_running}  |  Kill-switch: {ks}  |  Blackout: {blackout_str}",
+        f"Эквити: {equity_line} USDT (cum PnL {cumulative_pnl:+.2f})",
+        f"PnL суточный: {daily_pnl:+.4f}  |  недельный: {weekly_pnl:+.4f}",
+        f"Открытых позиций: {open_positions} / {len(config.SYMBOLS)}",
+        f"Отклонений за {int(interval / 3600)}ч: {recent_rejections}",
+    ]
+
+    try:
+        await telegram_bot.send_message(
+            session,
+            "\n".join(parts),
+            reply_markup=telegram_bot.set_keyboard(),
+        )
+        print(f"[HB] Heartbeat отправлен в Telegram")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[HB] Ошибка отправки heartbeat: {exc}")
+
+    g["last_heartbeat_epoch"] = time.time()
+
+
 async def _weekly_postmortem_tick(
     session: aiohttp.ClientSession,
     state: dict[str, Any],
@@ -888,6 +964,7 @@ async def trading_loop(
                     print(f"[LOOP] {symbol}: ошибка тика: {exc}")
 
             await _apply_kill_switches(session, state, now)
+            await _heartbeat_tick(session, state, now)
             await _weekly_postmortem_tick(session, state, now)
         except asyncio.CancelledError:
             raise
@@ -934,6 +1011,7 @@ def _build_state() -> dict[str, Any]:
             },
             "last_macro_check_epoch": 0.0,
             "last_postmortem_iso_week": None,
+            "last_heartbeat_epoch": 0.0,
             "rejection_ring": collections.deque(maxlen=50),
         },
         "instruments": {},
