@@ -103,13 +103,24 @@ if [[ ! -d /opt/zenith/.git ]]; then
         rm -rf /opt/zenith
     fi
     echo "[INFO] Клонируем ${REPO_URL} (ветка ${BRANCH}) -> /opt/zenith"
-    git clone --branch "${BRANCH}" "${REPO_URL}" /opt/zenith
+    # GIT_TERMINAL_PROMPT=0: git никогда не запрашивает login/password в
+    # терминале. Публичный репозиторий клонируется без авторизации; если
+    # сервер вернёт 401/403, git быстро упадёт с понятной ошибкой, а не
+    # зависнет с "Username for 'https://github.com':" (что особенно вредно
+    # при curl | bash).
+    # -c credential.helper=: принудительно отключает любой системный
+    # credential.helper (keychain, store, libsecret), который мог бы
+    # перехватить запрос.
+    GIT_TERMINAL_PROMPT=0 git -c credential.helper= \
+        clone --branch "${BRANCH}" "${REPO_URL}" /opt/zenith
     chown -R zenith:zenith /opt/zenith
 else
     echo "[INFO] Обновляем /opt/zenith (ветка ${BRANCH})"
-    sudo -u zenith git -C /opt/zenith fetch origin "${BRANCH}"
+    sudo -u zenith env GIT_TERMINAL_PROMPT=0 \
+        git -C /opt/zenith -c credential.helper= fetch origin "${BRANCH}"
     sudo -u zenith git -C /opt/zenith checkout "${BRANCH}"
-    sudo -u zenith git -C /opt/zenith pull --ff-only origin "${BRANCH}"
+    sudo -u zenith env GIT_TERMINAL_PROMPT=0 \
+        git -C /opt/zenith -c credential.helper= pull --ff-only origin "${BRANCH}"
 fi
 
 # --- Persistent каталог для SQLite ----------------------------------------
