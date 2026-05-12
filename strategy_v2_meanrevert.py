@@ -368,6 +368,7 @@ def on_bar(ctx: dict[str, Any]) -> Optional[dict[str, Any]]:
             "reason": signal.get("reason", ""),
             "filter": signal.get("filter"),
             "strategy": STRATEGY_NAME,
+            "strategy_name": STRATEGY_NAME,
             "tp": float(signal.get("tp") or 0.0),
             "indicators": indicators,
         },
