@@ -216,6 +216,28 @@ sudo systemctl restart zenith
 наблюдений в `DRY_RUN=true`, готовьтесь к возможному откату на
 `feat/zenith-control-ultimate` одной командой `git checkout`.
 
+Для перехода на ветку v3 (AI-veto gate поверх v2 - Groq-проверка сделки
+перед отправкой ордера, подробности в корневом `README.md`, секция
+«v3: AI-veto gate»):
+
+```bash
+sudo -u zenith git -C /opt/zenith fetch origin
+sudo -u zenith git -C /opt/zenith checkout feat/v3-ai-veto
+sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
+# Добавить в .env переменную режима gate (по умолчанию shadow - только логирует).
+grep -q '^AI_TRADE_GATE_MODE=' /opt/zenith/.env \
+    || echo 'AI_TRADE_GATE_MODE=shadow' | sudo tee -a /opt/zenith/.env
+sudo systemctl restart zenith
+```
+
+**Предупреждение.** `feat/v3-ai-veto` - экспериментальная ветка поверх
+`feat/v2-meanrevert` и унаследует все её риски. Стартуйте в
+`AI_TRADE_GATE_MODE=shadow`: решения gate логируются, но не применяются -
+это даёт возможность увидеть в журнале, какие сделки gate хотел бы
+заблокировать, прежде чем переключать на `active`. Откат так же простой:
+`git checkout feat/v2-meanrevert` (или `feat/zenith-control-ultimate`
+чтобы вернуться на v1) + `systemctl restart zenith`.
+
 Docker:
 
 ```bash
