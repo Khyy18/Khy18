@@ -1,4 +1,4 @@
-"""Telegram-терминал для Zenith-Control Ultimate.
+"""Telegram-терминал для Zenith-Control Ultimate v2.
 
 Long polling через aiohttp напрямую (без python-telegram-bot).
 СТРОГО: каждое сообщение и callback_query, у которого from.id или chat.id
@@ -6,19 +6,34 @@ Long polling через aiohttp напрямую (без python-telegram-bot).
 пользователя отвечаем answerCallbackQuery с текстом «Доступ запрещён»,
 но ничего в системе не меняем.
 
-Шесть inline-кнопок:
-  ▶️ СТАРТ, ⏸ СТОП, 📊 СТАТИСТИКА, 📂 ПОЗИЦИИ, 🚨 PANIC SELL, 🧠 ПОЧЕМУ МИМО?
+Десять inline-кнопок:
+  ▶️ СТАРТ, ⏸ СТОП,
+  📊 СТАТИСТИКА, 📂 ПОЗИЦИИ,
+  🚨 PANIC SELL, 🧠 ПОЧЕМУ МИМО?,
+  📈 ОТЧЁТ, 🎚 РЕЖИМЫ,
+  🛡 KILL-STATE, ✅ СНЯТЬ MDD.
+
+Состояние state в v2 имеет форму:
+    {
+      'symbols': {symbol: {...}},
+      'global': {...},
+      'instruments': {...},
+    }
+Для обратной совместимости с v1-тестами (где state плоский) читаем
+`state['global']['bot_running']` с fallback'ом на `state['bot_running']`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import aiohttp
 
 import ai_analyst
+import ai_postmortem
 import api_engine
 import config
 import memory
@@ -31,14 +46,30 @@ CB_STATS = "zc:stats"
 CB_POSITIONS = "zc:positions"
 CB_PANIC = "zc:panic"
 CB_WHY = "zc:why"
+CB_REPORT = "zc:report"
+CB_REGIMES = "zc:regimes"
+CB_KILL = "zc:kill"
+CB_RESUME_MDD = "zc:resume_mdd"
 
 
 def _bot_url(method: str) -> str:
     return f"{config.TELEGRAM_API_URL}/bot{config.TELEGRAM_TOKEN}/{method}"
 
 
+def _g(state: dict[str, Any]) -> dict[str, Any]:
+    """Вернуть словарь «глобального» раздела state.
+
+    В v2 это `state['global']`. Для обратной совместимости с плоским
+    v1-словарём (где `bot_running` лежал прямо в state) возвращаем сам state.
+    """
+    g = state.get("global") if isinstance(state, dict) else None
+    if isinstance(g, dict):
+        return g
+    return state
+
+
 def set_keyboard() -> dict[str, Any]:
-    """Инлайн-клавиатура с 6 кнопками."""
+    """Инлайн-клавиатура с 10 кнопками (5 строк по 2)."""
     return {
         "inline_keyboard": [
             [
@@ -52,6 +83,14 @@ def set_keyboard() -> dict[str, Any]:
             [
                 {"text": "🚨 PANIC SELL", "callback_data": CB_PANIC},
                 {"text": "🧠 ПОЧЕМУ МИМО?", "callback_data": CB_WHY},
+            ],
+            [
+                {"text": "📈 ОТЧЁТ", "callback_data": CB_REPORT},
+                {"text": "🎚 РЕЖИМЫ", "callback_data": CB_REGIMES},
+            ],
+            [
+                {"text": "🛡 KILL-STATE", "callback_data": CB_KILL},
+                {"text": "✅ СНЯТЬ MDD", "callback_data": CB_RESUME_MDD},
             ],
         ]
     }
@@ -142,19 +181,47 @@ def _is_authorized(update: dict[str, Any]) -> bool:
     return False
 
 
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _format_remaining(until: Optional[datetime]) -> str:
+    if until is None:
+        return "без срока"
+    now = datetime.now(tz=timezone.utc)
+    delta = until - now
+    secs = int(delta.total_seconds())
+    if secs <= 0:
+        return "истекает сейчас"
+    hours, rem = divmod(secs, 3600)
+    minutes, _ = divmod(rem, 60)
+    if hours >= 24:
+        days, hours = divmod(hours, 24)
+        return f"{days}д {hours}ч"
+    return f"{hours}ч {minutes}м"
+
+
 # --- Обработчики кнопок ---
 
 async def _handle_start(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    state["bot_running"] = True
+    _g(state)["bot_running"] = True
     return "✅ Торговля <b>запущена</b>. Бот снова ищет сигналы."
 
 
 async def _handle_stop(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    state["bot_running"] = False
+    _g(state)["bot_running"] = False
     return "⏸ Торговля <b>остановлена</b>. Открытые позиции продолжают управляться."
 
 
@@ -162,8 +229,10 @@ async def _handle_stats(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
     stats = memory.get_stats()
-    daily_pnl = state.get("daily_pnl", 0.0) or 0.0
-    status = "включен" if state.get("bot_running") else "на паузе"
+    g = _g(state)
+    daily_pnl = float(g.get("daily_pnl", 0.0) or 0.0)
+    weekly_pnl = float(g.get("weekly_pnl", 0.0) or 0.0)
+    status = "включен" if g.get("bot_running", True) else "на паузе"
     return (
         "📊 <b>Статистика</b>\n"
         f"Статус: {status}\n"
@@ -171,19 +240,24 @@ async def _handle_stats(
         f"Победы: {stats['wins']}, Убытки: {stats['losses']}\n"
         f"Винрейт: {stats['winrate']:.2f}%\n"
         f"Суммарный PnL: {stats['pnl_sum']:.4f}\n"
-        f"PnL за сегодня: {daily_pnl:.4f}"
+        f"PnL за сегодня: {daily_pnl:.4f}\n"
+        f"PnL за неделю: {weekly_pnl:.4f}"
     )
 
 
 async def _handle_positions(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    # Реальные позиции с биржи + локальные OPEN-сделки для контекста.
+    # Реальные позиции по всем символам + локальные OPEN-сделки для контекста.
     remote: list[dict[str, Any]] = []
-    try:
-        remote = await api_engine.get_positions(session, config.SYMBOL)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[TG] Ошибка get_positions: {exc}")
+    for sym in config.SYMBOLS:
+        try:
+            chunk = await api_engine.get_positions(session, sym)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[TG] Ошибка get_positions({sym}): {exc}")
+            chunk = []
+        if chunk:
+            remote.extend(chunk)
     local = memory.get_open_trades()
 
     lines = ["📂 <b>Открытые позиции</b>"]
@@ -208,31 +282,156 @@ async def _handle_positions(
 async def _handle_panic(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    state["bot_running"] = False
-    results = await api_engine.panic_sell(session, config.SYMBOL)
-    if not results:
+    _g(state)["bot_running"] = False
+    total_orders = 0
+    for sym in config.SYMBOLS:
+        try:
+            results = await api_engine.panic_sell(session, sym)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[TG] Ошибка panic_sell({sym}): {exc}")
+            results = []
+        total_orders += len(results or [])
+    if total_orders == 0:
         return "🚨 PANIC SELL: открытых позиций не было. Торговля поставлена на паузу."
     return (
-        f"🚨 PANIC SELL выполнен: отправлено {len(results)} ордеров на закрытие. "
-        "Торговля поставлена на паузу."
+        f"🚨 PANIC SELL выполнен: отправлено {total_orders} ордеров на закрытие "
+        f"по {len(config.SYMBOLS)} символам. Торговля поставлена на паузу."
     )
 
 
 async def _handle_why(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    last = memory.get_last_rejection()
+    last: Optional[dict[str, Any]] = None
+    g = _g(state)
+    ring = g.get("rejection_ring")
+    if ring:
+        try:
+            last = dict(ring[-1])  # последний элемент deque
+        except (IndexError, TypeError, ValueError):
+            last = None
+    if last is None:
+        try:
+            last = memory.get_last_rejected_check()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[TG] Ошибка get_last_rejected_check: {exc}")
+            last = None
     if not last:
         return "🧠 Отклонённых сигналов пока нет."
-    errors = memory.get_recent_errors(5)
-    explanation = await ai_analyst.explain_last_rejection(session, last, errors)
+
+    try:
+        errors = memory.get_recent_errors(5)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] Ошибка get_recent_errors: {exc}")
+        errors = []
+    try:
+        explanation = await ai_analyst.explain_last_rejection(session, last, errors)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] explain_last_rejection: {exc}")
+        explanation = "Объяснение временно недоступно."
+
+    header = "🧠 <b>ПОЧЕМУ МИМО?</b>"
+    ts = last.get("ts") or "-"
+    symbol = last.get("symbol") or "-"
+    filt = last.get("filter") or last.get("reason") or "-"
+    detail = last.get("detail") or ""
     return (
-        "🧠 <b>ПОЧЕМУ МИМО?</b>\n"
-        f"Дата: {last.get('ts')}\n"
-        f"Причина модели: {last.get('reason')}\n"
-        f"Уверенность: {last.get('confidence')}\n\n"
+        f"{header}\n"
+        f"Дата: {ts}\n"
+        f"Символ: {symbol}\n"
+        f"Фильтр: {filt}\n"
+        f"Детали: {detail}\n\n"
         f"Разбор: {explanation}"
     )
+
+
+async def _handle_report(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    try:
+        text = await ai_postmortem.report(session, days=7)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] Ошибка ai_postmortem.report: {exc}")
+        text = "Отчёт временно недоступен."
+    text = (text or "Отчёт временно недоступен.").strip()
+    if len(text) > 3800:
+        text = text[:3800].rstrip()
+    return "📈 <b>Еженедельный отчёт</b>\n\n" + text
+
+
+async def _handle_regimes(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    symbols = state.get("symbols") if isinstance(state, dict) else None
+    if not isinstance(symbols, dict) or not symbols:
+        return "🎚 Данных о режимах пока нет."
+    lines = ["🎚 <b>Режимы по символам</b>"]
+    for symbol in config.SYMBOLS:
+        sym_state = symbols.get(symbol) or {}
+        regime = sym_state.get("regime") or {}
+        regime_name = str(regime.get("regime") or "-")
+        conf = regime.get("confidence")
+        ts = regime.get("ts")
+        if not ts:
+            lines.append(f"• {symbol}: не опрошен")
+            continue
+        ts_dt = _parse_iso(ts)
+        when = ts_dt.strftime("%H:%M UTC") if ts_dt else str(ts)
+        conf_str = f"conf={conf}" if conf is not None else "conf=?"
+        lines.append(
+            f"• {symbol}: {regime_name} ({conf_str}, обновлено {when})"
+        )
+    return "\n".join(lines)
+
+
+async def _handle_kill_state(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    g = _g(state)
+    ks = str(g.get("kill_switch_state") or "NONE")
+    until_iso = g.get("kill_until_utc")
+    until_dt = _parse_iso(until_iso)
+    remaining = _format_remaining(until_dt) if until_dt else "-"
+    daily_pnl = float(g.get("daily_pnl", 0.0) or 0.0)
+    weekly_pnl = float(g.get("weekly_pnl", 0.0) or 0.0)
+    try:
+        current_dd = float(memory.get_current_drawdown() or 0.0)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] Ошибка get_current_drawdown: {exc}")
+        current_dd = 0.0
+    equity_start = g.get("equity_start")
+    equity_line = (
+        f"{float(equity_start):.4f}" if equity_start is not None else "не задан"
+    )
+    bot_running = "включен" if g.get("bot_running", True) else "на паузе"
+    detail = str(g.get("kill_detail") or "")
+
+    parts = [
+        "🛡 <b>KILL-STATE</b>",
+        f"Статус: {ks}",
+        f"До снятия: {remaining}",
+        f"Дедлайн: {until_iso or '-'}",
+        f"Суточный PnL: {daily_pnl:.4f}",
+        f"Недельный PnL: {weekly_pnl:.4f}",
+        f"Текущая просадка: {current_dd * 100:.2f}%",
+        f"Стартовое эквити: {equity_line}",
+        f"Торговля: {bot_running}",
+    ]
+    if detail:
+        parts.append(f"Причина: {detail}")
+    return "\n".join(parts)
+
+
+async def _handle_resume_mdd(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    g = _g(state)
+    if g.get("kill_switch_state") != "MDD":
+        return "✅ MDD не активен, сбрасывать нечего."
+    g["kill_switch_state"] = "NONE"
+    g["kill_until_utc"] = None
+    g["kill_detail"] = ""
+    return "✅ MDD kill-switch снят вручную. Торговля возобновится при bot_running=on."
 
 
 _HANDLERS = {
@@ -242,6 +441,10 @@ _HANDLERS = {
     CB_POSITIONS: _handle_positions,
     CB_PANIC: _handle_panic,
     CB_WHY: _handle_why,
+    CB_REPORT: _handle_report,
+    CB_REGIMES: _handle_regimes,
+    CB_KILL: _handle_kill_state,
+    CB_RESUME_MDD: _handle_resume_mdd,
 }
 
 
@@ -273,19 +476,24 @@ async def _process_message(
     msg: dict[str, Any],
 ) -> None:
     text = (msg.get("text") or "").strip()
-    if text.lower() in ("/start", "/menu", "/help"):
+    lowered = text.lower()
+    if lowered in ("/start", "/menu", "/help"):
         await send_message(
             session,
-            "👋 <b>Zenith-Control Ultimate</b>\nВыберите действие кнопкой ниже.",
+            "👋 <b>Zenith-Control Ultimate v2</b>\nВыберите действие кнопкой ниже.",
             reply_markup=set_keyboard(),
         )
         return
-    if text.lower() == "/status":
+    if lowered == "/status":
         await send_message(
             session,
             await _handle_stats(session, state),
             reply_markup=set_keyboard(),
         )
+        return
+    if lowered == "/resume_kill_switch":
+        reply = await _handle_resume_mdd(session, state)
+        await send_message(session, reply, reply_markup=set_keyboard())
         return
     # Любое другое сообщение - просто показываем меню.
     await send_message(

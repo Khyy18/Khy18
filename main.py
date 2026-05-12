@@ -1,283 +1,838 @@
-"""Точка входа Zenith-Control Ultimate.
+"""Точка входа Zenith-Control Ultimate v2.
 
-Запускает параллельно торговый цикл и Telegram-терминал в рамках ОДНОЙ
-общей aiohttp.ClientSession и ОДНОГО общего состояния `state`.
+Запускает параллельно многосимвольный торговый цикл и Telegram-терминал
+в рамках ОДНОЙ общей aiohttp.ClientSession и ОДНОГО общего состояния
+`state` с разделением global / per-symbol.
 
-Правила:
-  - Весь тело торгового тика обёрнуто в try/except - транзиентные ошибки
-    НИКОГДА не валят цикл, мы только логируем по-русски и спим до
-    следующего тика.
-  - Каждые 60 секунд: тянем свечи, считаем сигнал, при наличии сигнала
-    спрашиваем ИИ, и только при APPROVE + confidence > 85 открываем сделку.
-  - Перевод SL в безубыток при +1.0%, трейлинг TP при +1.5%.
-  - Kill-switch: если суточный убыток достиг MAX_DAILY_LOSS - торговля
-    ставится на паузу до ручного возобновления из Telegram.
+Ключевые принципы:
+  - Решения о входе принимает strategy_v2 (детерминированный Donchian +
+    мультитаймфреймовый фильтр). ИИ-модули (ai_macro_sentinel, ai_regime,
+    ai_postmortem) подмешиваются через расписания тиков и пишут только
+    в blackout / regime / еженедельный отчёт.
+  - Весь тик обёрнут в try/except. Транзиентные ошибки НИКОГДА не валят
+    цикл, мы только логируем по-русски и спим до следующего тика.
+  - Ярусные kill-switches: DAILY (3%), WEEKLY (7%), MDD (15%). Daily
+    снимается на границе UTC-суток, WEEKLY через 7 дней от триггера,
+    MDD только вручную через Telegram.
+  - Риск на сделку ограничен config.RISK_PER_TRADE, суммарно открытый
+    риск по портфелю ограничен config.GLOBAL_RISK_CAP.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import collections
+import math
+import statistics
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 import aiohttp
 
-import ai_analyst
+import ai_macro_sentinel
+import ai_postmortem
+import ai_regime
 import api_engine
 import config
 import memory
 import news_engine
-import strategy
+import strategy_v2
 import telegram_bot
 
 
 TICK_SECONDS = 60
-CONFIDENCE_THRESHOLD = 85  # строгое «>», т.е. нужно минимум 86
+
+
+# --- Время / ISO помощники -------------------------------------------------
+
+def _utc_now() -> datetime:
+    return datetime.now(tz=timezone.utc)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _from_iso(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s))
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _floor_utc_midnight(dt: datetime) -> datetime:
+    d = dt.astimezone(timezone.utc)
+    return d.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _next_utc_midnight(dt: datetime) -> datetime:
+    return _floor_utc_midnight(dt) + timedelta(days=1)
+
+
+def _iso_week_key(dt: datetime) -> str:
+    y, w, _ = dt.astimezone(timezone.utc).isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def _iso_week_start(dt: datetime) -> datetime:
+    d = dt.astimezone(timezone.utc)
+    # weekday(): Monday = 0 ... Sunday = 6
+    monday = _floor_utc_midnight(d) - timedelta(days=d.weekday())
+    return monday
+
+
+# --- Роллинг суточных / недельных якорей ----------------------------------
+
+def _roll_daily_weekly_anchors(state: dict[str, Any], now: datetime) -> None:
+    g = state["global"]
+
+    # Суточный якорь.
+    anchor_daily = _from_iso(g.get("daily_anchor_iso"))
+    if anchor_daily is None or anchor_daily.date() < now.date():
+        if anchor_daily is not None:
+            print(f"[LOOP] Суточный якорь сброшен: {g.get('daily_pnl', 0.0)} -> 0.0")
+        g["daily_pnl"] = 0.0
+        g["daily_anchor_iso"] = _iso(_floor_utc_midnight(now))
+
+    # Недельный якорь (ISO-неделя по UTC).
+    anchor_weekly = _from_iso(g.get("weekly_anchor_iso"))
+    current_week = _iso_week_key(now)
+    if anchor_weekly is None or _iso_week_key(anchor_weekly) != current_week:
+        if anchor_weekly is not None:
+            print(f"[LOOP] Недельный якорь сброшен: {g.get('weekly_pnl', 0.0)} -> 0.0")
+        g["weekly_pnl"] = 0.0
+        g["weekly_anchor_iso"] = _iso(_iso_week_start(now))
+
+
+# --- Kill-switches ---------------------------------------------------------
+
+def _reset_kill_switches_if_due(state: dict[str, Any], now: datetime) -> None:
+    g = state["global"]
+    ks = g.get("kill_switch_state", "NONE")
+    until = _from_iso(g.get("kill_until_utc"))
+
+    if ks == "DAILY" and until is not None and now >= until:
+        print("[KILL] Суточный kill-switch снят по расписанию")
+        g["kill_switch_state"] = "NONE"
+        g["kill_until_utc"] = None
+        g["kill_detail"] = ""
+        return
+
+    if ks == "WEEKLY" and until is not None and now >= until:
+        print("[KILL] Недельный kill-switch снят по расписанию")
+        g["kill_switch_state"] = "NONE"
+        g["kill_until_utc"] = None
+        g["kill_detail"] = ""
+        return
+
+    # MDD не снимается автоматически - только через Telegram-кнопку.
+
+
+async def _notify_kill(
+    session: aiohttp.ClientSession,
+    text: str,
+) -> None:
+    try:
+        await telegram_bot.send_message(
+            session, text, reply_markup=telegram_bot.set_keyboard()
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[KILL] Не удалось отправить уведомление: {exc}")
+
+
+async def _apply_kill_switches(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    g = state["global"]
+    equity_start = float(g.get("equity_start") or 0.0)
+    if equity_start <= 0:
+        return
+
+    ks_before = g.get("kill_switch_state", "NONE")
+
+    # DAILY: loss_pct >= MAX_DAILY_LOSS, только из NONE.
+    daily_pnl = float(g.get("daily_pnl", 0.0) or 0.0)
+    if daily_pnl < 0 and ks_before == "NONE":
+        loss_ratio = -daily_pnl / equity_start
+        if loss_ratio >= float(config.MAX_DAILY_LOSS):
+            until = _next_utc_midnight(now)
+            detail = (
+                f"Суточный убыток {loss_ratio * 100:.2f}% превысил лимит "
+                f"{config.MAX_DAILY_LOSS * 100:.2f}%. Пауза до {_iso(until)}."
+            )
+            g["kill_switch_state"] = "DAILY"
+            g["kill_until_utc"] = _iso(until)
+            g["kill_detail"] = detail
+            print(f"[KILL] DAILY активирован: {detail}")
+            await _notify_kill(session, f"🛑 <b>DAILY kill-switch</b>\n{detail}")
+            ks_before = "DAILY"
+
+    # WEEKLY: loss_pct >= MAX_WEEKLY_LOSS, из NONE или DAILY.
+    weekly_pnl = float(g.get("weekly_pnl", 0.0) or 0.0)
+    if weekly_pnl < 0 and ks_before in ("NONE", "DAILY"):
+        loss_ratio = -weekly_pnl / equity_start
+        if loss_ratio >= float(config.MAX_WEEKLY_LOSS):
+            until = now + timedelta(days=7)
+            detail = (
+                f"Недельный убыток {loss_ratio * 100:.2f}% превысил лимит "
+                f"{config.MAX_WEEKLY_LOSS * 100:.2f}%. Пауза до {_iso(until)}."
+            )
+            g["kill_switch_state"] = "WEEKLY"
+            g["kill_until_utc"] = _iso(until)
+            g["kill_detail"] = detail
+            print(f"[KILL] WEEKLY активирован: {detail}")
+            await _notify_kill(session, f"🛑 <b>WEEKLY kill-switch</b>\n{detail}")
+            ks_before = "WEEKLY"
+
+    # MDD: по текущей просадке от HWM.
+    try:
+        current_dd = float(memory.get_current_drawdown() or 0.0)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[KILL] Ошибка чтения просадки: {exc}")
+        current_dd = 0.0
+    if current_dd >= float(config.MAX_DRAWDOWN) and ks_before != "MDD":
+        detail = (
+            f"Просадка {current_dd * 100:.2f}% превысила лимит "
+            f"{config.MAX_DRAWDOWN * 100:.2f}%. Снятие только вручную."
+        )
+        g["kill_switch_state"] = "MDD"
+        g["kill_until_utc"] = None
+        g["kill_detail"] = detail
+        print(f"[KILL] MDD активирован: {detail}")
+        await _notify_kill(
+            session,
+            "🛡 <b>MDD kill-switch</b>\n" + detail,
+        )
+
+
+# --- Equity / HWM ---------------------------------------------------------
+
+def _record_equity_snapshot(state: dict[str, Any], equity: float) -> None:
+    g = state["global"]
+    prev_hwm = float(g.get("hwm") or 0.0)
+    hwm = max(prev_hwm, float(equity))
+    drawdown = (hwm - float(equity)) / hwm if hwm > 0 else 0.0
+    g["hwm"] = hwm
+    try:
+        memory.record_equity(float(equity), hwm, drawdown)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] Ошибка record_equity: {exc}")
+
+
+# --- AI тикеры ------------------------------------------------------------
+
+async def _hourly_macro_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    g = state["global"]
+    last_epoch = float(g.get("last_macro_check_epoch") or 0.0)
+    first_run = g.get("blackout", {}).get("ts") is None
+    if not first_run and (time.time() - last_epoch) < 3600.0:
+        return
+    try:
+        decision = await ai_macro_sentinel.check(session)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI] macro-sentinel: ошибка вызова: {exc}")
+        return
+    if isinstance(decision, dict):
+        g["blackout"] = {
+            "blackout": bool(decision.get("blackout")),
+            "until_utc": decision.get("until_utc"),
+            "reason": str(decision.get("reason", "") or ""),
+            "ts": decision.get("ts") or _iso(now),
+        }
+        g["last_macro_check_epoch"] = time.time()
+        state_bo = "ON" if g["blackout"]["blackout"] else "OFF"
+        print(
+            f"[AI] macro-sentinel: blackout={state_bo} "
+            f"reason={g['blackout']['reason']} until={g['blackout']['until_utc']}"
+        )
+
+
+async def _regime_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    symbol: str,
+    now: datetime,
+) -> None:
+    sym_state = state["symbols"][symbol]
+    last_epoch = float(sym_state.get("last_regime_check_epoch") or 0.0)
+    if (time.time() - last_epoch) < float(config.AI_REGIME_TTL_SEC):
+        return
+
+    # Дневные свечи.
+    try:
+        raw_d = await api_engine.get_klines(session, symbol, interval="D", limit=45)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI] regime {symbol}: ошибка get_klines(D): {exc}")
+        return
+    if not raw_d:
+        return
+    daily_ohlc: list[dict[str, Any]] = []
+    for k in raw_d:
+        try:
+            daily_ohlc.append(
+                {
+                    "ts": int(k[0]),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                }
+            )
+        except (IndexError, TypeError, ValueError):
+            continue
+
+    # Часовые свечи для ATR(1h).
+    try:
+        raw_1h = await api_engine.get_klines(session, symbol, interval="60", limit=50)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI] regime {symbol}: ошибка get_klines(60): {exc}")
+        raw_1h = []
+    atr_1h_now = 0.0
+    if raw_1h:
+        try:
+            highs = [float(k[2]) for k in raw_1h]
+            lows = [float(k[3]) for k in raw_1h]
+            closes = [float(k[4]) for k in raw_1h]
+            atr_series = strategy_v2.atr(highs, lows, closes, 14)
+            if atr_series and atr_series[-1] is not None:
+                atr_1h_now = float(atr_series[-1])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[AI] regime {symbol}: ошибка расчёта ATR(1h): {exc}")
+
+    # Реализованная волатильность 30d.
+    realized_vol_30d = 0.0
+    closes_d = [row["close"] for row in daily_ohlc]
+    if len(closes_d) >= 31:
+        returns: list[float] = []
+        for i in range(len(closes_d) - 30, len(closes_d)):
+            prev = closes_d[i - 1]
+            cur = closes_d[i]
+            if prev > 0:
+                returns.append((cur - prev) / prev)
+        if len(returns) >= 2:
+            try:
+                realized_vol_30d = statistics.stdev(returns) * math.sqrt(365.0)
+            except statistics.StatisticsError:
+                realized_vol_30d = 0.0
+
+    # Заголовки (до 10 штук).
+    try:
+        headlines = await news_engine.fetch_headlines(session, page_size=10)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI] regime {symbol}: ошибка fetch_headlines: {exc}")
+        headlines = []
+
+    try:
+        result = await ai_regime.classify(
+            session, symbol, daily_ohlc, atr_1h_now, realized_vol_30d, headlines
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI] regime {symbol}: ошибка classify: {exc}")
+        return
+
+    if isinstance(result, dict) and result.get("regime"):
+        sym_state["regime"] = result
+        sym_state["last_regime_check_epoch"] = time.time()
+        print(
+            f"[AI] regime {symbol}: {result.get('regime')} "
+            f"conf={result.get('confidence')} reason={result.get('reason')}"
+        )
+
+
+async def _weekly_postmortem_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    if now.weekday() != int(config.POSTMORTEM_DAY_UTC):
+        return
+    if now.hour != int(config.POSTMORTEM_HOUR_UTC):
+        return
+    g = state["global"]
+    cur_week = _iso_week_key(now)
+    if g.get("last_postmortem_iso_week") == cur_week:
+        return
+    try:
+        text = await ai_postmortem.report(session, days=7)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI] postmortem: ошибка вызова: {exc}")
+        return
+    if not text:
+        return
+    body = text if len(text) <= 3800 else text[:3800].rstrip()
+    try:
+        await telegram_bot.send_message(
+            session,
+            "📈 <b>Еженедельный отчёт</b>\n\n" + body,
+            reply_markup=telegram_bot.set_keyboard(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI] postmortem: ошибка отправки в Telegram: {exc}")
+    g["last_postmortem_iso_week"] = cur_week
+    print(f"[AI] postmortem отправлен за неделю {cur_week}")
+
+
+# --- Торговые помощники ---------------------------------------------------
+
+def _bybit_kline_to_dict(k: list[Any]) -> dict[str, Any]:
+    return {
+        "ts": int(k[0]),
+        "open": float(k[1]),
+        "high": float(k[2]),
+        "low": float(k[3]),
+        "close": float(k[4]),
+        "volume": float(k[5]) if len(k) > 5 else 0.0,
+    }
+
+
+def _sum_open_risk(state: dict[str, Any]) -> float:
+    equity_start = float(state["global"].get("equity_start") or 0.0)
+    if equity_start <= 0:
+        return 0.0
+    total = 0.0
+    for sym_state in state["symbols"].values():
+        trade = sym_state.get("open_trade")
+        if not trade:
+            continue
+        entry = float(trade.get("entry_price") or 0.0)
+        stop = float(trade.get("current_stop") or 0.0)
+        qty = float(trade.get("qty") or 0.0)
+        if entry <= 0 or qty <= 0:
+            continue
+        total += abs(entry - stop) * qty / equity_start
+    return total
 
 
 async def _manage_open_trade(
     session: aiohttp.ClientSession,
     state: dict[str, Any],
-    current_price: float,
+    symbol: str,
+    candles_1h: list[dict[str, Any]],
+    now: datetime,
 ) -> None:
-    """Сопровождение открытой сделки: безубыток и трейлинг-TP."""
-    trade = state.get("open_trade")
-    if not trade:
-        return
-    entry = float(trade.get("entry") or 0.0)
-    side = str(trade.get("side") or "").lower()
-    if entry <= 0 or side not in ("long", "short", "buy", "sell"):
+    sym_state = state["symbols"][symbol]
+    trade = sym_state.get("open_trade")
+    if not trade or not candles_1h:
         return
 
-    # Безубыток (+1.0%).
-    if not trade.get("breakeven_done") and strategy.compute_breakeven(
-        entry, current_price, side
-    ):
-        new_sl = entry
-        resp = await api_engine.set_trading_stop(
-            session, config.SYMBOL, stop_loss=new_sl
+    last_bar = candles_1h[-1]
+    last_high = float(last_bar.get("high") or 0.0)
+    last_low = float(last_bar.get("low") or 0.0)
+    last_close = float(last_bar.get("close") or 0.0)
+
+    high_since = max(float(trade.get("high_since_entry") or trade["entry_price"]), last_high)
+    low_since = min(float(trade.get("low_since_entry") or trade["entry_price"]), last_low)
+    trade["high_since_entry"] = high_since
+    trade["low_since_entry"] = low_since
+
+    side = str(trade.get("side") or "")
+    side_str = "long" if side == "Buy" else "short"
+    entry = float(trade.get("entry_price") or 0.0)
+    atr_at_entry = float(trade.get("atr_at_entry") or 0.0)
+    current_stop = float(trade.get("current_stop") or 0.0)
+
+    # ATR «сейчас» - последний ATR по часовому ряду.
+    try:
+        highs = [c["high"] for c in candles_1h]
+        lows = [c["low"] for c in candles_1h]
+        closes = [c["close"] for c in candles_1h]
+        atr_series = strategy_v2.atr(highs, lows, closes, 14)
+        atr_now = float(atr_series[-1]) if atr_series and atr_series[-1] is not None else atr_at_entry
+    except Exception:  # noqa: BLE001
+        atr_now = atr_at_entry
+
+    try:
+        new_trail = strategy_v2.compute_chandelier(
+            high_since,
+            low_since,
+            atr_now,
+            side_str,
+            entry,
+            activation_atr=atr_at_entry,
         )
-        if resp and resp.get("retCode") == 0:
-            trade["breakeven_done"] = True
-            trade["sl"] = new_sl
-            print(f"[LOOP] SL переведён в безубыток: {new_sl}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка compute_chandelier: {exc}")
+        new_trail = None
 
-    # Трейлинг-TP (+1.5%).
-    new_trail = strategy.compute_trailing_tp(
-        entry, current_price, trade.get("trail_tp"), side
-    )
-    if new_trail is not None and new_trail != trade.get("trail_tp"):
-        resp = await api_engine.set_trading_stop(
-            session, config.SYMBOL, take_profit=new_trail
+    if new_trail is not None:
+        tighter = False
+        if side == "Buy" and new_trail > current_stop:
+            tighter = True
+        elif side == "Sell" and (current_stop == 0 or new_trail < current_stop):
+            tighter = True
+        if tighter:
+            try:
+                resp = await api_engine.set_trading_stop(
+                    session, symbol, stop_loss=float(new_trail)
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LOOP] {symbol}: ошибка set_trading_stop: {exc}")
+                resp = None
+            if resp and resp.get("retCode") == 0:
+                trade["current_stop"] = float(new_trail)
+                print(f"[LOOP] {symbol}: трейлинг подтянут -> {new_trail}")
+
+    # Таймстоп.
+    try:
+        time_stop = strategy_v2.should_time_stop(
+            trade.get("entry_ts_iso") or "",
+            _iso(now),
+            side_str,
+            entry,
+            last_close,
         )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка should_time_stop: {exc}")
+        time_stop = False
+    if time_stop:
+        close_side = "Sell" if side == "Buy" else "Buy"
+        qty = float(trade.get("qty") or 0.0)
+        try:
+            resp = await api_engine.place_order_with_fallback(
+                session,
+                symbol=symbol,
+                side=close_side,
+                qty=qty,
+                reduce_only=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LOOP] {symbol}: ошибка закрытия по таймстопу: {exc}")
+            resp = None
         if resp and resp.get("retCode") == 0:
-            trade["trail_tp"] = new_trail
-            print(f"[LOOP] Трейлинг-TP обновлён: {new_trail}")
+            print(f"[LOOP] {symbol}: закрытие по таймстопу ({config.TIME_STOP_HOURS}ч)")
 
 
-async def _try_open_trade(
+async def _check_closed_exchange_position(
     session: aiohttp.ClientSession,
     state: dict[str, Any],
-    signal: dict[str, Any],
+    symbol: str,
 ) -> None:
-    """Полный пайплайн входа: новости -> память -> ИИ-гейт -> ордер."""
-    news = await news_engine.fetch_headlines(session)
-    errors = memory.get_recent_errors(5)
-    verdict = await ai_analyst.decide(session, signal, news, errors)
-    print(
-        f"[LOOP] ИИ-вердикт: {verdict.get('decision')} "
-        f"(conf={verdict.get('confidence')}) reason={verdict.get('reason')}"
-    )
-
-    approved = (
-        verdict.get("decision") == "APPROVE"
-        and int(verdict.get("confidence", 0)) > CONFIDENCE_THRESHOLD
-    )
-    if not approved:
-        memory.record_rejection(
-            reason=str(verdict.get("reason", "")),
-            confidence=int(verdict.get("confidence", 0)),
-            ctx={
-                "signal": signal.get("signal"),
-                "reason": signal.get("reason"),
-                "indicators": signal.get("indicators"),
-                "entry": signal.get("entry"),
-                "sl": signal.get("sl"),
-                "tp": signal.get("tp"),
-            },
-        )
-        state["last_rejection"] = {
-            "reason": verdict.get("reason"),
-            "confidence": verdict.get("confidence"),
-            "signal": signal,
-        }
-        return
-
-    # Рассчёт размера позиции по риску.
-    balance = await api_engine.get_balance(session, "USDT")
-    if balance is None or balance <= 0:
-        print("[LOOP] Не удалось получить баланс - пропуск входа")
-        return
-    if state.get("equity_start") is None:
-        state["equity_start"] = balance
-
-    qty = strategy.position_size(
-        equity=balance,
-        entry=signal["entry"],
-        stop_loss=signal["sl"],
-        risk_per_trade=config.RISK_PER_TRADE,
-    )
-    if qty <= 0:
-        print("[LOOP] Расчётный размер позиции 0 - пропуск входа")
-        return
-
-    side = "Buy" if signal["signal"] == "LONG" else "Sell"
-    print(
-        f"[LOOP] Открываем {side} {qty} {config.SYMBOL} @ ~{signal['entry']} "
-        f"SL={signal['sl']} TP={signal['tp']}"
-    )
-    resp = await api_engine.place_order(
-        session,
-        symbol=config.SYMBOL,
-        side=side,
-        qty=qty,
-        stop_loss=signal["sl"],
-        take_profit=signal["tp"],
-    )
-    if not resp or resp.get("retCode") != 0:
-        print(f"[LOOP] Не удалось разместить ордер: {resp}")
-        return
-
-    indicators = signal.get("indicators", {}) or {}
-    trade_id = memory.record_trade(
-        symbol=config.SYMBOL,
-        side=signal["signal"],
-        entry=signal["entry"],
-        qty=qty,
-        ema_val=indicators.get("ema200"),
-        rsi_val=indicators.get("rsi"),
-        atr_val=indicators.get("atr"),
-        ai_reason=verdict.get("reason"),
-        outcome="OPEN",
-    )
-    state["open_trade"] = {
-        "id": trade_id,
-        "side": signal["signal"],
-        "entry": signal["entry"],
-        "qty": qty,
-        "sl": signal["sl"],
-        "tp": signal["tp"],
-        "breakeven_done": False,
-        "trail_tp": None,
-    }
-
-
-async def _check_closed_trade(
-    session: aiohttp.ClientSession,
-    state: dict[str, Any],
-) -> None:
-    """Если в локальном state есть open_trade, но на бирже позиции нет
-    (SL/TP сработал) - фиксируем результат в SQLite."""
-    trade = state.get("open_trade")
+    sym_state = state["symbols"][symbol]
+    trade = sym_state.get("open_trade")
     if not trade:
         return
-    positions = await api_engine.get_positions(session, config.SYMBOL)
+    try:
+        positions = await api_engine.get_positions(session, symbol)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка get_positions: {exc}")
+        return
     if positions:
-        return  # ещё открыта
+        return  # позиция всё ещё открыта
 
-    # Позиция закрыта - оценим PnL по последнему close.
-    klines = await api_engine.get_klines(session, config.SYMBOL, "1", 1)
-    last_close = None
+    # Позиция закрыта - определяем приблизительную цену выхода.
+    try:
+        klines = await api_engine.get_klines(session, symbol, "1", 1)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка получения 1m-свечи для выхода: {exc}")
+        klines = []
+    exit_price: Optional[float] = None
     if klines:
         try:
-            last_close = float(klines[-1][4])
+            exit_price = float(klines[-1][4])
         except (IndexError, TypeError, ValueError):
-            last_close = None
-    if last_close is None:
-        print("[LOOP] Не удалось определить цену закрытия - освобождаем state без записи")
-        state["open_trade"] = None
-        return
+            exit_price = None
+    if exit_price is None:
+        exit_price = float(trade.get("current_stop") or trade.get("entry_price") or 0.0)
 
-    entry = float(trade.get("entry") or 0.0)
+    entry = float(trade.get("entry_price") or 0.0)
     qty = float(trade.get("qty") or 0.0)
-    side = str(trade.get("side") or "").upper()
-    if side == "LONG":
-        pnl = (last_close - entry) * qty
+    side = str(trade.get("side") or "")
+    if side == "Buy":
+        pnl = (exit_price - entry) * qty
+    elif side == "Sell":
+        pnl = (entry - exit_price) * qty
     else:
-        pnl = (entry - last_close) * qty
+        pnl = 0.0
     outcome = "WIN" if pnl > 0 else "LOSS"
 
-    if trade.get("id"):
-        memory.update_trade_outcome(int(trade["id"]), last_close, pnl, outcome)
+    trade_id = trade.get("id")
+    if trade_id:
+        try:
+            memory.update_trade_outcome(int(trade_id), exit_price, pnl, outcome)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LOOP] {symbol}: ошибка update_trade_outcome: {exc}")
 
-    # Обновляем дневной PnL.
-    state["daily_pnl"] = float(state.get("daily_pnl", 0.0) or 0.0) + pnl
+    g = state["global"]
+    g["daily_pnl"] = float(g.get("daily_pnl", 0.0) or 0.0) + pnl
+    g["weekly_pnl"] = float(g.get("weekly_pnl", 0.0) or 0.0) + pnl
+    equity_start = float(g.get("equity_start") or 0.0)
+    # Прокси эквити: equity_start + накопленный недельный PnL. В реальной
+    # системе стоит тянуть актуальный balance, но балансовый запрос один раз
+    # за тик тяжёл и дублирует то, что уже есть в journal.
+    proxy_equity = equity_start + float(g.get("weekly_pnl", 0.0) or 0.0)
+    _record_equity_snapshot(state, proxy_equity)
+
     print(
-        f"[LOOP] Сделка #{trade.get('id')} закрыта: {outcome} pnl={pnl:.4f} "
-        f"daily_pnl={state['daily_pnl']:.4f}"
+        f"[LOOP] {symbol}: позиция закрыта снаружи pnl={pnl:.4f} outcome={outcome} "
+        f"daily={g['daily_pnl']:.4f} weekly={g['weekly_pnl']:.4f}"
     )
-    state["open_trade"] = None
+    sym_state["open_trade"] = None
 
+
+# --- Основная логика по символу -----------------------------------------
+
+async def _process_symbol(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    symbol: str,
+    now: datetime,
+) -> None:
+    sym_state = state["symbols"][symbol]
+
+    try:
+        raw_1h = await api_engine.get_klines(session, symbol, interval="60", limit=250)
+        raw_4h = await api_engine.get_klines(session, symbol, interval="240", limit=120)
+        raw_1d = await api_engine.get_klines(session, symbol, interval="D", limit=250)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка получения свечей: {exc}")
+        return
+
+    if not raw_1h or not raw_4h or not raw_1d:
+        return  # транзиентная ошибка
+
+    closed_1h = raw_1h[:-1]
+    closed_4h = raw_4h[:-1]
+    closed_1d = raw_1d[:-1]
+    if len(closed_1h) < 21 or len(closed_4h) < 50 or len(closed_1d) < 200:
+        return
+
+    try:
+        candles_1h = [_bybit_kline_to_dict(k) for k in closed_1h]
+        candles_4h = [_bybit_kline_to_dict(k) for k in closed_4h]
+        candles_1d = [_bybit_kline_to_dict(k) for k in closed_1d]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка парсинга свечей: {exc}")
+        return
+
+    last_bar_ts = candles_1h[-1]["ts"]
+
+    # Сопровождение и детект внешнего закрытия.
+    if sym_state.get("open_trade"):
+        await _manage_open_trade(session, state, symbol, candles_1h, now)
+    await _check_closed_exchange_position(session, state, symbol)
+
+    if not state["global"].get("bot_running"):
+        return
+    if state["global"].get("kill_switch_state", "NONE") != "NONE":
+        return
+    if sym_state.get("open_trade"):
+        return
+    if sym_state.get("last_signal_bar_ts") == last_bar_ts:
+        return
+
+    try:
+        closes = [c["close"] for c in candles_1h]
+        highs = [c["high"] for c in candles_1h]
+        lows = [c["low"] for c in candles_1h]
+        atr_series = strategy_v2.atr(highs, lows, closes, 14)
+        atr_1h_now = float(atr_series[-1]) if atr_series and atr_series[-1] is not None else 0.0
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка расчёта ATR(1h): {exc}")
+        atr_1h_now = 0.0
+
+    ctx = {
+        "symbol": symbol,
+        "candles_1h": candles_1h,
+        "candles_4h": candles_4h,
+        "candles_1d": candles_1d,
+        "equity": state["global"].get("equity_start") or 0.0,
+        "atr_1h_now": atr_1h_now,
+        "blackout": bool(state["global"].get("blackout", {}).get("blackout")),
+        "regime": (sym_state.get("regime") or {}).get("regime", "TRENDING"),
+    }
+
+    order = strategy_v2.on_bar(ctx)
+    if order is None:
+        # Детерминированное отклонение - запомним последний фильтр.
+        try:
+            signal = strategy_v2.evaluate_signal(ctx)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LOOP] {symbol}: ошибка evaluate_signal: {exc}")
+            return
+        if signal.get("filter"):
+            filter_tag = str(signal["filter"])
+            detail = str(signal.get("reason", ""))
+            indicators = signal.get("indicators") or {}
+            rejection = {
+                "ts": _iso(now),
+                "symbol": symbol,
+                "filter": filter_tag,
+                "detail": detail,
+                "indicators": indicators,
+            }
+            state["global"]["rejection_ring"].append(rejection)
+            try:
+                memory.record_rejected_check(symbol, filter_tag, detail, indicators)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LOOP] {symbol}: ошибка record_rejected_check: {exc}")
+        return
+
+    # Глобальный риск-кап.
+    equity_start = float(state["global"].get("equity_start") or 0.0)
+    added_risk = (
+        abs(float(order["limit_price"]) - float(order["hard_stop"]))
+        * float(order["qty"])
+        / max(equity_start, 1.0)
+    )
+    open_risk = _sum_open_risk(state)
+    if open_risk + added_risk > float(config.GLOBAL_RISK_CAP):
+        print(
+            f"[LOOP] {symbol}: нарушение глобального риск-лимита "
+            f"({(open_risk + added_risk) * 100:.2f}% > "
+            f"{config.GLOBAL_RISK_CAP * 100:.2f}%), пропуск"
+        )
+        return
+
+    # Биржевые фильтры.
+    try:
+        info = await api_engine.instrument_info_cached(session, symbol)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка instrument_info_cached: {exc}")
+        return
+    if info is None:
+        print(f"[LOOP] {symbol}: нет данных инструмента, пропуск")
+        return
+
+    qty = api_engine.validate_and_round_qty(
+        float(order["qty"]), info, float(order["limit_price"])
+    )
+    if qty <= 0:
+        print(f"[LOOP] {symbol}: qty не прошла фильтры ({order['qty']}) - пропуск")
+        return
+
+    side = str(order["side"])
+    try:
+        resp = await api_engine.place_order_with_fallback(
+            session,
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            stop_loss=float(order["hard_stop"]),
+            take_profit=None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка размещения ордера: {exc}")
+        return
+    if not resp or resp.get("retCode") != 0:
+        print(f"[LOOP] {symbol}: ордер не прошёл ({resp})")
+        return
+
+    entry_price = float(order["limit_price"])
+    try:
+        trade_id = memory.record_trade(
+            symbol=symbol,
+            side=("LONG" if side == "Buy" else "SHORT"),
+            entry=entry_price,
+            qty=qty,
+            atr_val=atr_1h_now,
+            ai_reason=(order.get("meta") or {}).get("reason"),
+            outcome="OPEN",
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка record_trade: {exc}")
+        trade_id = None
+
+    sym_state["open_trade"] = {
+        "id": trade_id,
+        "side": side,
+        "entry_price": entry_price,
+        "qty": qty,
+        "atr_at_entry": atr_1h_now,
+        "entry_ts_iso": _iso(now),
+        "high_since_entry": entry_price,
+        "low_since_entry": entry_price,
+        "current_stop": float(order["hard_stop"]),
+    }
+    sym_state["last_signal_bar_ts"] = last_bar_ts
+    print(
+        f"[LOOP] {symbol}: открыта {side} qty={qty} entry={entry_price} "
+        f"stop={order['hard_stop']}"
+    )
+
+
+# --- Главный цикл ---------------------------------------------------------
 
 async def trading_loop(
     state: dict[str, Any],
     session: aiohttp.ClientSession,
 ) -> None:
-    """Бесконечный торговый цикл, тикающий раз в TICK_SECONDS."""
-    print("[LOOP] Торговый цикл запущен")
+    print("[LOOP] Торговый цикл v2 запущен")
     while True:
         try:
-            # Сопровождение возможной открытой сделки, даже если бот на паузе.
-            klines = await api_engine.get_klines(
-                session, config.SYMBOL, "15", 250
-            )
-            if klines:
+            now = _utc_now()
+            _roll_daily_weekly_anchors(state, now)
+            _reset_kill_switches_if_due(state, now)
+            await _hourly_macro_tick(session, state, now)
+
+            for symbol in config.SYMBOLS:
                 try:
-                    current_price = float(klines[-1][4])
-                except (IndexError, TypeError, ValueError):
-                    current_price = 0.0
-                if state.get("open_trade") and current_price > 0:
-                    await _manage_open_trade(session, state, current_price)
-                await _check_closed_trade(session, state)
+                    await _regime_tick(session, state, symbol, now)
+                    await _process_symbol(session, state, symbol, now)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[LOOP] {symbol}: ошибка тика: {exc}")
 
-            # Kill-switch по дневному убытку.
-            equity_start = state.get("equity_start")
-            if equity_start and equity_start > 0:
-                loss_pct = -float(state.get("daily_pnl", 0.0)) / float(equity_start)
-                if loss_pct >= config.MAX_DAILY_LOSS and state.get("bot_running"):
-                    state["bot_running"] = False
-                    print(
-                        f"[LOOP] Достигнут суточный лимит убытка "
-                        f"({loss_pct*100:.2f}%). Торговля на паузе."
-                    )
-                    await telegram_bot.send_message(
-                        session,
-                        (
-                            "🛑 Достигнут суточный лимит убытка "
-                            f"{loss_pct*100:.2f}%. Торговля приостановлена."
-                        ),
-                        reply_markup=telegram_bot.set_keyboard(),
-                    )
-
-            # Поиск новых входов только если бот в активном режиме и нет открытой сделки.
-            if (
-                state.get("bot_running")
-                and not state.get("open_trade")
-                and klines
-            ):
-                signal = strategy.evaluate_signal(klines)
-                if signal.get("signal"):
-                    print(
-                        f"[LOOP] Технический сигнал {signal['signal']}: "
-                        f"{signal.get('reason')}"
-                    )
-                    await _try_open_trade(session, state, signal)
+            await _apply_kill_switches(session, state, now)
+            await _weekly_postmortem_tick(session, state, now)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            # Никогда не даём циклу умереть от транзиентной ошибки.
             print(f"[LOOP] Транзиентная ошибка тика: {exc}")
 
         await asyncio.sleep(TICK_SECONDS)
+
+
+def _build_state() -> dict[str, Any]:
+    return {
+        "symbols": {
+            symbol: {
+                "open_trade": None,
+                "last_signal_bar_ts": 0,
+                "regime": {
+                    "regime": "TRENDING",
+                    "confidence": 0,
+                    "reason": "",
+                    "ts": None,
+                    "symbol": symbol,
+                },
+                "last_regime_check_epoch": 0.0,
+            }
+            for symbol in config.SYMBOLS
+        },
+        "global": {
+            "bot_running": True,
+            "equity_start": None,
+            "hwm": 0.0,
+            "daily_pnl": 0.0,
+            "daily_anchor_iso": None,
+            "weekly_pnl": 0.0,
+            "weekly_anchor_iso": None,
+            "kill_switch_state": "NONE",
+            "kill_until_utc": None,
+            "kill_detail": "",
+            "blackout": {
+                "blackout": False,
+                "until_utc": None,
+                "reason": "",
+                "ts": None,
+            },
+            "last_macro_check_epoch": 0.0,
+            "last_postmortem_iso_week": None,
+            "rejection_ring": collections.deque(maxlen=50),
+        },
+        "instruments": {},
+    }
 
 
 async def main() -> None:
@@ -291,18 +846,12 @@ async def main() -> None:
         return
 
     memory.init_db()
-
-    state: dict[str, Any] = {
-        "bot_running": True,
-        "daily_pnl": 0.0,
-        "equity_start": None,
-        "open_trade": None,
-        "last_rejection": None,
-    }
+    state = _build_state()
 
     async with aiohttp.ClientSession() as session:
-        print("[MAIN] Zenith-Control Ultimate запущен")
-        # --- Проверка авторизации на Bybit (запрос баланса) ---
+        print("[MAIN] Zenith-Control Ultimate v2 запущен")
+
+        # Стартовый баланс: ставим equity_start и HWM. На сбое Bybit - warn.
         try:
             balance = await api_engine.get_balance(session, "USDT")
         except Exception as exc:  # noqa: BLE001
@@ -311,8 +860,8 @@ async def main() -> None:
 
         if balance is None:
             print(
-                "[MAIN] Не удалось авторизоваться на Bybit: "
-                "проверьте BYBIT_API_KEY/BYBIT_API_SECRET и режим (testnet/mainnet)."
+                "[MAIN] Не удалось получить баланс Bybit. Цикл всё равно стартует, "
+                "но входов не будет до ручной проверки ключей/сети."
             )
         else:
             mode = "TESTNET" if config.IS_TESTNET else "MAINNET"
@@ -320,12 +869,28 @@ async def main() -> None:
                 f"[MAIN] Успех авторизации на Bybit ({mode}). "
                 f"Баланс USDT: {balance:.4f}"
             )
-            state["equity_start"] = balance
+            state["global"]["equity_start"] = float(balance)
+            state["global"]["hwm"] = float(balance)
+            _record_equity_snapshot(state, float(balance))
+
+        # Прогрев кэша инструментов.
+        for symbol in config.SYMBOLS:
+            try:
+                info = await api_engine.instrument_info_cached(session, symbol)
+            except Exception as exc:  # noqa: BLE001
+                info = None
+                print(f"[MAIN] instrument_info_cached({symbol}) сбой: {exc}")
+            if info is not None:
+                state["instruments"][symbol] = info
 
         print("[MAIN] Telegram-бот запущен в режиме Long Polling")
         await telegram_bot.send_message(
             session,
-            "🚀 <b>Zenith-Control Ultimate</b> запущен.\nВыберите действие ниже.",
+            (
+                "🚀 <b>Zenith-Control Ultimate v2</b> запущен.\n"
+                "Мульти-символ: " + ", ".join(config.SYMBOLS) + ".\n"
+                "Выберите действие ниже."
+            ),
             reply_markup=telegram_bot.set_keyboard(),
         )
         await asyncio.gather(
