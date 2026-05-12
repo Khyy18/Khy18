@@ -90,8 +90,9 @@ echo "[INFO] Интерпретатор для venv: ${PYTHON_BIN}"
 id -u zenith >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/zenith --shell /bin/bash zenith
 
 # --- Код ------------------------------------------------------------------
-# /opt/zenith создаёт сам git clone (иначе он ругается на непустой путь).
-# Родительский /opt в Ubuntu/Debian уже существует с системными правами.
+# Клонируем под root (у zenith нет прав писать в /opt/), потом отдаём
+# владельцем zenith. Это стандартный паттерн для system-user'а без
+# write-доступа к родительскому каталогу.
 REPO_URL="${REPO_URL:-https://github.com/Khy18/Khy18.git}"
 BRANCH="${BRANCH:-feat/zenith-control-ultimate}"
 if [[ ! -d /opt/zenith/.git ]]; then
@@ -102,7 +103,8 @@ if [[ ! -d /opt/zenith/.git ]]; then
         rm -rf /opt/zenith
     fi
     echo "[INFO] Клонируем ${REPO_URL} (ветка ${BRANCH}) -> /opt/zenith"
-    sudo -u zenith git clone --branch "${BRANCH}" "${REPO_URL}" /opt/zenith
+    git clone --branch "${BRANCH}" "${REPO_URL}" /opt/zenith
+    chown -R zenith:zenith /opt/zenith
 else
     echo "[INFO] Обновляем /opt/zenith (ветка ${BRANCH})"
     sudo -u zenith git -C /opt/zenith fetch origin "${BRANCH}"
