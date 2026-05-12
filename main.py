@@ -535,30 +535,51 @@ async def _check_closed_exchange_position(
     if positions:
         return  # позиция всё ещё открыта
 
-    # Позиция закрыта - определяем приблизительную цену выхода.
+    # --- Пытаемся получить реальный PnL через Bybit closed-pnl ---
+    real_pnl = None
+    real_exit_price = None
     try:
-        klines = await api_engine.get_klines(session, symbol, "1", 1)
+        closed_records = await api_engine.get_closed_pnl(session, symbol, limit=5)
+        if closed_records:
+            # Берём первую запись (самая свежая) как наиболее вероятное закрытие нашей позиции.
+            rec = closed_records[0]
+            real_pnl = float(rec.get("closedPnl") or 0)
+            real_exit_price = float(rec.get("avgExitPrice") or 0)
+            if real_exit_price > 0:
+                print(f"[LOOP] Реальный exit price из closed-pnl: {real_exit_price}, PnL: {real_pnl}")
     except Exception as exc:  # noqa: BLE001
-        print(f"[LOOP] {symbol}: ошибка получения 1m-свечи для выхода: {exc}")
-        klines = []
-    exit_price: Optional[float] = None
-    if klines:
-        try:
-            exit_price = float(klines[-1][4])
-        except (IndexError, TypeError, ValueError):
-            exit_price = None
-    if exit_price is None:
-        exit_price = float(trade.get("current_stop") or trade.get("entry_price") or 0.0)
+        print(f"[LOOP] Не удалось получить closed-pnl: {exc}")
 
-    entry = float(trade.get("entry_price") or 0.0)
-    qty = float(trade.get("qty") or 0.0)
-    side = str(trade.get("side") or "")
-    if side == "Buy":
-        pnl = (exit_price - entry) * qty
-    elif side == "Sell":
-        pnl = (entry - exit_price) * qty
+    if real_pnl is not None and real_exit_price and real_exit_price > 0:
+        exit_price = real_exit_price
+        pnl = real_pnl
     else:
-        pnl = 0.0
+        # Fallback: аппроксимация через последнюю 1m свечу (менее точно).
+        print("[LOOP] Используем аппроксимацию exit price через 1m kline")
+        try:
+            klines = await api_engine.get_klines(session, symbol, "1", 1)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LOOP] {symbol}: ошибка получения 1m-свечи для выхода: {exc}")
+            klines = []
+        exit_price_fallback: Optional[float] = None
+        if klines:
+            try:
+                exit_price_fallback = float(klines[-1][4])
+            except (IndexError, TypeError, ValueError):
+                exit_price_fallback = None
+        if exit_price_fallback is None:
+            exit_price_fallback = float(trade.get("current_stop") or trade.get("entry_price") or 0.0)
+
+        exit_price = exit_price_fallback
+        entry = float(trade.get("entry_price") or 0.0)
+        qty = float(trade.get("qty") or 0.0)
+        side = str(trade.get("side") or "")
+        if side == "Buy":
+            pnl = (exit_price - entry) * qty
+        elif side == "Sell":
+            pnl = (entry - exit_price) * qty
+        else:
+            pnl = 0.0
     outcome = "WIN" if pnl > 0 else "LOSS"
 
     trade_id = trade.get("id")
@@ -733,7 +754,7 @@ async def _process_symbol(
         print(f"[LOOP] {symbol}: ордер не прошёл ({resp})")
         return
 
-    entry_price = float(order["limit_price"])
+    entry_price = float(resp.get("fill_price") or order.get("limit_price") or 0.0)
     try:
         trade_id = memory.record_trade(
             symbol=symbol,

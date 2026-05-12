@@ -338,6 +338,51 @@ async def get_open_orders(
     return list((resp.get("result") or {}).get("list") or [])
 
 
+async def get_execution_history(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    order_id: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Список исполнений по конкретному order_id. Используется для подтверждения
+    реального fill после PostOnly (order может исчезнуть из open_orders при
+    отмене или кросс-отклонении, а не только при исполнении)."""
+    params = {
+        "category": "linear",
+        "symbol": symbol,
+        "orderId": order_id,
+        "limit": limit,
+    }
+    resp = await _request(session, "GET", "/v5/execution/list", params=params, auth=True)
+    if not resp or resp.get("retCode") != 0:
+        if resp:
+            print(f"[API] Ошибка get_execution_history: {resp.get('retMsg')}")
+        return []
+    items = (resp.get("result") or {}).get("list") or []
+    return items
+
+
+async def get_closed_pnl(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Реализованный PnL закрытых позиций. Используется для получения точного
+    exit price и PnL вместо аппроксимации через последнюю 1m-свечу."""
+    params = {
+        "category": "linear",
+        "symbol": symbol,
+        "limit": limit,
+    }
+    resp = await _request(session, "GET", "/v5/position/closed-pnl", params=params, auth=True)
+    if not resp or resp.get("retCode") != 0:
+        if resp:
+            print(f"[API] Ошибка get_closed_pnl: {resp.get('retMsg')}")
+        return []
+    items = (resp.get("result") or {}).get("list") or []
+    return items
+
+
 async def cancel_order(
     session: aiohttp.ClientSession,
     symbol: str,
@@ -515,9 +560,39 @@ async def place_order_with_fallback(
                     (o or {}).get("orderId") == order_id for o in open_orders
                 )
                 if not still_there:
-                    # Ордер больше не активен - считаем filled.
+                    # Ордер больше не активен - предварительно считаем filled.
                     filled = True
                     break
+
+            # --- Подтверждаем fill через execution history ---
+            # PostOnly может исчезнуть из open_orders при: fill, cancel, reject.
+            # Только execution history достоверно подтверждает реальное исполнение.
+            if filled and order_id:
+                execs = await get_execution_history(session, symbol, order_id, limit=5)
+                if not execs:
+                    # Ордер исчез, но исполнений нет - это reject или cancel, не fill.
+                    print(f"[API] PostOnly {order_id} исчез без исполнений - не является fill")
+                    filled = False
+                    await cancel_order(session, symbol, order_id)
+                else:
+                    # Вычисляем средневзвешенную цену fill.
+                    total_qty = 0.0
+                    total_cost = 0.0
+                    for ex in execs:
+                        try:
+                            eq = float(ex.get("execQty") or 0)
+                            ep = float(ex.get("execPrice") or 0)
+                            total_qty += eq
+                            total_cost += eq * ep
+                        except (TypeError, ValueError):
+                            continue
+                    if total_qty > 0:
+                        avg_fill_price = total_cost / total_qty
+                        # Прикрепляем реальную цену fill к ответу.
+                        if isinstance(limit_resp, dict):
+                            limit_resp["fill_price"] = avg_fill_price
+                            limit_resp["fill_qty"] = total_qty
+
             if filled:
                 print(f"[API] PostOnly-лимит {order_id} исполнен в стакане")
                 # SL/TP навесим отдельно через set_trading_stop.
@@ -541,7 +616,7 @@ async def place_order_with_fallback(
             f"(info={bool(info)}, top={bool(top)})"
         )
 
-    return await place_market_order(
+    market_resp = await place_market_order(
         session,
         symbol=symbol,
         side=side,
@@ -550,6 +625,28 @@ async def place_order_with_fallback(
         take_profit=take_profit,
         reduce_only=reduce_only,
     )
+
+    # После Market IOC fallback - тоже получаем реальную цену fill.
+    if market_resp and market_resp.get("retCode") == 0:
+        market_order_id = ((market_resp.get("result") or {}).get("orderId") or "")
+        if market_order_id:
+            await asyncio.sleep(1)  # даём бирже секунду на запись execution
+            m_execs = await get_execution_history(session, symbol, market_order_id, limit=5)
+            m_total_qty = 0.0
+            m_total_cost = 0.0
+            for ex in m_execs:
+                try:
+                    eq = float(ex.get("execQty") or 0)
+                    ep = float(ex.get("execPrice") or 0)
+                    m_total_qty += eq
+                    m_total_cost += eq * ep
+                except (TypeError, ValueError):
+                    continue
+            if m_total_qty > 0:
+                market_resp["fill_price"] = m_total_cost / m_total_qty
+                market_resp["fill_qty"] = m_total_qty
+
+    return market_resp
 
 
 async def set_trading_stop(
