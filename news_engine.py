@@ -21,15 +21,24 @@ async def fetch_headlines(
     timeout: int = 15,
 ) -> list[str]:
     """Получить до `page_size` свежих заголовков по теме.
-    Возвращает список строк (title). На любой ошибке - пустой список."""
+    Возвращает список строк (title). На любой ошибке - пустой список.
+
+    page_size жёстко ограничиваем диапазоном [1, 100] - NewsAPI отвергает
+    значения больше 100 (возвращает parameterInvalid).
+    """
     if not config.NEWS_API_KEY:
         print("[NEWS] NEWS_API_KEY не задан - пропускаем получение заголовков")
         return []
 
+    try:
+        clamped_page_size = max(1, min(int(page_size), 100))
+    except (TypeError, ValueError):
+        clamped_page_size = 10
+
     params = {
         "q": query,
         "language": "en",
-        "pageSize": page_size,
+        "pageSize": clamped_page_size,
         "sortBy": "publishedAt",
     }
     headers = {"X-Api-Key": config.NEWS_API_KEY}
@@ -56,7 +65,7 @@ async def fetch_headlines(
 
     articles = data.get("articles") or []
     titles: list[str] = []
-    for art in articles[:page_size]:
+    for art in articles[:clamped_page_size]:
         title = (art.get("title") or "").strip()
         if title:
             titles.append(title)
