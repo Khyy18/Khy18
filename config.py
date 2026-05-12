@@ -13,9 +13,6 @@ BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 _TELEGRAM_CHAT_ID_RAW = os.getenv("TELEGRAM_CHAT_ID", "")
-# GEMINI_API_KEY больше не используется основными модулями; оставлено для
-# возможного ручного отката и для модулей, которые ещё ссылаются (см. TODO).
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
@@ -94,7 +91,7 @@ TIME_STOP_HOURS = 48
 MAX_WEEKLY_LOSS = 0.07   # 7% недельный убыток - пауза до ручного старта
 MAX_DRAWDOWN = 0.15      # 15% просадка от HWM - жёсткая остановка
 
-# TTL ответов ИИ-модулей (во избежание повторных дорогих вызовов Gemini).
+# TTL ответов ИИ-модулей (во избежание повторных дорогих вызовов Groq).
 AI_BLACKOUT_TTL_SEC = 55 * 60      # macro-sentinel: новостной blackout, ~55 минут
 AI_REGIME_TTL_SEC = 4 * 3600       # режимный классификатор: 4 часа
 
@@ -129,19 +126,9 @@ BYBIT_RECV_WINDOW = "5000"
 # качеству с Gemini 2.5 Flash в задачах классификации, хорошо пишет JSON
 # при response_format=json_object. Free tier: 14400 RPD / 30 RPM -
 # для текущего паттерна (~50 вызовов/сутки) запаса хватает с огромным
-# избытком, поэтому fallback на Gemini не нужен.
+# избытком, fallback-провайдер не требуется.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-# --- Gemini (не используется основным кодом) ---
-# Константы оставлены для возможного ручного отката на Gemini через
-# редактирование ai_*.py модулей. ai_gemini.py остался в репо как dead
-# code, он читает эти значения при прямом импорте.
-GEMINI_MODEL = "gemini-2.5-flash-lite"
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    f"{GEMINI_MODEL}:generateContent"
-)
 
 # --- NewsAPI ---
 NEWS_API_URL = "https://newsapi.org/v2/everything"

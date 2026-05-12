@@ -69,7 +69,7 @@ v2 переписала торговое ядро целиком. Ключевы
 | `BYBIT_API_SECRET` | Секрет Bybit |
 | `TELEGRAM_TOKEN` | Токен Telegram-бота от @BotFather |
 | `TELEGRAM_CHAT_ID` | Числовой chat_id владельца, единственный разрешённый |
-| `GEMINI_API_KEY` | API ключ Google Gemini (generativelanguage.googleapis.com) |
+| `GROQ_API_KEY` | API ключ Groq (console.groq.com) для ИИ-модулей |
 | `NEWS_API_KEY` | API ключ https://newsapi.org |
 
 Файл-образец: `.env.example`. Скопируйте его в `.env` и заполните.
@@ -114,7 +114,7 @@ api_engine.py          # асинхронный Bybit V5 (PostOnly/IOC, trading-
 strategy.py            # shim: re-export strategy_v2
 strategy_v1.py         # legacy RSI-cross (справочно, для сравнения в бэктестере)
 strategy_v2.py         # Donchian + трендовый фильтр + vol-targeting
-ai_gemini.py           # общий Gemini-клиент (x-goog-api-key заголовком)
+ai_groq.py             # общий Groq-клиент (OpenAI-совместимый endpoint)
 ai_macro_sentinel.py   # blackout перед макрорелизами (часовой тикер)
 ai_regime.py           # TRENDING/RANGING/CRISIS (4-часовой тикер на символ)
 ai_postmortem.py       # еженедельный отчёт (понедельник 00:00 UTC)
