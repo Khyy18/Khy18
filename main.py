@@ -33,6 +33,7 @@ import aiohttp
 import ai_macro_sentinel
 import ai_postmortem
 import ai_regime
+import ai_trade_gate
 import api_engine  # noqa: F401  # legacy shim, поддерживается для совместимости
 import config
 import memory
@@ -925,6 +926,100 @@ async def _process_symbol(
         return
 
     side = str(order["side"])
+
+    # --- AI-veto gate: последняя проверка перед отправкой ордера ---
+    # Стратегия и все детерминистические фильтры уже сказали "открываем".
+    # Gate задаёт Groq один узкий вопрос - есть ли в свежих новостях явный
+    # red-flag (hack биржи / депег / rug pull / SEC / delisting / банкротство
+    # / критический баг контракта). По умолчанию approve.
+    # Режимы: off (не вызываем), shadow (вызываем и логируем, но не применяем),
+    # active (применяем: veto ИЛИ error блокируют сделку - fail-CLOSED).
+    gate_mode = str(getattr(config, "AI_TRADE_GATE_MODE", "off") or "off").lower()
+    gate_verdict = "approve"
+    gate_reason = ""
+    gate_conf = 0
+    if gate_mode in ("shadow", "active"):
+        try:
+            headlines = await news_engine.fetch_headlines(
+                session,
+                query=symbol,
+                page_size=int(getattr(config, "AI_TRADE_GATE_NEWS_LIMIT", 10)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[AI-GATE] {symbol}: ошибка fetch_headlines: {exc}")
+            headlines = []
+
+        # atr_pct кладут обе стратегии, но под разными ключами:
+        # strategy_v2 - "atr_pct", strategy_v2_meanrevert - "atr_pct_15m".
+        order_indicators = (order.get("meta") or {}).get("indicators") or {}
+        atr_pct_val = float(
+            order_indicators.get("atr_pct")
+            or order_indicators.get("atr_pct_15m")
+            or 0.0
+        )
+        sym_regime = sym_state.get("regime") or {}
+        strat_name = str(
+            (order.get("meta") or {}).get("strategy_name") or "strategy_v2"
+        )
+
+        gate_result = await ai_trade_gate.check_trade(
+            session,
+            symbol=symbol,
+            side=("LONG" if side == "Buy" else "SHORT"),
+            strategy_name=strat_name,
+            entry_price=float(order["limit_price"]),
+            atr_pct=atr_pct_val,
+            regime=str(sym_regime.get("regime", "TRENDING")),
+            regime_confidence=int(sym_regime.get("confidence", 0) or 0),
+            blackout=bool(state["global"].get("blackout", {}).get("blackout")),
+            news_headlines=list(headlines),
+        )
+        gate_verdict = str(gate_result.get("verdict", "error") or "error").lower()
+        gate_reason = str(gate_result.get("reason", "") or "")
+        try:
+            gate_conf = int(gate_result.get("confidence", 0) or 0)
+        except (TypeError, ValueError):
+            gate_conf = 0
+
+        log_prefix = "[AI-GATE-SHADOW]" if gate_mode == "shadow" else "[AI-GATE]"
+        print(
+            f"{log_prefix} {symbol} {side}: verdict={gate_verdict} "
+            f"conf={gate_conf} reason={gate_reason[:120]}"
+        )
+
+    # В active mode veto ИЛИ error блокируют вход (fail-CLOSED);
+    # в shadow mode - только логирование.
+    if gate_mode == "active" and gate_verdict in ("veto", "error"):
+        blocker_filter = "ai_gate_veto" if gate_verdict == "veto" else "ai_gate_error"
+        detail = gate_reason or (
+            "gate вернул error (fail-CLOSED)"
+            if gate_verdict == "error"
+            else "gate наложил veto"
+        )
+        try:
+            memory.record_rejected_check(
+                symbol,
+                blocker_filter,
+                detail,
+                {"side": side, "gate_confidence": gate_conf},
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LOOP] {symbol}: ошибка record_rejected_check (gate): {exc}")
+        state["global"]["rejection_ring"].append(
+            {
+                "ts": _iso(now),
+                "symbol": symbol,
+                "filter": blocker_filter,
+                "detail": detail,
+                "indicators": {"gate_confidence": gate_conf},
+            }
+        )
+        print(
+            f"[AI-GATE] {symbol} {side}: блокируем вход "
+            f"({blocker_filter}), reason={detail[:120]}"
+        )
+        return
+
     if getattr(config, "DRY_RUN", False):
         side_label = "LONG" if side == "Buy" else "SHORT"
         print(
@@ -1004,6 +1099,20 @@ async def _process_symbol(
         )
         if reason:
             notify_text += f"\nПричина: {reason}"
+        # Строка про AI-veto gate: показываем какое решение вынес gate и
+        # в каком режиме он работает (off/shadow/active).
+        if gate_mode == "off":
+            notify_text += "\nAI-gate: off"
+        elif gate_mode == "shadow":
+            short_reason = (gate_reason[:80] + "…") if len(gate_reason) > 80 else gate_reason
+            if gate_verdict == "veto":
+                notify_text += f"\nAI-gate shadow: would veto ({short_reason})"
+            elif gate_verdict == "error":
+                notify_text += f"\nAI-gate shadow: error - fail-CLOSED would block ({short_reason})"
+            else:
+                notify_text += "\nAI-gate shadow: would approve"
+        else:  # active
+            notify_text += f"\nAI-gate: approved (conf={gate_conf})"
         await telegram_bot.send_message(
             session, notify_text, reply_markup=telegram_bot.set_keyboard()
         )
