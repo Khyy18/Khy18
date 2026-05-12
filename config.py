@@ -107,6 +107,24 @@ MAX_DRAWDOWN = 0.15      # 15% просадка от HWM - жёсткая ост
 AI_BLACKOUT_TTL_SEC = 55 * 60      # macro-sentinel: новостной blackout, ~55 минут
 AI_REGIME_TTL_SEC = 30 * 60        # режимный классификатор: 30 минут
 
+# AI-veto gate перед открытием сделки.
+# "off"    - gate отключён, всегда approve без вызова Groq.
+# "shadow" - gate вызывается на каждое намерение, решение ЛОГИРУЕТСЯ
+#            в Telegram и stdout как "would approve/veto", но НЕ применяется:
+#            сделка всегда открывается если стратегия и фильтры дали OK.
+#            Режим для сбора статистики без влияния на торговлю.
+# "active" - gate применяется: veto блокирует сделку с записью в rejected_checks.
+# Fail-CLOSED: на любой ошибке Groq (сеть, таймаут, невалидный JSON) решение
+# считается "error" и в active-режиме ТРАКТУЕТСЯ КАК veto (сделка НЕ открывается).
+# В shadow-режиме ошибка только логируется.
+AI_TRADE_GATE_MODE = os.getenv("AI_TRADE_GATE_MODE", "shadow").strip().lower()
+# Таймаут одного вызова gate (сек). Короткий, чтобы не тормозить торговый тик.
+AI_TRADE_GATE_TIMEOUT = 8
+# Сколько часов новостей NewsAPI подмешивать в prompt.
+AI_TRADE_GATE_NEWS_HOURS = 6
+# Сколько заголовков максимум класть в prompt (ограничение размера).
+AI_TRADE_GATE_NEWS_LIMIT = 10
+
 # Расписание еженедельного пост-мортема (UTC).
 # 0 = понедельник по стандарту Python (datetime.weekday()).
 POSTMORTEM_DAY_UTC = 0
