@@ -34,9 +34,14 @@ import aiohttp
 
 import ai_analyst
 import ai_postmortem
-import api_engine
+import api_engine  # noqa: F401  # legacy shim
 import config
 import memory
+from exchanges import get_adapter
+
+
+# Единый адаптер биржи (выбирается через config.EXCHANGE).
+EXCHANGE = get_adapter(config.EXCHANGE)
 
 
 # --- Callback data ids (короткие, чтобы влезали в ограничение Telegram 64 байта) ---
@@ -252,7 +257,7 @@ async def _handle_positions(
     remote: list[dict[str, Any]] = []
     for sym in config.SYMBOLS:
         try:
-            chunk = await api_engine.get_positions(session, sym)
+            chunk = await EXCHANGE.get_positions(session, sym)
         except Exception as exc:  # noqa: BLE001
             print(f"[TG] Ошибка get_positions({sym}): {exc}")
             chunk = []
@@ -286,7 +291,7 @@ async def _handle_panic(
     total_orders = 0
     for sym in config.SYMBOLS:
         try:
-            results = await api_engine.panic_sell(session, sym)
+            results = await EXCHANGE.panic_sell(session, sym)
         except Exception as exc:  # noqa: BLE001
             print(f"[TG] Ошибка panic_sell({sym}): {exc}")
             results = []

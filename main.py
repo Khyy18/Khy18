@@ -33,15 +33,21 @@ import aiohttp
 import ai_macro_sentinel
 import ai_postmortem
 import ai_regime
-import api_engine
+import api_engine  # noqa: F401  # legacy shim, поддерживается для совместимости
 import config
 import memory
 import news_engine
 import strategy_v2
 import telegram_bot
+from exchanges import get_adapter
 
 
 TICK_SECONDS = 60
+
+# Единый адаптер биржи выбирается через config.EXCHANGE (env EXCHANGE).
+# Все дальнейшие вызовы идут через него - переключение Bybit/OKX/etc
+# сводится к смене переменной окружения.
+EXCHANGE = get_adapter(config.EXCHANGE)
 
 
 # --- Время / ISO помощники -------------------------------------------------
@@ -276,7 +282,7 @@ async def _regime_tick(
 
     # Дневные свечи.
     try:
-        raw_d = await api_engine.get_klines(session, symbol, interval="D", limit=45)
+        raw_d = await EXCHANGE.get_klines(session, symbol, interval="D", limit=45)
     except Exception as exc:  # noqa: BLE001
         print(f"[AI] regime {symbol}: ошибка get_klines(D): {exc}")
         return
@@ -299,7 +305,7 @@ async def _regime_tick(
 
     # Часовые свечи для ATR(1h).
     try:
-        raw_1h = await api_engine.get_klines(session, symbol, interval="60", limit=50)
+        raw_1h = await EXCHANGE.get_klines(session, symbol, interval="60", limit=50)
     except Exception as exc:  # noqa: BLE001
         print(f"[AI] regime {symbol}: ошибка get_klines(60): {exc}")
         raw_1h = []
@@ -478,7 +484,7 @@ async def _manage_open_trade(
             tighter = True
         if tighter:
             try:
-                resp = await api_engine.set_trading_stop(
+                resp = await EXCHANGE.set_trading_stop(
                     session, symbol, stop_loss=float(new_trail)
                 )
             except Exception as exc:  # noqa: BLE001
@@ -504,7 +510,7 @@ async def _manage_open_trade(
         close_side = "Sell" if side == "Buy" else "Buy"
         qty = float(trade.get("qty") or 0.0)
         try:
-            resp = await api_engine.place_order_with_fallback(
+            resp = await EXCHANGE.place_order_with_fallback(
                 session,
                 symbol=symbol,
                 side=close_side,
@@ -528,7 +534,7 @@ async def _check_closed_exchange_position(
     if not trade:
         return
     try:
-        positions = await api_engine.get_positions(session, symbol)
+        positions = await EXCHANGE.get_positions(session, symbol)
     except Exception as exc:  # noqa: BLE001
         print(f"[LOOP] {symbol}: ошибка get_positions: {exc}")
         return
@@ -539,7 +545,7 @@ async def _check_closed_exchange_position(
     real_pnl = None
     real_exit_price = None
     try:
-        closed_records = await api_engine.get_closed_pnl(session, symbol, limit=5)
+        closed_records = await EXCHANGE.get_closed_pnl(session, symbol, limit=5)
         if closed_records:
             # Берём первую запись (самая свежая) как наиболее вероятное закрытие нашей позиции.
             rec = closed_records[0]
@@ -557,7 +563,7 @@ async def _check_closed_exchange_position(
         # Fallback: аппроксимация через последнюю 1m свечу (менее точно).
         print("[LOOP] Используем аппроксимацию exit price через 1m kline")
         try:
-            klines = await api_engine.get_klines(session, symbol, "1", 1)
+            klines = await EXCHANGE.get_klines(session, symbol, "1", 1)
         except Exception as exc:  # noqa: BLE001
             print(f"[LOOP] {symbol}: ошибка получения 1m-свечи для выхода: {exc}")
             klines = []
@@ -615,9 +621,9 @@ async def _process_symbol(
     sym_state = state["symbols"][symbol]
 
     try:
-        raw_1h = await api_engine.get_klines(session, symbol, interval="60", limit=250)
-        raw_4h = await api_engine.get_klines(session, symbol, interval="240", limit=120)
-        raw_1d = await api_engine.get_klines(session, symbol, interval="D", limit=250)
+        raw_1h = await EXCHANGE.get_klines(session, symbol, interval="60", limit=250)
+        raw_4h = await EXCHANGE.get_klines(session, symbol, interval="240", limit=120)
+        raw_1d = await EXCHANGE.get_klines(session, symbol, interval="D", limit=250)
     except Exception as exc:  # noqa: BLE001
         print(f"[LOOP] {symbol}: ошибка получения свечей: {exc}")
         return
@@ -722,7 +728,7 @@ async def _process_symbol(
 
     # Биржевые фильтры.
     try:
-        info = await api_engine.instrument_info_cached(session, symbol)
+        info = await EXCHANGE.get_instrument_info(session, symbol)
     except Exception as exc:  # noqa: BLE001
         print(f"[LOOP] {symbol}: ошибка instrument_info_cached: {exc}")
         return
@@ -730,7 +736,7 @@ async def _process_symbol(
         print(f"[LOOP] {symbol}: нет данных инструмента, пропуск")
         return
 
-    qty = api_engine.validate_and_round_qty(
+    qty = EXCHANGE.validate_and_round_qty(
         float(order["qty"]), info, float(order["limit_price"])
     )
     if qty <= 0:
@@ -739,7 +745,7 @@ async def _process_symbol(
 
     side = str(order["side"])
     try:
-        resp = await api_engine.place_order_with_fallback(
+        resp = await EXCHANGE.place_order_with_fallback(
             session,
             symbol=symbol,
             side=side,
@@ -878,7 +884,7 @@ async def main() -> None:
 
         # Стартовый баланс: ставим equity_start и HWM. На сбое Bybit - warn.
         try:
-            balance = await api_engine.get_balance(session, "USDT")
+            balance = await EXCHANGE.get_balance(session, "USDT")
         except Exception as exc:  # noqa: BLE001
             balance = None
             print(f"[MAIN] Ошибка при проверке авторизации Bybit: {exc}")
@@ -901,7 +907,7 @@ async def main() -> None:
         # Прогрев кэша инструментов.
         for symbol in config.SYMBOLS:
             try:
-                info = await api_engine.instrument_info_cached(session, symbol)
+                info = await EXCHANGE.get_instrument_info(session, symbol)
             except Exception as exc:  # noqa: BLE001
                 info = None
                 print(f"[MAIN] instrument_info_cached({symbol}) сбой: {exc}")

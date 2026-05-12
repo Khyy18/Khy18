@@ -252,7 +252,12 @@ class OKXAdapter(ExchangeAdapter):
     async def get_instrument_info(
         self, session: Any, symbol: str
     ) -> Optional[dict[str, float]]:
+        """Фильтры инструмента с кэшированием per-symbol.
+        Первый вызов ходит в сеть, последующие отдают из self._instrument_cache."""
         norm = _normalize_symbol(symbol)
+        cached = self._instrument_cache.get(norm)
+        if cached is not None:
+            return cached
         params = {"instType": "SWAP", "instId": norm}
         resp = await self._request(
             session, "GET", "/api/v5/public/instruments", params=params, auth=False
@@ -265,24 +270,20 @@ class OKXAdapter(ExchangeAdapter):
         if not data:
             return None
         item = data[0]
-        return {
+        info = {
             "minOrderQty": _safe_float(item.get("minSz")),
             "qtyStep": _safe_float(item.get("lotSz")),
             "minNotionalValue": 0.0,  # OKX не отдаёт этот фильтр напрямую.
             "tickSize": _safe_float(item.get("tickSz")),
         }
+        self._instrument_cache[norm] = info
+        return info
 
     async def instrument_info_cached(
         self, session: Any, symbol: str
     ) -> Optional[dict[str, float]]:
-        norm = _normalize_symbol(symbol)
-        cached = self._instrument_cache.get(norm)
-        if cached is not None:
-            return cached
-        info = await self.get_instrument_info(session, norm)
-        if info is not None:
-            self._instrument_cache[norm] = info
-        return info
+        """Алиас get_instrument_info для обратной совместимости."""
+        return await self.get_instrument_info(session, symbol)
 
     async def get_orderbook_top(
         self, session: Any, symbol: str
