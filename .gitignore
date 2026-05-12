@@ -16,3 +16,8 @@ venv/
 
 # Служебная директория агентов (не обязательна в публичном репо)
 .agents/
+
+# Кэш бэктестера (исторические CSV/ZIP Binance и JSON-метрики)
+backtester/data/*.csv
+backtester/data/*.zip
+backtester/data/*.json
