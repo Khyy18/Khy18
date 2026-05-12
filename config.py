@@ -13,7 +13,10 @@ BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 _TELEGRAM_CHAT_ID_RAW = os.getenv("TELEGRAM_CHAT_ID", "")
+# GEMINI_API_KEY больше не используется основными модулями; оставлено для
+# возможного ручного отката и для модулей, которые ещё ссылаются (см. TODO).
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
 
@@ -121,10 +124,19 @@ BYBIT_BASE_URL_MAINNET = "https://api.bybit.com"
 BYBIT_BASE_URL = BYBIT_BASE_URL_TESTNET if IS_TESTNET else BYBIT_BASE_URL_MAINNET
 BYBIT_RECV_WINDOW = "5000"
 
-# --- Gemini ---
-# Используем gemini-2.5-flash-lite: non-preview (GA), отдельная free-квота
-# от 2.0-flash, подходит для частых вызовов ai_macro_sentinel / ai_regime.
-# При 429 на бесплатном тарифе - включить billing в Google Cloud Console.
+# --- Groq ---
+# Используем llama-3.3-70b-versatile: большая модель (70B), сравнима по
+# качеству с Gemini 2.5 Flash в задачах классификации, хорошо пишет JSON
+# при response_format=json_object. Free tier: 14400 RPD / 30 RPM -
+# для текущего паттерна (~50 вызовов/сутки) запаса хватает с огромным
+# избытком, поэтому fallback на Gemini не нужен.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# --- Gemini (не используется основным кодом) ---
+# Константы оставлены для возможного ручного отката на Gemini через
+# редактирование ai_*.py модулей. ai_gemini.py остался в репо как dead
+# code, он читает эти значения при прямом импорте.
 GEMINI_MODEL = "gemini-2.5-flash-lite"
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -148,7 +160,7 @@ _EXCHANGE_REQUIRED = {
 _COMMON_REQUIRED = (
     "TELEGRAM_TOKEN",
     "TELEGRAM_CHAT_ID",
-    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
     "NEWS_API_KEY",
 )
 REQUIRED_ENV_VARS = _EXCHANGE_REQUIRED.get(

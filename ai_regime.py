@@ -1,7 +1,7 @@
 """Классификатор рыночного режима: TRENDING / RANGING / CRISIS.
 
 Вход - до 30 дневных OHLC-свечей, актуальная ATR(1h), 30-дневная
-реализованная волатильность и до 10 свежих заголовков. Gemini возвращает
+реализованная волатильность и до 10 свежих заголовков. Groq возвращает
 строгий JSON {regime, confidence, reason}.
 
 Политика отказоустойчивости - **fail-CLOSED**: при любой ошибке ставим
@@ -10,7 +10,7 @@ regime=CRISIS с нулевой уверенностью. CRISIS блокиру�
 валидного ответа или ручного вмешательства.
 
 Кэш - отдельный на символ, TTL = config.AI_REGIME_TTL_SEC. Кэшируем и
-fail-closed результат, чтобы не ddos-ить Gemini при длительных сбоях.
+fail-closed результат, чтобы не ddos-ить Groq при длительных сбоях.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 import aiohttp
 
-import ai_gemini
+import ai_groq
 import config
 
 
@@ -156,15 +156,15 @@ async def classify(
         return _fail_closed(sym)
 
     try:
-        parsed: Optional[dict[str, Any]] = await ai_gemini.call_gemini_json(
+        parsed: Optional[dict[str, Any]] = await ai_groq.call_groq_json(
             session, prompt
         )
     except Exception as exc:  # noqa: BLE001
-        print(f"[REGIME] Ошибка вызова Gemini: {exc}")
+        print(f"[REGIME] Ошибка вызова Groq: {exc}")
         return _fail_closed(sym)
 
     if not isinstance(parsed, dict):
-        print("[REGIME] Gemini не вернул валидный JSON - fail-closed")
+        print("[REGIME] Groq не вернул валидный JSON - fail-closed")
         return _fail_closed(sym)
 
     try:
@@ -181,7 +181,7 @@ async def classify(
         if not reason:
             reason = "без пояснения"
     except Exception as exc:  # noqa: BLE001
-        print(f"[REGIME] Ошибка нормализации ответа Gemini: {exc}")
+        print(f"[REGIME] Ошибка нормализации ответа Groq: {exc}")
         return _fail_closed(sym)
 
     value = {

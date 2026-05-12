@@ -1,11 +1,11 @@
 """Еженедельный пост-мортем: свободный отчёт на русском языке.
 
 Читает сделки и equity-кривую за последние N дней из memory, собирает
-компактную сводку и просит Gemini написать связный текст (без JSON).
+компактную сводку и просит Groq написать связный текст (без JSON).
 Кэша нет - вызов происходит редко (раз в неделю по расписанию или по
 кнопке Telegram).
 
-При любой ошибке или пустом ответе Gemini возвращаем ровно строку
+При любой ошибке или пустом ответе Groq возвращаем ровно строку
 'Отчёт временно недоступен.' - наверху её показываем пользователю
 как есть.
 """
@@ -17,7 +17,7 @@ from typing import Any
 
 import aiohttp
 
-import ai_gemini
+import ai_groq
 import memory
 
 
@@ -129,14 +129,14 @@ async def report(session: aiohttp.ClientSession, days: int = 7) -> str:
     )
 
     try:
-        text = await ai_gemini.call_gemini_text(
+        text = await ai_groq.call_groq_text(
             session,
             prompt,
             max_output_tokens=800,
             temperature=0.3,
         )
     except Exception as exc:  # noqa: BLE001
-        print(f"[POSTMORTEM] Ошибка вызова Gemini: {exc}")
+        print(f"[POSTMORTEM] Ошибка вызова Groq: {exc}")
         return _FAIL_TEXT
 
     text = (text or "").strip()

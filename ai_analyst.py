@@ -24,7 +24,7 @@ from typing import Any, Optional
 
 import aiohttp
 
-import ai_gemini
+import ai_groq
 import config
 
 
@@ -81,8 +81,8 @@ async def explain_last_rejection(
 
     fallback = _format_fallback(last_rejection)
 
-    # Если ключ Gemini не задан, Gemini не используем - fallback честнее.
-    if not getattr(config, "GEMINI_API_KEY", ""):
+    # Если ключ Groq не задан, модель не зовём - fallback честнее.
+    if not getattr(config, "GROQ_API_KEY", ""):
         return fallback
 
     try:
@@ -121,7 +121,7 @@ async def explain_last_rejection(
             f"Индикаторы: {ind_json}\n\n"
             f"Недавние убытки бота:\n{recent_block}\n"
         )
-        text = await ai_gemini.call_gemini_text(
+        text = await ai_groq.call_groq_text(
             session,
             prompt,
             max_output_tokens=256,
@@ -129,7 +129,7 @@ async def explain_last_rejection(
             timeout=25,
         )
     except Exception as exc:  # noqa: BLE001
-        print(f"[AI] explain_last_rejection: сбой вызова Gemini: {exc}")
+        print(f"[AI] explain_last_rejection: сбой вызова Groq: {exc}")
         return fallback
 
     text = (text or "").strip()

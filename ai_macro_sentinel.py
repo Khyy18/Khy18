@@ -1,6 +1,6 @@
 """Макро-сентинел: решает, нужно ли встать в blackout перед крупным макрорелизом.
 
-Забирает свежие заголовки из NewsAPI и спрашивает у Gemini строгий JSON:
+Забирает свежие заголовки из NewsAPI и спрашивает у Groq строгий JSON:
   {"blackout": true|false, "until_utc": "...ISO8601..."|null, "reason": "..."}
 
 Политика отказоустойчивости - **fail-OPEN**: при любой ошибке (сеть, парс,
@@ -10,7 +10,7 @@
 и kill-switch по просадке).
 
 Результат кэшируется модульно на config.AI_BLACKOUT_TTL_SEC секунд, чтобы
-не бить по Gemini каждую минуту.
+не бить по Groq каждую минуту.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 import aiohttp
 
-import ai_gemini
+import ai_groq
 import config
 import news_engine
 
@@ -97,15 +97,15 @@ async def check(session: aiohttp.ClientSession) -> dict[str, Any]:
     prompt = _build_prompt(headlines or [])
 
     try:
-        parsed: Optional[dict[str, Any]] = await ai_gemini.call_gemini_json(
+        parsed: Optional[dict[str, Any]] = await ai_groq.call_groq_json(
             session, prompt
         )
     except Exception as exc:  # noqa: BLE001
-        print(f"[MACRO] Ошибка вызова Gemini: {exc}")
+        print(f"[MACRO] Ошибка вызова Groq: {exc}")
         return _fail_open("Ошибка макро-сентинела, blackout не активирован")
 
     if not isinstance(parsed, dict):
-        print("[MACRO] Gemini не вернул валидный JSON - fail-open")
+        print("[MACRO] Groq не вернул валидный JSON - fail-open")
         return _fail_open("Ошибка макро-сентинела, blackout не активирован")
 
     try:
@@ -120,7 +120,7 @@ async def check(session: aiohttp.ClientSession) -> dict[str, Any]:
         if not reason:
             reason = "без пояснения"
     except Exception as exc:  # noqa: BLE001
-        print(f"[MACRO] Ошибка нормализации ответа Gemini: {exc}")
+        print(f"[MACRO] Ошибка нормализации ответа Groq: {exc}")
         return _fail_open("Ошибка макро-сентинела, blackout не активирован")
 
     value = {
