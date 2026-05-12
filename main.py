@@ -577,6 +577,10 @@ async def _manage_open_trade(
         elif side == "Sell" and (current_stop == 0 or new_trail < current_stop):
             tighter = True
         if tighter:
+            if getattr(config, "DRY_RUN", False):
+                print(f"[DRY RUN] {symbol}: would tighten trail stop -> {new_trail}")
+                trade["current_stop"] = float(new_trail)
+                return
             try:
                 resp = await EXCHANGE.set_trading_stop(
                     session, symbol, stop_loss=float(new_trail)
@@ -603,6 +607,12 @@ async def _manage_open_trade(
     if time_stop:
         close_side = "Sell" if side == "Buy" else "Buy"
         qty = float(trade.get("qty") or 0.0)
+        if getattr(config, "DRY_RUN", False):
+            print(
+                f"[DRY RUN] {symbol}: would close by time-stop "
+                f"({config.TIME_STOP_HOURS}ч), side={close_side} qty={qty}"
+            )
+            return
         try:
             resp = await EXCHANGE.place_order_with_fallback(
                 session,
@@ -863,6 +873,13 @@ async def _process_symbol(
         return
 
     side = str(order["side"])
+    if getattr(config, "DRY_RUN", False):
+        side_label = "LONG" if side == "Buy" else "SHORT"
+        print(
+            f"[DRY RUN] {symbol}: would open {side_label} qty={qty} "
+            f"limit={order.get('limit_price')} stop={order.get('hard_stop')}"
+        )
+        return
     try:
         resp = await EXCHANGE.place_order_with_fallback(
             session,

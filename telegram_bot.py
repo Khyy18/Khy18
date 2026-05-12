@@ -323,6 +323,11 @@ async def _handle_panic_confirm(
 ) -> str:
     """Второй шаг: реально закрываем все позиции и ставим торговлю на паузу."""
     _g(state)["bot_running"] = False
+    if getattr(config, "DRY_RUN", False):
+        return (
+            "[DRY RUN] 🚨 PANIC SELL имитация: реальные ордера не отправлены. "
+            "Торговля поставлена на паузу."
+        )
     total_orders = 0
     for sym in config.SYMBOLS:
         try:
