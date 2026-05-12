@@ -200,6 +200,22 @@ sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
 sudo systemctl restart zenith
 ```
 
+Для перехода на экспериментальную ветку v2 (7 символов + подсистема
+Bollinger mean-reversion, подробности в корневом `README.md`, секция
+«v2: Multi-strategy framework»):
+
+```bash
+sudo -u zenith git -C /opt/zenith fetch origin
+sudo -u zenith git -C /opt/zenith checkout feat/v2-meanrevert
+sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
+sudo systemctl restart zenith
+```
+
+**Предупреждение.** `feat/v2-meanrevert` - экспериментальная ветка без
+полноценного бэктеста. Переключайтесь на неё только после суток
+наблюдений в `DRY_RUN=true`, готовьтесь к возможному откату на
+`feat/zenith-control-ultimate` одной командой `git checkout`.
+
 Docker:
 
 ```bash
