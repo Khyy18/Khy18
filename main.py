@@ -215,6 +215,10 @@ async def _apply_kill_switches(
 
 # --- Equity / HWM ---------------------------------------------------------
 
+# cumulative_pnl - кумулятивный PnL за всё время работы процесса.
+# НЕ сбрасывается при ротации daily/weekly. Используется для снимка эквити
+# и расчёта просадки (MDD). weekly_pnl используется только для WEEKLY kill-switch.
+
 def _record_equity_snapshot(state: dict[str, Any], equity: float) -> None:
     g = state["global"]
     prev_hwm = float(g.get("hwm") or 0.0)
@@ -567,11 +571,9 @@ async def _check_closed_exchange_position(
     g = state["global"]
     g["daily_pnl"] = float(g.get("daily_pnl", 0.0) or 0.0) + pnl
     g["weekly_pnl"] = float(g.get("weekly_pnl", 0.0) or 0.0) + pnl
+    g["cumulative_pnl"] = float(g.get("cumulative_pnl", 0.0) or 0.0) + pnl
     equity_start = float(g.get("equity_start") or 0.0)
-    # Прокси эквити: equity_start + накопленный недельный PnL. В реальной
-    # системе стоит тянуть актуальный balance, но балансовый запрос один раз
-    # за тик тяжёл и дублирует то, что уже есть в journal.
-    proxy_equity = equity_start + float(g.get("weekly_pnl", 0.0) or 0.0)
+    proxy_equity = equity_start + float(g.get("cumulative_pnl", 0.0) or 0.0)
     _record_equity_snapshot(state, proxy_equity)
 
     print(
@@ -631,6 +633,8 @@ async def _process_symbol(
         return
     if sym_state.get("last_signal_bar_ts") == last_bar_ts:
         return
+    # Продвигаем безусловно, чтобы не оценивать один бар повторно
+    sym_state["last_signal_bar_ts"] = last_bar_ts
 
     try:
         closes = [c["close"] for c in candles_1h]
@@ -755,7 +759,6 @@ async def _process_symbol(
         "low_since_entry": entry_price,
         "current_stop": float(order["hard_stop"]),
     }
-    sym_state["last_signal_bar_ts"] = last_bar_ts
     print(
         f"[LOOP] {symbol}: открыта {side} qty={qty} entry={entry_price} "
         f"stop={order['hard_stop']}"
@@ -818,6 +821,7 @@ def _build_state() -> dict[str, Any]:
             "daily_anchor_iso": None,
             "weekly_pnl": 0.0,
             "weekly_anchor_iso": None,
+            "cumulative_pnl": 0.0,
             "kill_switch_state": "NONE",
             "kill_until_utc": None,
             "kill_detail": "",

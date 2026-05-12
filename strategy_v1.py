@@ -273,3 +273,24 @@ def position_size(
     qty = risk_amount / price_distance
     # Округляем до 3 знаков - достаточно для BTCUSDT perpetual.
     return round(qty, 3)
+
+
+# --- Заглушки для совместимости с бэктестером ---
+
+STRATEGY_NAME = "strategy_v1"
+SUPPORTED_TIMEFRAMES = ("15m",)
+
+
+def on_bar(ctx):
+    """Заглушка: strategy_v1 не реализует интерфейс бэктестера v2."""
+    return None
+
+
+def on_fill(ctx, fill):
+    """Заглушка: strategy_v1 не реализует интерфейс бэктестера v2."""
+    pass
+
+
+def set_params(**kwargs):
+    """Заглушка: strategy_v1 не поддерживает динамическую настройку параметров."""
+    pass

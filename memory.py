@@ -406,7 +406,7 @@ def get_equity_curve(days: int) -> list[dict[str, Any]]:
                 """
                 SELECT id, ts, equity, hwm, drawdown
                 FROM equity_curve
-                WHERE ts >= datetime('now', ?)
+                WHERE datetime(ts) >= datetime('now', ?)
                 ORDER BY id ASC
                 """,
                 (f"-{int(days)} days",),
@@ -457,7 +457,7 @@ def get_trades_since(days: int) -> list[dict[str, Any]]:
                 SELECT id, ts, symbol, side, entry, exit, qty, pnl, ema, rsi,
                        atr, ai_reason, outcome, closed_ts
                 FROM trades
-                WHERE ts >= datetime('now', ?)
+                WHERE datetime(ts) >= datetime('now', ?)
                 ORDER BY id ASC
                 """,
                 (f"-{int(days)} days",),
@@ -477,7 +477,7 @@ def get_week_pnl() -> float:
                 SELECT COALESCE(SUM(pnl), 0.0) AS v
                 FROM trades
                 WHERE closed_ts IS NOT NULL
-                  AND closed_ts >= datetime('now', '-7 days')
+                  AND datetime(closed_ts) >= datetime('now', '-7 days')
                 """
             ).fetchone()
             return float(row["v"] if row else 0.0)
