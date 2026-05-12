@@ -33,7 +33,7 @@
 ssh root@<ваш-IP>
 
 # 2. Запустить установщик одной командой.
-curl -fsSL https://raw.githubusercontent.com/Khy18/Khy18/feat/zenith-control-ultimate/deploy/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Khyy18/Khy18/feat/zenith-control-ultimate/deploy/install.sh | sudo bash
 
 # 3. Заполнить .env реальными ключами.
 sudo -u zenith cp /opt/zenith/.env.example /opt/zenith/.env
@@ -130,7 +130,7 @@ sudo install -d -o zenith -g zenith /opt/zenith/data
 
 # 4. Код (ветка feat/zenith-control-ultimate - актуальная).
 sudo -u zenith git clone --branch feat/zenith-control-ultimate \
-    https://github.com/Khy18/Khy18.git /opt/zenith
+    https://github.com/Khyy18/Khy18.git /opt/zenith
 
 # 5. venv и зависимости.
 sudo -u zenith python3 -m venv /opt/zenith/.venv
@@ -153,7 +153,7 @@ sudo systemctl enable --now zenith.service
 
 ```bash
 # 1. Клонируем и заполняем .env.
-git clone --branch feat/zenith-control-ultimate https://github.com/Khy18/Khy18.git
+git clone --branch feat/zenith-control-ultimate https://github.com/Khyy18/Khy18.git
 cd Khy18
 cp .env.example .env
 nano .env

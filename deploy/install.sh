@@ -93,7 +93,7 @@ id -u zenith >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/
 # Клонируем под root (у zenith нет прав писать в /opt/), потом отдаём
 # владельцем zenith. Это стандартный паттерн для system-user'а без
 # write-доступа к родительскому каталогу.
-REPO_URL="${REPO_URL:-https://github.com/Khy18/Khy18.git}"
+REPO_URL="${REPO_URL:-https://github.com/Khyy18/Khy18.git}"
 BRANCH="${BRANCH:-feat/zenith-control-ultimate}"
 if [[ ! -d /opt/zenith/.git ]]; then
     # Если /opt/zenith есть, но это не git-репо (недозавершённый прошлый
