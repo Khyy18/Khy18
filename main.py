@@ -93,6 +93,24 @@ def _iso_week_start(dt: datetime) -> datetime:
     return monday
 
 
+def _format_duration(start_iso: Optional[str], end: datetime) -> str:
+    """Вернуть длительность 'Xч Yм' или 'Xд Yч' между start_iso и end.
+    Используется в push-уведомлениях о закрытии позиций. На невалидный ISO
+    возвращает '-' и не падает."""
+    start = _from_iso(start_iso)
+    if start is None:
+        return "-"
+    secs = int((end - start).total_seconds())
+    if secs < 60:
+        return f"{secs}с"
+    hours, rem = divmod(secs, 3600)
+    minutes, _ = divmod(rem, 60)
+    if hours >= 24:
+        days, hours = divmod(hours, 24)
+        return f"{days}д {hours}ч"
+    return f"{hours}ч {minutes}м"
+
+
 # --- Роллинг суточных / недельных якорей ----------------------------------
 
 def _roll_daily_weekly_anchors(state: dict[str, Any], now: datetime) -> None:
@@ -607,6 +625,31 @@ async def _check_closed_exchange_position(
         f"[LOOP] {symbol}: позиция закрыта снаружи pnl={pnl:.4f} outcome={outcome} "
         f"daily={g['daily_pnl']:.4f} weekly={g['weekly_pnl']:.4f}"
     )
+
+    # Push-уведомление о закрытии. Используем данные trade ДО того как
+    # обнулим sym_state["open_trade"].
+    try:
+        entry = float(trade.get("entry_price") or 0.0)
+        qty = float(trade.get("qty") or 0.0)
+        side = str(trade.get("side") or "")
+        side_label = "LONG" if side == "Buy" else "SHORT"
+        pnl_pct = ((pnl / (entry * qty)) * 100) if entry > 0 and qty > 0 else 0.0
+        outcome_emoji = "✅" if outcome == "WIN" else "❌"
+        duration = _format_duration(trade.get("entry_ts_iso"), _utc_now())
+        notify_text = (
+            f"{outcome_emoji} <b>Закрыта {symbol} {side_label}</b>\n"
+            f"Вход: {entry:.4f} → Выход: {exit_price:.4f}\n"
+            f"PnL: {pnl:+.4f} USDT ({pnl_pct:+.2f}%)\n"
+            f"Исход: {outcome}\n"
+            f"Длительность: {duration}\n"
+            f"Суточный PnL: {g['daily_pnl']:+.4f} USDT"
+        )
+        await telegram_bot.send_message(
+            session, notify_text, reply_markup=telegram_bot.set_keyboard()
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка push-уведомления о закрытии: {exc}")
+
     sym_state["open_trade"] = None
 
 
@@ -790,6 +833,37 @@ async def _process_symbol(
         f"[LOOP] {symbol}: открыта {side} qty={qty} entry={entry_price} "
         f"stop={order['hard_stop']}"
     )
+
+    # Push-уведомление в Telegram об открытии позиции.
+    # Ошибку отправки логгируем, но цикл не валим - Telegram может быть
+    # временно недоступен, торговля важнее уведомлений.
+    try:
+        hard_stop = float(order["hard_stop"])
+        side_label = "LONG" if side == "Buy" else "SHORT"
+        side_emoji = "🟢" if side == "Buy" else "🔴"
+        notional = entry_price * qty
+        stop_pct = (
+            ((entry_price - hard_stop) / entry_price) * 100
+            if side == "Buy" and entry_price > 0
+            else ((hard_stop - entry_price) / entry_price) * 100
+            if entry_price > 0
+            else 0.0
+        )
+        reason = str((order.get("meta") or {}).get("reason") or "")
+        notify_text = (
+            f"{side_emoji} <b>Открыта {side_label} {symbol}</b>\n"
+            f"Вход: {entry_price:.4f}\n"
+            f"Размер: {qty} (~${notional:.2f})\n"
+            f"Стоп: {hard_stop:.4f} (−{stop_pct:.2f}%)\n"
+            f"Риск на сделку: {config.RISK_PER_TRADE * 100:.2f}%"
+        )
+        if reason:
+            notify_text += f"\nПричина: {reason}"
+        await telegram_bot.send_message(
+            session, notify_text, reply_markup=telegram_bot.set_keyboard()
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка push-уведомления об открытии: {exc}")
 
 
 # --- Главный цикл ---------------------------------------------------------
