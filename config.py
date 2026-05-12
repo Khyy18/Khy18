@@ -82,7 +82,7 @@ GLOBAL_RISK_CAP = 0.03              # суммарный открытый рис
 POST_ONLY_TIMEOUT_SEC = 30
 
 # --- Биржа (переключается через переменную окружения) ---
-EXCHANGE = os.getenv("EXCHANGE", "bybit")
+EXCHANGE = os.getenv("EXCHANGE", "okx")
 
 # --- Bybit V5 ---
 BYBIT_BASE_URL_TESTNET = "https://api-testnet.bybit.com"
@@ -91,9 +91,10 @@ BYBIT_BASE_URL = BYBIT_BASE_URL_TESTNET if IS_TESTNET else BYBIT_BASE_URL_MAINNE
 BYBIT_RECV_WINDOW = "5000"
 
 # --- Gemini ---
-# Примечание: публично доступной модели "Gemini 3 Flash" не существует,
-# поэтому используем актуальную быструю модель gemini-2.0-flash.
-GEMINI_MODEL = "gemini-2.0-flash"
+# Используем gemini-2.5-flash-lite: non-preview (GA), отдельная free-квота
+# от 2.0-flash, подходит для частых вызовов ai_macro_sentinel / ai_regime.
+# При 429 на бесплатном тарифе - включить billing в Google Cloud Console.
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent"
@@ -107,14 +108,21 @@ TELEGRAM_API_URL = "https://api.telegram.org"
 
 
 # Список обязательных переменных окружения для проверки на старте.
-REQUIRED_ENV_VARS = (
-    "BYBIT_API_KEY",
-    "BYBIT_API_SECRET",
+# Набор ключей биржи зависит от выбранного EXCHANGE: okx требует тройку
+# OKX_API_KEY/SECRET/PASSPHRASE, bybit - пару BYBIT_API_KEY/SECRET.
+_EXCHANGE_REQUIRED = {
+    "okx": ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE"),
+    "bybit": ("BYBIT_API_KEY", "BYBIT_API_SECRET"),
+}
+_COMMON_REQUIRED = (
     "TELEGRAM_TOKEN",
     "TELEGRAM_CHAT_ID",
     "GEMINI_API_KEY",
     "NEWS_API_KEY",
 )
+REQUIRED_ENV_VARS = _EXCHANGE_REQUIRED.get(
+    EXCHANGE.lower(), _EXCHANGE_REQUIRED["bybit"]
+) + _COMMON_REQUIRED
 
 
 def validate_config() -> list[str]:

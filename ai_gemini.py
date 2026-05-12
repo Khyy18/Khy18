@@ -21,6 +21,7 @@ post-mortem, объяснение отклонений) ходят в Gemini ч�
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, Optional
@@ -28,6 +29,14 @@ from typing import Any, Optional
 import aiohttp
 
 import config
+
+
+# Экспоненциальный backoff для Gemini HTTP 429 (quota exceeded).
+# Google возвращает 429 при исчерпании free-tier RPM/RPD. Повторяем до 3 раз
+# с задержками 10, 20, 40 секунд - после чего возвращаем None и даём
+# верхнему слою применить свою fail-open/fail-closed политику.
+_GEMINI_429_RETRIES = 3
+_GEMINI_429_BASE_SLEEP = 10
 
 
 # Регулярки для устойчивого извлечения JSON из ответа модели.
@@ -129,31 +138,49 @@ async def _post(
             temperature=temperature,
         ),
     }
-    try:
-        async with session.post(
-            config.GEMINI_URL,
-            data=json.dumps(body, ensure_ascii=False),
-            headers=_headers(),
-            timeout=timeout,
-        ) as resp:
-            if resp.status != 200:
-                body_text = await resp.text()
-                print(
-                    "[GEMINI] HTTP "
-                    f"{resp.status}: {body_text[:200]}"
-                )
-                return None
-            try:
-                return await resp.json()
-            except (aiohttp.ContentTypeError, json.JSONDecodeError) as exc:
-                print(f"[GEMINI] Не удалось распарсить JSON ответа: {exc}")
-                return None
-    except aiohttp.ClientError as exc:
-        print(f"[GEMINI] Сетевая ошибка: {exc}")
-        return None
-    except Exception as exc:  # noqa: BLE001
-        print(f"[GEMINI] Неожиданная ошибка вызова: {exc}")
-        return None
+    body_bytes = json.dumps(body, ensure_ascii=False)
+
+    for attempt in range(_GEMINI_429_RETRIES):
+        try:
+            async with session.post(
+                config.GEMINI_URL,
+                data=body_bytes,
+                headers=_headers(),
+                timeout=timeout,
+            ) as resp:
+                if resp.status == 429:
+                    # Quota exceeded. Экспоненциальный backoff: 10 -> 20 -> 40.
+                    body_text = await resp.text()
+                    is_last = attempt == _GEMINI_429_RETRIES - 1
+                    print(
+                        f"[GEMINI] HTTP 429 (попытка {attempt + 1}/"
+                        f"{_GEMINI_429_RETRIES}): {body_text[:160]}"
+                    )
+                    if is_last:
+                        return None
+                    delay = _GEMINI_429_BASE_SLEEP * (2 ** attempt)
+                    print(f"[GEMINI] backoff {delay}с перед повтором")
+                    await asyncio.sleep(delay)
+                    continue
+                if resp.status != 200:
+                    body_text = await resp.text()
+                    print(
+                        "[GEMINI] HTTP "
+                        f"{resp.status}: {body_text[:200]}"
+                    )
+                    return None
+                try:
+                    return await resp.json()
+                except (aiohttp.ContentTypeError, json.JSONDecodeError) as exc:
+                    print(f"[GEMINI] Не удалось распарсить JSON ответа: {exc}")
+                    return None
+        except aiohttp.ClientError as exc:
+            print(f"[GEMINI] Сетевая ошибка: {exc}")
+            return None
+        except Exception as exc:  # noqa: BLE001
+            print(f"[GEMINI] Неожиданная ошибка вызова: {exc}")
+            return None
+    return None
 
 
 async def call_gemini_json(
