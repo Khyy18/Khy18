@@ -39,6 +39,7 @@ _FILTER_TAGS = (
     "trend_4h",
     "breakout",
     "vol_low",
+    "vol_confirm_weak",
     "blackout",
     "regime_crisis",
     "adx_weak",
@@ -207,6 +208,63 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def _check_volume_confirmation(
+    c1h: list[dict[str, Any]],
+    indicators: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Volume-confirmation фильтр Donchian-пробоев.
+
+    Идея: пробой на аномально низком объёме - кандидат на fakeout. Считаем
+    SMA(20) по объёмам ПРЕДЫДУЩИХ 20 свечей (текущая не входит в среднее,
+    иначе её же объём влияет на порог) и сравниваем с объёмом пробойной
+    свечи.
+
+    Возвращает dict вето, если подтверждения нет. Возвращает None, если
+    фильтр пройден ИЛИ данных для проверки недостаточно (graceful fallback:
+    отсутствие объёмов не должно блокировать торговлю).
+
+    Обогащает indicators ключами volume_current / volume_sma20 / volume_ratio
+    для последующего логирования.
+    """
+    # Требуется минимум 21 свеча: 20 в SMA + текущая.
+    if not c1h or len(c1h) < 21:
+        return None
+
+    # Извлекаем объёмы; колонка может отсутствовать на некоторых источниках -
+    # тогда skip, а не veto.
+    try:
+        volumes = [float(c["volume"]) for c in c1h[-21:]]
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    volume_current = volumes[-1]
+    prev20 = volumes[:-1]
+    volume_sma20 = sum(prev20) / len(prev20) if prev20 else 0.0
+
+    # Guard против деления на ноль и NaN (NaN != NaN).
+    if (
+        volume_sma20 is None
+        or volume_sma20 != volume_sma20
+        or volume_sma20 <= 0
+    ):
+        return None
+
+    volume_ratio = volume_current / volume_sma20
+    indicators["volume_current"] = volume_current
+    indicators["volume_sma20"] = volume_sma20
+    indicators["volume_ratio"] = volume_ratio
+
+    mult = float(getattr(config, "VOLUME_CONFIRMATION_MULT", 1.0) or 1.0)
+    threshold = volume_sma20 * mult
+    if volume_current < threshold:
+        return _veto(
+            "vol_confirm_weak",
+            f"vol={volume_current:.0f} < sma20*{mult:.2f}={threshold:.0f}",
+            indicators,
+        )
+    return None
+
+
 # --- Публичная логика сигнала ---
 
 def evaluate_signal(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -302,6 +360,9 @@ def evaluate_signal(ctx: dict[str, Any]) -> dict[str, Any]:
                 "Нет пробоя 20-часового хая",
                 indicators,
             )
+        veto = _check_volume_confirmation(c1h, indicators)
+        if veto is not None:
+            return veto
         # Per-symbol минимум ATR: SOL/ETH/BTC имеют разную базовую
         # волатильность, единый порог 0.3% отсекает либо мало, либо
         # много. Берём из config.MIN_ATR_PCT[symbol], fallback на
@@ -345,6 +406,9 @@ def evaluate_signal(ctx: dict[str, Any]) -> dict[str, Any]:
                 "Нет пробоя 10-часового лоя",
                 indicators,
             )
+        veto = _check_volume_confirmation(c1h, indicators)
+        if veto is not None:
+            return veto
         if adx_1h <= 25:
             return _veto("adx_weak", "ADX(14) ниже 25", indicators)
         entry = close_1h
