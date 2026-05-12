@@ -1,6 +1,9 @@
 # Секреты и локальные артефакты
 .env
 trades.db
+bot.log
+bot_dry.log
+*.log
 
 # Python
 __pycache__/
