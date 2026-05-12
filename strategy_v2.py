@@ -302,8 +302,23 @@ def evaluate_signal(ctx: dict[str, Any]) -> dict[str, Any]:
                 "Нет пробоя 20-часового хая",
                 indicators,
             )
-        if atr_pct < 0.003:
-            return _veto("vol_low", "ATR ниже 0.3%", indicators)
+        # Per-symbol минимум ATR: SOL/ETH/BTC имеют разную базовую
+        # волатильность, единый порог 0.3% отсекает либо мало, либо
+        # много. Берём из config.MIN_ATR_PCT[symbol], fallback на
+        # MIN_ATR_PCT_DEFAULT. Символ читаем из ctx (не обязательно
+        # присутствует - устойчиво к отсутствию).
+        symbol = str(ctx.get("symbol") or "").upper()
+        min_atr_map = getattr(config, "MIN_ATR_PCT", {}) or {}
+        min_atr_default = float(
+            getattr(config, "MIN_ATR_PCT_DEFAULT", 0.003) or 0.003
+        )
+        min_atr = float(min_atr_map.get(symbol, min_atr_default))
+        if atr_pct < min_atr:
+            return _veto(
+                "vol_low",
+                f"ATR {atr_pct * 100:.3f}% ниже порога {min_atr * 100:.3f}% для {symbol or 'symbol'}",
+                indicators,
+            )
         entry = close_1h
         sl = compute_hard_stop(entry, atr_1h, "LONG")
         return {
