@@ -1,68 +1,74 @@
-# Next session: переход на Multi-Strategy Ensemble + Meta-Learning
+# Next session: Multi-Strategy Ensemble + Meta-Learning
 
-## Контекст для нового сессионного агента
+> **Версия 2** (синхронизирована со steering, обновлены LLM-маршрутизация и fail-safes).
+> Прочти этот файл и `Khy18/.kiro/steering/zenith-control-v3.md` ПЕРЕД любыми действиями.
+> **Игнорируй** `NEXT_SESSION_PROMPT_DL.md` — устаревшая итерация.
 
-Это handoff из сессии 2026-05-13. Прочти его и steering-файл `Khy18/.kiro/steering/zenith-control-v3.md` ПЕРЕД любыми действиями.
+## Финальный выбор архитектуры
 
-## ВАЖНО: Финальный выбор архитектуры
-
-После 8 итераций обсуждения с пользователем выбран **Multi-Strategy Ensemble с мета-обучаемым ИИ-фильтром**. Это **финальное решение**, не предлагать альтернативы.
-
-Раньше планировался DL ensemble (LSTM + LightGBM + PPO) — его handoff в файле `NEXT_SESSION_PROMPT_DL.md` устарел и должен **игнорироваться**. Использовать ТОЛЬКО этот файл (`NEXT_SESSION_PROMPT_MULTI_STRATEGY.md`).
-
-## Ключевая фраза пользователя (verbatim)
-
-> "В общем, напиши промт для перехода на новую сессию, где ты создашь и подготовишь все для этой стратегии, адапнируешь все под телеграмм бота управления торговлей в таком же духе, но для этой стратегии, дашь список что нужно добавить для работы этой стратегии, имею в виду API и все такое, все что тебе нужно я предоставлю не ограничивай себя и свои возможности, не ориентируйся на то что у меня есть, если будет нужно что я добавлю ты только скажи что"
-
-**Ключевая директива:** пользователь готов предоставить любые API, дополнительные сервисы, ресурсы. Не ограничиваться текущим окружением. Если нужен платный сервис ради качества — сказать пользователю что нужно подключить.
+**Multi-Strategy Ensemble + Meta-Learning** (5 sub-стратегий + LightGBM + Anomaly Detector + LLM-слой). Решение зафиксировано после 8 итераций обсуждения, **альтернативы не предлагать**.
 
 ## Параметры запуска
 
-- **Биржа:** OKX (тот же API).
-- **Счёт:** ДЕМО (`IS_TESTNET=true` в `.env`). Реальные деньги не задействованы.
-- **Стартовый капитал:** $5,000 виртуальных USDT на демо.
-- **Универсум:** 7 пар из `config.SYMBOLS` (BTC/ETH/SOL/BNB/XRP/DOGE/AVAX-USDT-SWAP).
-- **Goal:** не скальпинг, hold time 30 минут - 4 часа, 5-15 сделок в день, ансамбль из 5 стратегий с meta-learning координатором, expected ~22% годовых при MaxDD ~15%.
+- Биржа: **OKX** (один API).
+- Счёт: **демо** (`IS_TESTNET=true`), $5 000 виртуальных USDT.
+- Универсум: 7 пар из `config.SYMBOLS` (BTC/ETH/SOL/BNB/XRP/DOGE/AVAX-USDT-SWAP). Только для **Cross-asset Momentum** расширить до 15–20 пар на этапе ranking.
+- Hold time: 30 мин — 4 ч. Сделок/день: 5–15.
+- Цель: **realistic 12–18% годовых при MaxDD 12–18%** (P50). Апсайд 22%+ при MaxDD ~15% (P75). 22% — не median, а P75. Не обещать пользователю «гарантированно 22%».
 
-## Архитектура Multi-Strategy Ensemble
+## Канонические термины
 
-### High-level схема
+Использовать **только эти** в коде, логах, UI и документации:
+
+| Термин | Что это |
+|---|---|
+| **Meta-Learner** | LightGBM-модель, выдающая веса 5 sub-стратегий |
+| **Ensemble Coordinator** | Слой `ensemble/coordinator.py` — правила + Meta-Learner вместе |
+| **sub-стратегия** | Одна из 5 детерминированных (Trend / MR / VB / XAM / FA) |
+| **LLMRouter** | Маршрутизатор LLM-вызовов между провайдерами |
+
+Канонические теги логов: `[META]`, `[ENSEMBLE]`, `[STRAT_TF/MR/VB/XAM/FA]`, `[GATE]`, `[ANOMALY]`, `[REGIME]`, `[MACRO]`, `[CRITIC]`, `[ROUTER]`.
+
+## High-level схема
 
 ```
-[OKX Market Data] (websocket + REST, 7 пар)
+[OKX websocket+REST · 7 пар]
         ↓
-[Feature pipeline] (классическая система — 50+ features)
+[News engine: NewsAPI + CryptoPanic]
         ↓
-   ┌────┬─────────┬─────────┬───────────┬──────────┐
-   ▼    ▼         ▼         ▼           ▼          ▼
-[Trend][Mean    [Vol      [Cross-asset][Funding   ← 5 sub-стратегий
- Follow Revert] Breakout]  Momentum]   Arbitrage]    (детерминированные правила)
-   │    │         │         │           │
-   └────┴────┬────┴─────────┴───────────┘
+[News dedup (MinHash, локально)]
+        ↓
+[Keyword pre-filter (red-flag слова)]   ← AI-Gate вызывается только при срабатывании
+        ↓
+[Feature pipeline · 50+ features]
+        ↓
+   ┌────┬─────────┬──────────┬────────────┬──────────┐
+   ▼    ▼         ▼          ▼            ▼          ▼
+[Trend][Mean    [Vol       [Cross-asset][Funding   ← 5 sub-стратегий (правила)
+ Follow Revert] Breakout]   Momentum]    Arbitrage]
+   │    │         │          │            │
+   └────┴────┬────┴──────────┴────────────┘
              ▼
    ┌──────────────────────────┐
-   │  Meta-Learner (LightGBM) │   ← главный ИИ
-   │  Решает веса 5 стратегий │      на основе текущего регима
+   │  Meta-Learner (LightGBM) │  → веса 5 стратегий, conf
    └──────────────────────────┘
              ↓
    ┌──────────────────────────┐
-   │  Anomaly Detector        │   ← вспомогательный ИИ
-   │  (IsolationForest)       │      ловит аномалии рынка
+   │  Anomaly Detector (IF)   │  → множитель размера 0.3–1.0
    └──────────────────────────┘
              ↓
    ┌──────────────────────────┐
-   │  Decision Aggregator     │   ← классическая система
-   │  (взвешивает сигналы)    │
+   │  Ensemble Coordinator    │  → агрегация сигналов
+   │  hard caps: MR≤25%, *≤50%│
    └──────────────────────────┘
              ↓
    ┌──────────────────────────┐
-   │  AI-Gate (Groq LLM)      │   ← существующий слой, оставляем
-   │  veto на red-flag news   │
+   │  AI-Gate (LLM, кэш 15м)  │  → veto на red-flag в новостях
+   │  через LLMRouter         │
    └──────────────────────────┘
              ↓
    ┌──────────────────────────┐
-   │  Risk Manager (система)  │   ← существующий слой, оставляем
-   │  GLOBAL_RISK_CAP, kill   │
+   │  Risk Manager            │  → GLOBAL_RISK_CAP, kill, auto-block
    └──────────────────────────┘
              ↓ APPROVED
    ┌──────────────────────────┐
@@ -70,339 +76,421 @@
    └──────────────────────────┘
              ↓
    ┌──────────────────────────┐
-   │  Telegram Bot (UI 80%)   │
+   │  Telegram Bot (UI)       │
    └──────────────────────────┘
+
+Offline (раз в день/неделю):
+   [Daily Critic] → daily_critique.db
+   [Weekly Stats Report] → push в Telegram
+   [Cross-strategy correlation] → раз в час, авто-даунвейт
 ```
 
-### 5 sub-стратегий (детерминированные, без ML)
+## 5 sub-стратегий
 
-| # | Стратегия | Файл | Откуда брать | Сложность |
-|---|-----------|------|--------------|-----------|
-| 1 | **Trend Following** (Donchian + EMA + ATR) | `Khy18/strategy_v2.py` (существующий) | **Уже есть**, нужно только зафиксить look-ahead bias | 1/5 |
-| 2 | **Mean Reversion** (Bollinger + RSI + Z-score) | `Khy18/strategy_v2_meanrevert.py` (скелет 391 строк) | **Уже есть скелет**, доделать и валидировать | 2/5 |
-| 3 | **Volatility Breakout** (Keltner Channels + ATR expansion) | `Khy18/strategies/vol_breakout.py` (новый) | Писать с нуля, ~250 строк | 2/5 |
-| 4 | **Cross-asset Momentum** (ranking 7 пар по 7d return) | `Khy18/strategies/xasset_momentum.py` (новый) | Писать с нуля, ~200 строк | 2/5 |
-| 5 | **Funding Arbitrage** (delta-neutral на positive funding) | `Khy18/strategies/funding_arb.py` (новый) | Писать с нуля + downloader funding history, ~500 строк | 3/5 |
+| # | Стратегия | Файл | Состояние | Сложность |
+|---|---|---|---|---|
+| 1 | Trend Following (Donchian + EMA + ATR) | `Khy18/strategy_v2.py` | есть, фикс look-ahead | 1/5 |
+| 2 | Mean Reversion (Bollinger + RSI + Z-score) | `Khy18/strategy_v2_meanrevert.py` | скелет 391 стр | 2/5 |
+| 3 | Volatility Breakout (Keltner + ATR expansion) | `Khy18/strategies/vol_breakout.py` | новый, ~250 стр | 2/5 |
+| 4 | Cross-asset Momentum (ranking 15–20 пар по 7d return) | `Khy18/strategies/xasset_momentum.py` | новый, ~200 стр | 2/5 |
+| 5 | Funding Arbitrage (delta-neutral perpetual+spot) | `Khy18/strategies/funding_arb.py` | новый + downloader, ~500 стр | 3/5 |
 
-**Все 5 sub-стратегий — это правила**, не ML. Они детерминированные, прозрачные, легко тестируются юнит-тестами.
+**Все 5 — детерминированные правила, не ML.** Прозрачные, тестируемые юнит-тестами.
 
-### ИИ-компоненты (всего 8 ИИ)
+### Funding Arbitrage — конкретная механика
 
-#### Группа A: Локальные ML-модели (ядро ансамбля)
+Реализация **OKX-only delta-neutral** (без cross-exchange, чтобы не подключать вторую биржу):
+- short perpetual `*-USDT-SWAP` ↔ long spot `*-USDT` (OKX spot).
+- Триггер входа: `funding_rate > 0.05%` за период (8h), скользящее окно из последних 3 funding events `> 0.03%`.
+- Выход: `funding_rate <= 0.01%` ИЛИ скользящий return позиции отрицателен 2 часа подряд.
+- Учёт издержек: spot taker fee + perpetual taker fee + slippage по orderbook L2 + ребалансировка spot-leg при отклонении дельты > 1%.
+- Ожидаемая доходность после costs: 3–7% годовых на капитал, выделенный под FA.
+- Размер leg'а: от 5% до 25% от total капитала, динамически по `funding_rate`.
 
-| ИИ | Роль | Источник | Стоимость |
-|----|------|----------|-----------|
-| **LightGBM Meta-Learner** | Главный ИИ. Решает веса 5 sub-стратегий на основе текущего регима | `pip install lightgbm` | $0 |
-| **IsolationForest Anomaly Detector** | Ловит аномальное поведение рынка (защита от чёрных лебедей) | `pip install scikit-learn` | $0 |
+## ИИ-компоненты (полный список)
 
-**Тренируются и работают на CPU.** Никакого GPU. Никаких API. Просто Python.
+### Группа A: локальные ML и численные слои (ядро)
 
-#### Группа B: Через Groq (один существующий ключ → 5+ моделей)
+| Слой | Технология | Когда работает | Что решает |
+|---|---|---|---|
+| **Meta-Learner** | LightGBM (CPU) | каждые 5 мин | веса 5 sub-стратегий + confidence |
+| **Anomaly Detector** | IsolationForest | каждые 5 мин | множитель размера 0.3–1.0 |
+| **News dedup** | MinHash или TF-IDF cosine | при каждом news poll | склейка дублей >0.85 similarity |
+| **Keyword pre-filter** | regex по словарю | при каждом news poll | вызывать ли AI-Gate |
+| **Cross-strategy correlation** | numpy | раз в час | автоснижение веса при corr > 0.7 |
+| **Weekly Stats Report** | numpy + sqlite | воскресенье | push с отчётом по фактам |
 
-Через `GROQ_API_KEY` доступ к разным моделям. **Один ключ — много моделей.**
+**Все локальные слои работают на CPU, без сети, ~$0.**
 
-| Slot | Модель Groq | Задача | Текущий код |
-|------|-------------|--------|-------------|
-| AI-Gate | `llama-3.1-8b-instant` | Veto перед сделкой по red-flag в новостях | `ai_trade_gate.py` (есть) |
-| Macro-sentinel | `llama-3.1-8b-instant` | FOMC/CPI blackout | `ai_macro_sentinel.py` (есть) |
-| Regime classifier | `llama-3.1-8b-instant` | TRENDING/RANGING/CRISIS → подаёт фичи в Meta-Learner | `ai_regime.py` (есть, расширить) |
-| AI-Analyst | `llama-3.3-70b-versatile` | Telegram-чат с пояснениями | `ai_analyst.py` (есть) |
-| Postmortem | `llama-3.3-70b-versatile` | Еженедельный отчёт | `ai_postmortem.py` (есть) |
-| **ML Explainer** (новый) | `qwen-2.5-72b-instruct` | Объясняет в Telegram, почему Meta-Learner выбрал эту стратегию | новый код в `ai_analyst.py` |
+### Группа B: LLM-слои через `LLMRouter`
 
-#### Группа C: Опциональные внешние ИИ (если пользователь готов добавить)
+Каждый слот имеет primary + fallback. Подробнее — в разделе «LLM Budget & Multi-Provider Routing».
 
-Эти **не нужны** для базовой версии. Но могут улучшить систему:
+| Слот | Primary | Fallback | Частота | Задача |
+|---|---|---|---|---|
+| `ai_gate` | Groq Llama-8B | Cerebras Llama-8B | при keyword hit | veto на red-flag |
+| `regime` | Cerebras Llama-8B | Groq Llama-8B | каждый час | TRENDING/RANGING/CRISIS |
+| `macro` | Google Gemini-2.0-Flash | Groq Llama-8B | каждый час | FOMC/CPI blackout |
+| `critic` | OpenRouter DeepSeek-V3 | Groq Llama-70B | раз в сутки (offline) | разбор сделок дня |
+| `analyst` | Groq Llama-3.3-70B | Together Llama-70B | по тапу в Telegram | разговор |
+| `postmortem` | OpenRouter DeepSeek-R1 | Groq Llama-70B | раз в неделю | weekly report |
+| `explainer` | Groq Qwen-72B | HF Qwen-72B | по тапу | пояснение решений |
+| `embeddings` | HF bge-small | локально MiniLM (если успеем) | по необходимости | для dedup и similarity |
 
-| ИИ | Сервис | Free tier | Регистрация | Зачем нужен |
-|----|--------|-----------|-------------|-------------|
-| **Backup classifier** | Hugging Face Inference API | 1000 req/день | https://huggingface.co/join (2 мин) | Backup если Groq упал — fallback на HF |
-| **Reasoning model** | DeepSeek-R1 через Groq (есть в free tier) | См. Groq лимиты | Уже есть ключ | Глубокий разбор проигрышных сделок |
-| **Sentiment analysis** | Cloudflare Workers AI | 10k req/день | https://dash.cloudflare.com (2 мин) | Дополнительный sentiment-слой |
-| **Локальная reasoning model** | Ollama (Llama 3 / Qwen 2.5) | $0, работает на сервере | https://ollama.com (5 мин установка) | Полная независимость от облачных API |
+### Группа C: что НЕ добавлять (даже бесплатно)
 
-**Решение по этим — по запросу пользователя.** Если спросит "хочу больше ИИ для отказоустойчивости" — подключаем по очереди.
+- **OpenAI / Anthropic API** — overkill для structured-задач.
+- **Локальная Ollama** на сервере 147.45.76.76 — мало RAM, тормозит торговый цикл.
+- **Multi-agent оркестрация** (CrewAI/AutoGen/LangGraph) — 200–500 ms latency, бессмысленно для realtime.
+- **Realtime Adversarial Critic перед каждой сделкой** — заменён на Daily Offline Critic. Снимает 70B-нагрузку с hot-path.
+- **LLM-based self-reflection раз в неделю** — заменён на Weekly Stats Report (чистый Python). Сухая статистика лучше для саморефлексии.
 
-### Что делает Meta-Learner конкретно
+## LLM Budget & Multi-Provider Routing
 
-LightGBM модель решает **один вопрос каждые 5-15 минут**:
+### Узкое место — TPM на 70B, не RPD
 
-> «На основе текущего состояния рынка — какая sub-стратегия (или их комбинация) даст наибольший risk-adjusted return в следующие 1-3 часа?»
+Расчёт нагрузки **до оптимизаций** показал ~2 016 запросов/день к AI-Gate (на каждый сигнал × 7 пар × каждые 5 мин). При средней длине промпта 1500 токенов это ~50 000 TPM пиково — выше лимита.
 
-**Output:** веса 5 sub-стратегий, сумма = 1.
+### 6 техник оптимизации (все обязательны)
 
-Пример:
+1. **Кэш AI-Gate с TTL=15 мин**, ключ = `hash(latest_news_timestamps + macro_state)`. Экономия 75–85%.
+2. **Batching**: один промпт на все 7 пар с JSON-выходом. Экономия 7×.
+3. **Keyword pre-filter** перед LLM: словарь red-flag слов (`hack, exploit, SEC, lawsuit, halt, depeg, bankrupt, drain, freeze, rugpull`). Если нет совпадений — verdict=approve без вызова LLM. Экономия 60–80%.
+4. **News dedup** через MinHash перед AI-Gate. Экономия 60–70% входных токенов.
+5. **Cascade 8B → 70B**: дешёвая 8B на pre-check, эскалация на 70B только в зоне неопределённости conf 0.3–0.7. Экономия 60–70% вызовов 70B.
+6. **Reduce frequency Regime** до 1 ч (вместо 5–15 мин из v1). Экономия 4×.
+
+### Реальная нагрузка после оптимизаций
+
+| Слой | req/день | tier | Запас |
+|---|---|---|---|
+| AI-Gate (cache+batch+keyword) | ~30 | 8B | 480× |
+| Regime (1ч) | 24 | 8B | 600× |
+| Macro (1ч) | 24 | Gemini | 60× |
+| Daily Critic (1 batch/день) | 1 | DeepSeek | comfortable |
+| Analyst | ~30 | 70B | 30× |
+| Explainer | ~20 | Qwen | 50× |
+| Postmortem | ~1 | DeepSeek-R1 | comfortable |
+
+Запас огромный. Можно увеличить универсум до 20+ пар без переплат.
+
+### LLMRouter — контракт класса
+
 ```python
-{
-    "trend_following": 0.45,    # сильный тренд → большой вес
-    "mean_reversion": 0.10,
-    "vol_breakout": 0.05,
-    "xasset_momentum": 0.20,
-    "funding_arbitrage": 0.20,  # пассивный слой всегда
-}
+class LLMRouter:
+    """Маршрутизация LLM-вызовов с failover и quota tracking."""
+
+    SLOT_ROUTING = {
+        "ai_gate":    [("groq", "llama-3.1-8b-instant"),
+                       ("cerebras", "llama-3.1-8b")],
+        "regime":     [("cerebras", "llama-3.1-8b"),
+                       ("groq", "llama-3.1-8b-instant")],
+        "macro":      [("google", "gemini-2.0-flash"),
+                       ("groq", "llama-3.1-8b-instant")],
+        "critic":     [("openrouter", "deepseek-v3"),
+                       ("groq", "llama-3.3-70b-versatile")],
+        "analyst":    [("groq", "llama-3.3-70b-versatile"),
+                       ("together", "llama-3.3-70b")],
+        "postmortem": [("openrouter", "deepseek-r1"),
+                       ("groq", "llama-3.3-70b-versatile")],
+        "explainer":  [("groq", "qwen-2.5-72b-instruct"),
+                       ("hf", "Qwen/Qwen2.5-72B-Instruct")],
+        "embeddings": [("hf", "BAAI/bge-small-en-v1.5")],
+    }
+
+    def call(self, slot: str, prompt: str, **kwargs) -> dict:
+        """
+        1. lookup providers for slot in priority order
+        2. for each: check quota_tracker и circuit_breaker
+        3. on success → log to llm_calls table, return
+        4. on 5xx/timeout/quota → mark provider degraded, try next
+        5. on all-failed → raise RouterAllFailed (caller handles fallback)
+        """
+        ...
 ```
 
-**Features (~25-30 штук) на вход Meta-Learner:**
+Таблица `llm_calls` (SQLite):
+```
+id | ts | slot | provider | model | tokens_in | tokens_out
+   | latency_ms | status | fallback_reason | cache_hit
+```
+
+### Failover policy в Telegram
+
+- На каждое переключение **не пушить**. Накапливать.
+- Раз в час: если за час было ≥3 fallback на одном слоте → один push с агрегатом.
+- Если все провайдеры упали 3+ раз подряд → системный push «🛑 LLM degraded» + AI-Gate в shadow на 1 час.
+
+## Что делает Meta-Learner конкретно
+
+LightGBM решает один вопрос каждые 5 минут:
+
+> «Какая комбинация sub-стратегий даст лучший risk-adjusted return в следующие 1–3 часа?»
+
+**Output:** веса 5 sub-стратегий (sum=1) + confidence.
+
+**Hard caps (не зависят от Meta-Learner):**
+- любая стратегия ≤ 50%;
+- Mean Reversion ≤ 25% (защита от bull-trend);
+- Vol Breakout ≤ 30%;
+- если после нормализации сумма ≠ 1 → перенормировать.
+
+### Features (~25–30) на вход Meta-Learner
+
 - Volatility regime: 5m/1h/4h ATR относительно 30-day median.
 - BTC dominance change за 24h.
 - Funding rate spreads между парами.
-- Rolling Sharpe каждой sub-стратегии за 7/14/30 дней (саморефлексия).
+- Rolling Sharpe каждой sub-стратегии за 7/14/30 дней.
 - Time-of-day, day-of-week.
-- News sentiment last hour (через Groq AI-Gate).
+- News sentiment last hour (через AI-Gate verdict).
 - Macro state (через Macro-sentinel).
 - Cross-asset correlations.
 - Volume / Open Interest ratios.
 
-**Тренировка:** на 18+ месяцев исторических данных + 3-6 месяцев warm-up paper trading.
+### Тренировка и валидация
 
-### Принципы разделения "ИИ vs система"
+**Data split (зафиксирован):**
+- **Train:** 2023-01-01 → 2024-06-30 (18 мес).
+- **Validation:** 2024-07-01 → 2024-12-31 (6 мес).
+- **Test (out-of-sample):** 2025-01-01 → 2025-04-30 (4 мес).
+- **Paper trading:** 2025-05-01 → ... (4–6 нед).
+- **Embargo:** 7 дней между train/val и val/test, чтобы не утекали overlapping bars.
+- **Walk-forward:** 12 окон по 1 мес test step через train 6 мес. Окно сдвигается каждый месяц.
+
+**Repro-seed:** `random_state=42` явно в LightGBM, IsolationForest, всех train_test_split.
+
+**Ретрейн в production:** **раз в месяц** (не раз в 2–3 как в первой версии). Crypto concept drift быстрее equity.
+
+## Принципы разделения «ИИ vs система»
 
 **ИИ решает (только это):**
 1. Meta-Learner — веса каждой sub-стратегии в текущий момент.
 2. Anomaly Detector — есть ли сейчас аномалия рынка (yes/no).
 3. AI-Gate — есть ли red-flag в новостях (approve/veto).
-4. Regime classifier — какой сейчас рыночный регим (3 класса).
+4. Regime classifier — какой рыночный регим (3 класса).
 
 **Система решает всё остальное:**
-- Все 5 sub-стратегий (детерминированные правила).
-- Stop-loss, take-profit (жёсткие лимиты).
-- Position sizing (формула с весом от Meta-Learner).
-- Глобальные риск-лимиты (GLOBAL_RISK_CAP).
+- 5 sub-стратегий (детерминированные правила).
+- Stop-loss, take-profit (жёсткие лимиты, физически на бирже).
+- Position sizing (формула с весом от Meta-Learner и множителем от Anomaly).
+- Глобальные риск-лимиты (`GLOBAL_RISK_CAP`).
 - API-исполнение, retry, обработка частичных fills.
 - Telegram UI, мониторинг, логирование.
 
-### Fail-safe механики (обязательны)
+## Fail-safe механики
 
-1. **Если Meta-Learner показывает confidence < 0.5** → fallback на equal weights (0.2 каждой стратегии).
-2. **Если Meta-Learner деградировал** (Sharpe < 0.3 на 30-day rolling) → отключить, остаются только sub-стратегии с равными весами.
-3. **Если Anomaly Detector сработал** → размер всех новых позиций × 0.3 (защита от чёрных лебедей).
-4. **Если AI-Gate ответил error 3+ раз подряд** → автоматический fallback в shadow mode на 1 час, новые сделки **разрешены без новостной проверки** (НЕ fail-closed как в текущей версии — здесь Meta-Learner главный).
-5. **Закрытия работают БЕЗ ИИ** — stop-loss, take-profit, time-stop срабатывают сами.
-6. **Auto-pause** при 3 LOSS подряд на паре (существующий механизм auto-block).
-
-## Что нужно от пользователя — список
-
-**Это критичный раздел.** Пользователь явно сказал «не ограничивай себя, что нужно — скажи».
-
-### Минимально (для базовой версии)
-
-| Что | Действие пользователя | Стоимость | Зачем |
-|-----|----------------------|-----------|-------|
-| ✅ OKX API ключи (demo + real) | **Уже есть** в `.env` | $0 | Доступ к OKX |
-| ✅ Telegram Bot Token | **Уже есть** в `.env` | $0 | UI |
-| ✅ Groq API Key | **Уже есть** в `.env` | $0 | LLM-слой |
-| ✅ NewsAPI ключ | **Уже есть** в `.env` (через `news_engine.py`) | $0 | Источник новостей для AI-Gate |
-| ✅ Сервер 147.45.76.76 | **Уже есть** | $0 | Деплой |
-
-**Минимально нового добавлять не нужно.** Хватит для запуска базовой версии Multi-Strategy.
-
-### Опционально (улучшит качество)
-
-Если пользователь готов подключить — попросить эти ключи. Каждый — бесплатный free tier:
-
-| # | Сервис | Что даст | Регистрация | Стоимость |
-|---|--------|----------|-------------|-----------|
-| 1 | **Hugging Face Inference API** | Backup LLM провайдер (если Groq упал) | https://huggingface.co/join | Free (1000 req/день) |
-| 2 | **Cloudflare Workers AI** | Дополнительный sentiment слой | https://dash.cloudflare.com | Free (10k req/день) |
-| 3 | **Together AI** | Альтернативный провайдер Llama/Qwen | https://api.together.xyz | Free $25 кредитов |
-| 4 | **CryptoPanic API** | Качественные crypto-новости + sentiment | https://cryptopanic.com/developers/api | Free (300 req/день) |
-| 5 | **Glassnode** (платный, рекомендуется) | On-chain метрики (BTC dominance, exchange flows) | https://glassnode.com | $30-100/мес — **ПОПРОСИТЬ ПОДКЛЮЧИТЬ** если хочется качества выше базы |
-| 6 | **CoinAPI / Tardis.dev** (платный, опционально) | Order book history для будущих расширений | $300-500/мес | НЕ обязательно для Multi-Strategy |
-| 7 | **OpenRouter** | Доступ к 200+ моделям через один API | https://openrouter.ai | Pay-per-use, есть бесплатные модели |
-| 8 | **Google Gemini API** | Сильная мультимодальная модель | https://aistudio.google.com | Free (15 req/мин) |
-
-**Что НЕ нужно подключать (даже если бесплатно):**
-- OpenAI / Anthropic — слишком дорого для high-frequency вызовов в боте.
-- AWS Bedrock — overkill для нашего масштаба.
-- Любые подписочные сервисы "AI trading signals" — это маркетинг, а не источники данных.
-
-### Если пользователь спросит "что бы ты добавила в первую очередь"
-
-**Топ-3 рекомендации в порядке полезности:**
-
-1. **CryptoPanic API** (free) — лучшие crypto-новости с sentiment-разметкой. Улучшит AI-Gate. Регистрация 2 минуты.
-2. **Hugging Face** (free) — backup для Groq. Если Groq упадёт на час — система продолжит работать.
-3. **Glassnode** ($30-100/мес) — единственный платный сервис, который реально нужен для quant-edge. On-chain данные (exchange flows, supply distribution) дают signal на 1-7 дней вперёд. Если бюджет позволяет — **подключать**.
-
-**Что делать новой сессии:** в первом сообщении спросить пользователя, готов ли он подключить любой из этих сервисов. **Не предполагать**, что готов или не готов. Спросить явно.
-
-## Что есть сейчас в репо (на момент handoff)
-
-### Репо
-
-- Default-ветка: `feat/zenith-control-ultimate`.
-- Активная рабочая ветка: `feat/v3-tg-dashboard` (HEAD `ac25176`).
-- Открыт PR #1 с UI-улучшениями (sparkline, прогресс-бары, EXPLAIN) + три handoff-коммита.
-- Есть исследовательская ветка `chore/express-backtest-1y` (локально) с downloader OHLCV из OKX и кэшем за 1 год — переиспользовать!
-
-### Известные факты
-
-**Express backtest текущей `strategy_v2` за 1Y:** Total return -11.62%, Sharpe -0.84, MaxDD -17%, PF 0.76. Edge не подтверждён.
-
-**Look-ahead bias в `strategy_v2`:** на 4H/1D в построении ctx. Документировано в `.agents/tasks/task-express-backtest-1y/2026-05-13-204230-review.md`. **Должно быть исправлено в Фазе 1.**
-
-### Что НЕЛЬЗЯ трогать
-
-- **Прод-сервер `147.45.76.76`** — пользователь деплоит сам.
-- **9-кнопочное главное меню** Telegram-бота — утверждённый layout.
-- **Существующие токены/ключи** в `.env` — все 8 ключей оставить.
-- **AI_TRADE_GATE_MODE=active** — оставить.
-
-### Что МОЖНО переиспользовать
-
-**80% Telegram UI** (`telegram_bot.py`):
-- `_card`, `_label`, `_fmt_num`, `_fmt_pct`, `_fmt_pnl`, `_progress_bar_10`, `_sparkline_8` — все хелперы.
-- 9-кнопочное меню — оставить как есть.
-- Все 11 карточек — переиспользовать с адаптацией наполнения.
-
-**Risk-management слой** в `main.py`:
-- `_sum_open_risk`, kill-switches, `GLOBAL_RISK_CAP`, `auto_block` — всё переиспользовать.
-
-**Биржевой слой** `exchanges/okx.py`:
-- `place_order_with_fallback`, `set_trading_stop`, `get_orderbook_top` — переиспользовать.
-
-**Memory** `memory.py`:
-- trades.db, `record_trade`, `get_per_symbol_stats`, `record_equity` — переиспользовать.
-- Добавить новые таблицы для Meta-Learner training data (`meta_features`, `meta_labels`).
-
-## Phased план разработки
-
-### Фаза 0: Подготовка данных и инфраструктура (1-2 недели)
-
-- Скачать 1m, 5m, 1h OHLCV за 2 года для 7 пар через OKX history-candles.
-- Скачать funding rates за 2 года.
-- Подготовить feature engineering pipeline (50+ features).
-- Зафиксить look-ahead bias в `strategy_v2.py`.
-- Перепрогнать express backtest для **честного** baseline.
-
-**Чекпойнт:** после фикса look-ahead — какие реальные цифры strategy_v2? Если Sharpe всё ещё < 0 — она войдёт в ансамбль с маленьким весом, но это нормально.
-
-### Фаза 1: Sub-стратегия 1 (Trend Following) — фиксы и валидация (1-2 недели)
-
-- Walk-forward 5 окон на текущей `strategy_v2`.
-- Параметрический sweep (Donchian length, ATR mult, ADX threshold).
-- Найти оптимальные параметры на каждой паре.
-
-**Чекпойнт:** OOS Sharpe должен быть >= 0.4 хотя бы на 3 из 7 пар. Если нет — стратегия слишком слаба, оставляем но с минимальным весом.
-
-### Фаза 2: Sub-стратегия 2 (Mean Reversion) — доделка (2 недели)
-
-- Доделать `strategy_v2_meanrevert.py`.
-- Walk-forward валидация.
-
-**Чекпойнт:** OOS Sharpe >= 0.5.
-
-### Фаза 3: Sub-стратегии 3, 4 (Volatility Breakout, Cross-asset Momentum) — новый код (2-3 недели)
-
-- Реализовать с нуля через `strategies/vol_breakout.py` и `strategies/xasset_momentum.py`.
-- Walk-forward.
-
-**Чекпойнт:** каждая OOS Sharpe >= 0.4.
-
-### Фаза 4: Sub-стратегия 5 (Funding Arbitrage) — новый код (2 недели)
-
-- Downloader funding rates.
-- Логика delta-neutral позиций.
-- Симуляция за 2 года.
-
-**Чекпойнт:** funding-arb должна давать стабильные 8-15% годовых даже без других стратегий.
-
-### Фаза 5: Meta-Learner (LightGBM) (2-3 недели)
-
-- Подготовить training dataset: для каждого 5-минутного среза — фичи + актуальные ex-post returns каждой sub-стратегии.
-- Обучение LightGBM на 18 месяцев данных.
-- Walk-forward валидация (5 окон).
-- Anomaly Detector тренировка.
-
-**Чекпойнт:** ансамбль с Meta-Learner должен показывать Sharpe **выше**, чем любая отдельная sub-стратегия и чем equal-weighted ансамбль. Если нет — Meta-Learner не работает, deploy с equal-weights.
-
-### Фаза 6: Ensemble Coordinator + Risk Integration (1-2 недели)
-
-- Связать всё через `ensemble/coordinator.py`.
-- Интеграция с existing risk manager.
-- Подключить fail-safe механики.
-- Подключить ML Explainer (Groq Qwen) для пояснений.
-
-### Фаза 7: Telegram UI адаптация (2 недели)
-
-См. отдельный раздел "Визуальный стиль" ниже. **Не менять 9-кнопочное меню.**
-
-### Фаза 8: Paper trading на демо OKX (4-6 недель)
-
-- $5,000 виртуальных USDT.
-- Логирование всех решений Meta-Learner с контекстом.
-- Еженедельные ревью результатов.
-
-**Чекпойнт после 4 недель:** если Sharpe < 0.5 — выяснить почему, не двигаться в live.
-
-### Фаза 9: Live с малой суммой (4-8 недель)
-
-- $500-1000 на real OKX.
-- Постепенное наращивание до полной суммы.
-
-### Фаза 10: Опциональные расширения (после успешного запуска)
-
-Включаются по запросу пользователя:
-- On-chain features через Glassnode.
-- Дополнительные sentiment-слои.
-- Ollama локальные модели для backup.
-- Расширение универсума пар (10+ вместо 7).
-
-**Итого: 5-7 месяцев до production.** Это в 1.5-2 раза быстрее DL ensemble (там было 9-12 месяцев).
-
-## Реалистичные ожидания
-
-Из публикаций (López de Prado 2018, AQR Multi-Strategy, Two Sigma Spectrum, Bridgewater Pure Alpha):
-
-| Сценарий | Доходность | Вероятность |
-|----------|-----------|-------------|
-| Pessimistic (Meta-Learner не нашёл edge) | 8-15% | 25% |
-| **Realistic** | **18-28%** | **50%** |
-| Good | 28-45% | 18% |
-| Excellent | 45-70% | 5% |
-| Outlier | 70%+ | 2% |
-
-**Expected value: ~22% годовых при MaxDD ~15%.**
-
-**Шанс достичь 40-50% годовых: ~20-25%.** Это не гарантия.
+1. **Confidence Meta-Learner < 0.5** → fallback на equal weights (0.2 каждой).
+2. **Rolling Sharpe Meta-Learner < 0.3 на 30-day OOS** → отключить Meta-Learner, equal weights.
+3. **Anomaly score выше threshold** → размер всех новых позиций × 0.3.
+4. **AI-Gate primary провайдер недоступен** → автопереключение через `LLMRouter` на backup. При полном падении всех провайдеров 3+ раз подряд → shadow на 1 час, новые сделки разрешены без news-проверки.
+5. **Закрытия работают БЕЗ ИИ** — stop-loss и take-profit физически на бирже.
+6. **Auto-pause при 3 LOSS подряд** на паре (существующий механизм).
+7. **Cross-strategy correlation > 0.7 за 30 дней** → авто-даунвейт более слабой стратегии.
+8. **Drift monitoring**: PSI по фичам Meta-Learner раз в неделю; PSI > 0.25 → push «фичи дрифтуют, переобучение».
+9. **Корректность модели**: при failure загрузки LightGBM → старт с equal_weights, push в Telegram.
 
 ## Технические требования
 
-### Pip-зависимости
+### Pip-зависимости (фиксированы)
 
-```bash
-pip install numpy>=1.24
-pip install pandas>=2.0
-pip install scikit-learn>=1.3   # IsolationForest, walk-forward utilities
-pip install lightgbm>=4.0       # Meta-Learner
-pip install joblib>=1.3         # сохранение моделей
+```
+numpy>=1.24,<2
+pandas>=2.0,<3
+scikit-learn>=1.3,<2
+lightgbm>=4.0,<5
+joblib>=1.3,<2
 ```
 
-**Это всё.** 5 пакетов. Никакого PyTorch, никакого TensorFlow, никакого RL. Никакого GPU.
+**Это всё.** Минорные версии пиннуть, breaking changes не должны приехать.
+
+Запрещено: PyTorch, TensorFlow, JAX, RL-фреймворки, multi-agent оркестрация. См. steering.
 
 ### Compute
 
-- **Тренировка Meta-Learner**: ~5-15 минут на CPU (8 ядер).
-- **Inference**: <50ms на CPU, не нагружает.
-- **Retrain каждые 2-3 месяца** (LightGBM не деградирует так быстро как нейросети).
+- Тренировка Meta-Learner: 5–15 мин на CPU (8 ядер).
+- Inference: <50 ms на CPU.
+- Ретрейн: раз в месяц.
 
-### Никаких новых платных подписок не требуется
+### Платных подписок не требуется
 
-Базовая версия — на $0 дополнительных расходов. Опциональные сервисы (Glassnode, CoinAPI) — по решению пользователя.
+Базовая версия — $0. Glassnode ($30–100/мес) — единственный реально полезный платный сервис, подключать после успешного paper trading, если бюджет позволяет.
+
+## Что нужно от пользователя
+
+### Минимально (уже есть)
+
+| Что | Состояние |
+|---|---|
+| OKX API ключи (demo + real) | ✅ в `.env` |
+| Telegram Bot Token | ✅ в `.env` |
+| Groq API Key | ✅ в `.env` |
+| NewsAPI Key | ✅ в `.env` |
+| Сервер 147.45.76.76 | ✅ |
+
+### Опциональные API-ключи (5 штук, все бесплатные)
+
+Регистрация суммарно ~15 минут. **Без них** система работает на одном Groq → единая точка отказа. **С ними** — failover + специализация моделей.
+
+| # | Сервис | URL | Время | Free tier | Зачем |
+|---|---|---|---|---|---|
+| 1 | Cerebras | https://cloud.cerebras.ai | 2 мин | 14400 RPD | drop-in замена Groq |
+| 2 | Google AI Studio | https://aistudio.google.com | 2 мин | 1500 RPD | Gemini-2.0-Flash для Macro |
+| 3 | OpenRouter | https://openrouter.ai | 3 мин | бесплатные модели | DeepSeek, Nemotron |
+| 4 | Hugging Face | https://huggingface.co/join | 2 мин | 1000 req/день | embeddings + backup |
+| 5 | CryptoPanic | https://cryptopanic.com/developers/api | 2 мин | 300 req/день | crypto-новости |
+
+После регистрации поля попадают в `.env` (см. `.env.example`).
+
+### Платный (опционально)
+
+- **Glassnode** ($30–100/мес) — on-chain метрики. Подключать после paper trading.
+
+### Что НЕ подключать
+
+- OpenAI / Anthropic API.
+- AWS Bedrock.
+- AI trading signals подписки.
+- CoinAPI / Tardis.dev — не нужно для Multi-Strategy.
+
+## Что есть сейчас в репо
+
+- Default-ветка: `feat/zenith-control-ultimate`.
+- Активная: `feat/v3-tg-dashboard`.
+- Открыт PR #1 с UI-улучшениями (sparkline, прогресс-бары, EXPLAIN) + handoff-коммиты.
+- Локальная исследовательская ветка `chore/express-backtest-1y`: downloader OHLCV из OKX + кэш за 1 год — переиспользовать в Фазе 0.
+
+### Известные факты
+
+- Express backtest текущей `strategy_v2` за 1Y: Total return −11.62%, Sharpe −0.84, MaxDD −17%, PF 0.76. Edge не подтверждён.
+- Look-ahead bias в `strategy_v2` на 4H/1D — задокументировано в `.agents/tasks/task-express-backtest-1y/2026-05-13-204230-review.md`. **Фикс в Фазе 1.**
+
+### Что НЕЛЬЗЯ трогать
+
+См. steering. Кратко: прод 147.45.76.76, 9-кнопочное меню, существующие токены, формулы хелперов UI.
+
+### Что МОЖНО переиспользовать
+
+**Telegram UI 80%** (`telegram_bot.py`): все хелперы (`_card`, `_label`, `_fmt_num`, `_fmt_pct`, `_fmt_pnl`, `_progress_bar_10`, `_sparkline_8`, `_status_dot`, `_dir_arrow`), 9-кнопочное меню, 11 карточек.
+
+**Risk-management** (`main.py`): `_sum_open_risk`, kill-switches, `GLOBAL_RISK_CAP`, auto-block.
+
+**Биржевой слой** (`exchanges/okx.py`): `place_order_with_fallback`, `set_trading_stop`, `get_orderbook_top`.
+
+**Memory** (`memory.py`): trades.db, `record_trade`, `get_per_symbol_stats`, `record_equity`, таблица `symbol_blocks`.
+
+**Новые таблицы под Multi-Strategy:**
+- `meta_features` — снимки фичей перед каждым решением Meta-Learner.
+- `meta_predictions` — фичи + prediction + outcome для drift monitoring.
+- `llm_calls` — все вызовы LLM с провайдером, latency, fallback_reason.
+- `llm_cache` — TTL-кэш ответов LLM.
+- `daily_critique` — результаты Daily Offline Critic.
+
+**Расширение `trades.db`** (новые колонки):
+- `strategy_attribution` — какая sub-стратегия инициировала.
+- `meta_weights` — JSON со снимком весов на момент входа.
+- `gate_verdict` — approve / veto / approve_cached / approve_no_news.
+- `anomaly_score` — на момент входа.
+
+## Phased план разработки
+
+**Realistic timeline: 7–9 месяцев** до live (5–7 — оптимистичный best-case).
+
+### Фаза 0: подготовка данных и инфраструктуры (2–3 нед)
+
+- Скачать 1m, 5m, 1h OHLCV за 2 года для 7 пар через OKX history-candles + 15–20 пар для XAM.
+- Скачать funding rates за 2 года.
+- Реализовать `LLMRouter` (~200 стр) + `llm_calls`/`llm_cache` таблицы.
+- News dedup (MinHash) + Keyword pre-filter.
+- Добавить колонки `strategy_attribution`, `meta_weights`, `gate_verdict`, `anomaly_score` в `trades.db`.
+- Зафиксить look-ahead bias в `strategy_v2.py`.
+- Перепрогнать **honest** express backtest с реальными costs (taker fee + slippage по L2 + funding).
+
+**Чекпойнт:** baseline после фикса look-ahead. Если Sharpe всё ещё < 0 — стратегия войдёт в ансамбль с минимальным весом.
+
+### Фаза 1: Trend Following — фиксы и валидация (2 нед)
+
+- Walk-forward 12 окон по описанному split.
+- Параметрический sweep (Donchian length, ATR mult, ADX threshold) с защитой от p-hacking (cross-validated grid).
+
+**Чекпойнт:** OOS Sharpe ≥ 0.4 хотя бы на 3 из 7 пар. Если нет — оставляем с минимальным весом.
+
+### Фаза 2: Mean Reversion — доделка (2 нед)
+
+- Доделать `strategy_v2_meanrevert.py`.
+- Walk-forward.
+
+**Чекпойнт:** OOS Sharpe ≥ 0.5 хотя бы на 3 из 7 пар.
+
+### Фаза 3: Vol Breakout + Cross-asset Momentum (3 нед)
+
+- Реализовать с нуля.
+- XAM: ranking на 15–20 пар, не на 7.
+- Walk-forward для каждой.
+
+**Чекпойнт:** каждая OOS Sharpe ≥ 0.4.
+
+### Фаза 4: Funding Arbitrage (3 нед)
+
+- Downloader funding rates (OKX endpoint `/api/v5/public/funding-rate-history`).
+- Логика delta-neutral perpetual + spot leg.
+- Симуляция 2 года с честным учётом издержек ребалансировки.
+
+**Чекпойнт:** funding-arb даёт стабильные 3–7% годовых на выделенный leg, MaxDD < 8%.
+
+### Фаза 5: Meta-Learner (LightGBM) (3–4 нед)
+
+- Подготовить training dataset: для каждого 5-минутного среза — фичи + ex-post returns каждой sub-стратегии.
+- Тренировка LightGBM.
+- Walk-forward валидация (12 окон).
+- Anomaly Detector тренировка.
+- PSI baseline для drift monitoring.
+
+**Чекпойнт:** ансамбль с Meta-Learner показывает Sharpe **выше**, чем любая отдельная sub-стратегия и чем equal-weighted ансамбль. Если нет — deploy с equal-weights.
+
+### Фаза 6: Ensemble Coordinator + Risk Integration (2 нед)
+
+- Связать всё через `ensemble/coordinator.py`.
+- Интеграция с risk manager.
+- Подключить fail-safe механики (все 9).
+- Cross-strategy correlation monitor.
+- Drift monitoring (PSI weekly).
+
+### Фаза 7: Telegram UI адаптация (2 нед)
+
+См. раздел «Адаптация Telegram UI». **Не менять 9-кнопочное меню.**
+
+### Фаза 8: Paper trading на демо OKX (4–6 нед)
+
+- $5 000 виртуальных USDT.
+- Полное логирование решений Meta-Learner.
+- Еженедельные ревью.
+- Daily Critic + Weekly Stats Report включены.
+
+**Чекпойнт после 4 нед:** если Sharpe < 0.5 — выяснить причину, не идти в live.
+
+### Фаза 9: Live с малой суммой (4–8 нед)
+
+- $500–1000 на real OKX.
+- Постепенное наращивание.
+
+### Фаза 10: опциональные расширения
+
+- On-chain через Glassnode.
+- Дополнительные sentiment-слои.
+- Расширение универсума до 10+ пар (для всех стратегий, не только XAM).
 
 ## Адаптация Telegram UI
 
 ### Стилевые константы — НЕ МЕНЯТЬ
 
-Эти значения уже захардкожены в `telegram_bot.py`. Их использовать как есть:
+Все значения уже захардкожены в `telegram_bot.py`. Использовать как есть:
 
 - `HR = "━" * 24` (U+2501).
 - `SUBHR = "─" * 24` (U+2500).
-- `_NBSP = "\u202f"` (узкий пробел).
-- `_MINUS = "\u2212"` (типографский минус).
-- Прогресс-бары `▰` / `▱`, длина 10.
+- `_NBSP = "\u202f"`, `_MINUS = "\u2212"`.
+- Прогресс-бары `▰▱`, длина 10.
 - Sparkline `▁▂▃▄▅▆▇█`.
-- Стрелки `LONG ↗`, `SHORT ↘`, PnL `▲ +x%` / `▼ −x%`.
+- `LONG ↗`, `SHORT ↘`, PnL `▲ +x%` / `▼ −x%`.
 - Точечные индикаторы 🟢🟡🔴⚪.
 - Все карточки через `_card(title, emoji, body_lines)`.
 
@@ -420,35 +508,25 @@ pip install joblib>=1.3         # сохранение моделей
 
 `set_keyboard()` оставить как есть. Не трогать ни одну кнопку, ни один callback_id.
 
-### Эмодзи и цвета — РАЗРЕШЕНО расширять
+### Эмодзи и цвета — расширенная палитра (одобрено пользователем)
 
-Пользователь явно разрешил использовать новые эмодзи и цвета на твоё усмотрение. Принципы:
+- ML-слои:
+  - `🌳` — Meta-Learner (LightGBM).
+  - `🔮` — Anomaly Detector.
+  - `⚡` — быстрые sub-стратегии (VB, MR).
+  - `📊` — медленные (TF, XAM, FA).
+  - `🛰` — LLMRouter / провайдеры.
+- Статусы: `🤖 active`, `💤 idle`, `⚠️ degraded`, `🛠 retraining`, `❄️ frozen`, `🔁 rebalancing`.
+- Confidence: `🟩` ≥0.75 · `🟢` 0.6–0.75 · `🟡` 0.45–0.6 · `🟠` 0.3–0.45 · `🔴` <0.3.
+- События: `🧪` training, `🔬` validation, `📈` good, `📉` bad, `🎯` target hit.
 
-- **ML-слои** в карточках:
-  - `🌳` — LightGBM Meta-Learner (gradient boosting = деревья).
-  - `🔮` — Anomaly Detector (предсказание аномалий).
-  - `⚡` — быстрые sub-стратегии (Vol Breakout, Mean Revert).
-  - `📊` — медленные sub-стратегии (Trend, Cross-asset, Funding).
-- **ML-статусы**: `🤖 active`, `💤 idle`, `⚠️ degraded`, `🛠 retraining`, `❄️ frozen`, `🔁 rebalancing`.
-- **Confidence-индикаторы** (расширенная палитра):
-  - `🟩` ≥ 0.75 (high)
-  - `🟢` 0.6–0.75 (ok)
-  - `🟡` 0.45–0.6 (medium)
-  - `🟠` 0.3–0.45 (low)
-  - `🔴` < 0.3 (very low)
-- **Стратегические события**: `🧪` (training), `🔬` (validation), `📈` (good), `📉` (bad), `🎯` (target hit).
-
-**Принципы:**
-1. Один эмодзи = одна семантика по всему боту.
-2. Не перегружать строку (макс. один цветной + один тематический эмодзи).
-3. Если добавляешь новый эмодзи — обнови helper и используй везде через него, не хардкодом.
-4. Если сомневаешься — лучше меньше эмодзи, чем больше.
+Принципы: один эмодзи = одна семантика; макс. один цветной + один тематический в строке; новый эмодзи только через helper.
 
 ### Адаптация конкретных карточек
 
-#### 📊 СТАТУС (`_handle_status`) — расширенный
+#### 📊 СТАТУС — расширенный
 
-Переиспользовать всё, что есть. **Добавить блок «Ensemble» перед «Режимы:»:**
+Добавить блок «Ensemble» перед «Режимы:»:
 
 ```
 🌳 Multi-Strategy Ensemble:
@@ -460,14 +538,21 @@ pip install joblib>=1.3         # сохранение моделей
 ─────────────────────────
   Meta-Learner    🟩 conf 0.82
   Regime          trending (BTC dom +1.2%)
-  Anomaly         🟢 normal
+  Anomaly         🟢 normal (0.18)
+─────────────────────────
+🛰 LLMRouter:
+  Groq         🟢 ok (2/14400)
+  Cerebras     🟢 ok (1/14400)
+  Gemini       🟢 ok (1/1500)
+  OpenRouter   🟢 ok
+  HF           🟢 ok
 ─────────────────────────
   Ensemble Sharpe ▰▰▰▰▰▰▰▰▱▱  1.7 (30д OOS)
 ```
 
-#### 📈 ПОЗИЦИИ (`_handle_positions`) — расширенный
+#### 📈 ПОЗИЦИИ — расширенный
 
-Переиспользовать sparkline 15m·30 (FEAT-A). **Добавить строку «От стратегии»:**
+Добавить строку «Стратегия» в карточку позиции:
 
 ```
 🟢 BTC-USDT-SWAP  LONG ↗
@@ -477,14 +562,14 @@ pip install joblib>=1.3         # сохранение моделей
   Сейчас       63 815.5000
   PnL          ▲ 11.50 USDT
   PnL %        ▲ 0.91%
-  TP           63 840.0000  (▲ 0.91%)    ← реальный TP на бирже
+  TP           63 840.0000  (▲ 0.91%)
   Время        2ч 14м
   Стоп         62 950.0000  (▼ −0.46%)
 ```
 
-#### 🎯 РЕЖИМЫ (`_handle_regimes`) — основная адаптация
+#### 🎯 РЕЖИМЫ — основная адаптация
 
-Сейчас показывает рыночный режим по парам. **Расширить в три секции:**
+Три секции:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━
@@ -517,57 +602,39 @@ Performance стратегий (30д OOS):
 ━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-#### 🔍 ПОЧЕМУ МИМО? (`_handle_why`)
+#### 🔍 ПОЧЕМУ МИМО? — добавить причины
 
-Переиспользовать. Добавить новые причины в `_FILTER_TAG_RU`:
+`_FILTER_TAG_RU` пополнить:
 - `meta_low_confidence` → "Meta-Learner: низкая уверенность (<0.5)"
 - `meta_anomaly_detected` → "Anomaly Detector сработал"
 - `meta_strategy_paused` → "Стратегия приостановлена (низкий Sharpe)"
+- `meta_weight_capped` → "Hard cap веса стратегии"
+- `gate_router_unavailable` → "LLMRouter: все провайдеры недоступны"
 
-#### 📝 ЛОГИ (`_handle_logs`)
+#### 📝 ЛОГИ
 
-Не менять. Добавить четвёртый фильтр `ensemble` для grep строк с тегом `[META]` / `[STRAT_X]` — отдельной кнопкой.
+Добавить четвёртый фильтр `ensemble` для grep строк с тегами `[META] / [ENSEMBLE] / [STRAT_*] / [ROUTER]`.
 
-#### 🤖 АНАЛИТИК (`_handle_analyst`)
+#### 🤖 АНАЛИТИК
 
-Не менять структуру. Добавить новые примеры:
+Добавить примеры:
 ```python
 (CB_ANALYST_EX5, "Почему Meta-Learner выбрал Trend Follow?")
 (CB_ANALYST_EX6, "Какая sub-стратегия лучше за месяц?")
+(CB_ANALYST_EX7, "Покажи отчёт Daily Critic за вчера.")
 ```
 
-Подключить **ML Explainer** (Groq Qwen) для развёрнутых ответов.
+#### 🔑 КЛЮЧИ API
 
-#### 🔑 КЛЮЧИ API (`_handle_keys_menu`)
+К существующим 8 ключам добавить кнопки управления новыми (Cerebras, Google, OpenRouter, HF, CryptoPanic, Glassnode, Together).
 
-Не менять список 8 ключей. Если пользователь добавит опциональные API (HuggingFace, Glassnode, CryptoPanic) — добавить кнопки замены этих ключей.
+#### 🚫 ЗАПРЕТЫ, 📈 По парам, 📉 BACKTEST, 🤖 GROQ, ⏯ СТАРТ/СТОП, 🚨 PANIC SELL
 
-#### ⏯ СТАРТ/СТОП · 🚨 PANIC SELL
-
-Не менять.
-
-#### 🚫 ЗАПРЕТЫ
-
-Переиспользовать 1:1, включая FEAT-B секцию «На грани авто-блока».
-
-#### 📈 По парам
-
-Переиспользовать. Добавить в детальную карточку:
-```
-Лучшая стратегия (30д)  Trend Follow · Sharpe 1.4
-```
-
-#### 📉 BACKTEST
-
-Переписать наполнение под walk-forward Multi-Strategy. Кнопки `7д / 30д / 90д` оставить.
-
-#### 🤖 GROQ
-
-Не менять. Прогресс-бары квоты остаются.
+Не менять структуру. По парам — добавить «Лучшая стратегия (30д)». BACKTEST — переписать наполнение под walk-forward Multi-Strategy.
 
 #### Push-уведомления
 
-Push при открытии — сохранить структуру. Добавить блок:
+Push при открытии — добавить блок:
 ```
 ─────────────────────────
 🌳 Meta-Learner:
@@ -579,61 +646,46 @@ Push при открытии — сохранить структуру. Доба
 
 Push при закрытии — новая карточка `🏁 СДЕЛКА ЗАКРЫТА` с разбором "ML был прав?".
 
-## Контакт с пользователем
-
-Пользователь общается на русском. Стиль: коротко, по делу, без вступлений и похвалы. Emoji допустимы только внутри UI продукта (Telegram), но не в самих ответах ассистента. Когда говорит «продолжай» — следующий разумный шаг без уточняющих вопросов. Когда говорит «как считаешь лучше» — принимать решение самостоятельно и показывать готовый результат.
-
-**История эволюции выбора:**
-- Сначала была текущая `strategy_v2` (trend-following с Donchian) — оказалась убыточной в express backtest (-12% за год).
-- Я предложила 6 рекомендаций (funding-arb, stat arb, multi-strategy MM+MR, triangular arb, cross-asset momentum, DL ensemble).
-- Пользователь сначала выбрал DL ensemble, потом передумал в пользу Multi-Strategy + Meta-filter после моего честного ответа, что Multi-Strategy лучше под его требования.
-- **Текущий финальный выбор: Multi-Strategy Ensemble + Meta-Learning.**
-- НЕ предлагать ему альтернативы заново.
+Push при failover LLMRouter — раз в час с агрегатом, не на каждый вызов.
 
 ## Первые шаги новой сессии
 
 1. Прочитать `Khy18/.kiro/steering/zenith-control-v3.md`.
 2. Прочитать этот файл целиком.
-3. **Спросить пользователя про опциональные API** (CryptoPanic, HuggingFace, Glassnode) — готов ли подключить.
-4. Подтвердить с пользователем готовность к 5-7 месяцам разработки.
-5. Создать ветку `feat/multi-strategy-ensemble` от `feat/v3-tg-dashboard`.
-6. **Делегировать Фазу 0** планировщику.
+3. Спросить пользователя про опциональные API-ключи (5 штук) — готов ли регистрировать.
+4. Подтвердить с пользователем готовность к 7–9 месяцам разработки.
+5. Принять решение по PR #1 (мерджить ли перед стартом ветки).
+6. Создать ветку `feat/multi-strategy-ensemble` от `feat/v3-tg-dashboard`.
+7. Делегировать Фазу 0 планировщику.
 
-**Не начинать с кода.** Начать с подтверждения скоупа.
+**Не начинать с кода.** Сначала подтверждение скоупа.
 
-## Открытые вопросы для пользователя (задать в первом сообщении)
+## Открытые вопросы (задать в первом сообщении)
 
-1. Готов ли подключить **CryptoPanic API** (бесплатный, улучшит AI-Gate)? Регистрация 2 минуты на https://cryptopanic.com/developers/api.
-2. Готов ли подключить **Hugging Face Inference API** (бесплатный, backup для Groq)? Регистрация 2 минуты на https://huggingface.co/join.
-3. Готов ли платить $30-100/мес за **Glassnode** (on-chain метрики)? Это **единственный** платный сервис, который реально нужен для quant edge. Не обязательно для базовой версии.
-4. Нужно ли мерджить PR #1 (UI-улучшения) перед началом Multi-Strategy работы?
-5. Готов ли к 5-7 месяцам разработки с поэтапными чекпойнтами?
-
-## Что НЕ делать
-
-- Не обещать 100%+ годовых.
-- Не использовать параметры стратегий "из учебника" без walk-forward валидации.
-- Не пропускать чекпойнты после каждой фазы.
-- Не давать ИИ право управлять риском (Meta-Learner только корректирует **размер** через multiplier, не решает stop-loss).
-- Не торопиться в live с реальными деньгами без 4+ недель paper trading.
-- Не менять 9-кнопочное меню.
-- Не предлагать пользователю переключиться обратно на DL ensemble или другие отвергнутые варианты.
-- Не делегировать разработку без явного "да" пользователя.
+1. Готов зарегистрировать **5 опциональных API** (Cerebras, Google, OpenRouter, HF, CryptoPanic) — все бесплатные, ~15 мин?
+2. Готов ли платить $30–100/мес за **Glassnode** (после успешного paper trading, не сейчас)?
+3. Мерджить **PR #1** в `feat/zenith-control-ultimate` перед стартом ветки `feat/multi-strategy-ensemble`?
+4. Подтверждаешь готовность к **7–9 месяцам** разработки с поэтапными чекпойнтами?
+5. Расширять универсум до **15–20 пар только для Cross-asset Momentum**, или для всех стратегий сразу?
 
 ## Контрольный чек-лист перед каждым релизом фазы
 
 1. `python -m py_compile telegram_bot.py main.py memory.py config.py` — компилируется.
 2. `grep -n 'set_keyboard' telegram_bot.py` — ровно одно определение, ровно 5 рядов кнопок (`[2,2,2,2,1]`).
 3. `grep -n 'HR = "━" \* 24' telegram_bot.py` — константа на месте.
-4. `grep -n 'def _card\|def _label\|def _fmt_num\|def _fmt_pct\|def _progress_bar_10\|def _sparkline_8\|def _status_dot\|def _dir_arrow' telegram_bot.py` — все восемь хелперов на месте.
-5. Для каждой адаптированной карточки — реальная сверка через grep по якорям. **Не показывать пользователю mockup, который не соответствует коду.** Это steering-рулинг из прошлой сессии.
+4. `grep -n 'def _card\|def _label\|def _fmt_num\|def _fmt_pct\|def _progress_bar_10\|def _sparkline_8\|def _status_dot\|def _dir_arrow' telegram_bot.py` — все восемь хелперов.
+5. Для каждой адаптированной карточки — реальная сверка через grep по якорям. **Не показывать пользователю mockup, который не соответствует коду.**
 
-## Приоритет файлов handoff
+## Что НЕ делать
 
-**Использовать ТОЛЬКО** `Khy18/.kiro/handoff/NEXT_SESSION_PROMPT_MULTI_STRATEGY.md` (этот файл).
-
-**Игнорировать** `Khy18/.kiro/handoff/NEXT_SESSION_PROMPT_DL.md` (устарел, пользователь передумал).
+- Не обещать 100%+ годовых. Realistic 12–18% (P50), апсайд 22%+ (P75).
+- Не использовать параметры стратегий "из учебника" без walk-forward.
+- Не пропускать чекпойнты после фаз.
+- Не давать ИИ право на stop-loss.
+- Не идти в live без 4+ нед paper trading.
+- Не менять 9-кнопочное меню, не менять стилевые константы UI.
+- Не предлагать вернуться на DL ensemble или другие отвергнутые варианты.
 
 ---
 
-Конец handoff. Удачи следующему агенту.
+Конец handoff.
