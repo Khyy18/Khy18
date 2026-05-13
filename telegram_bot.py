@@ -75,7 +75,9 @@ CB_STARTSTOP_PANIC = "zc:ssp"
 
 # Заглушки для следующих этапов — кнопки появляются сейчас, реальные
 # обработчики будут добавлены в соответствующих FEAT-ах.
-CB_AGGR_MENU = "zc:aggr"        # FEAT-003: слайдер агрессивности
+CB_AGGR_MENU = "zc:aggr"        # FEAT-003: слайдер агрессивности (реализовано)
+CB_AGGR_SET_PREFIX = "zc:aggr_set:"      # + key (conservative/medium/aggressive)
+CB_AGGR_CONFIRM_PREFIX = "zc:aggr_ok:"   # + key
 CB_BLOCKS = "zc:blocks"          # FEAT-004: запретный список (manual + auto)
 CB_EXPORT_ENV = "zc:env_export"  # FEAT-005: экспорт настроек .env
 CB_PAIRS = "zc:pairs"            # FEAT-006: статистика по парам
@@ -700,13 +702,6 @@ def _stage_placeholder(stage: str) -> str:
     )
 
 
-async def _handle_aggr_stub(
-    session: aiohttp.ClientSession, state: dict[str, Any]
-) -> str:
-    """Заглушка кнопки 🎚 Агрессивность (FEAT-003 / B1)."""
-    return _stage_placeholder("B1 (агрессивность)")
-
-
 async def _handle_blocks_stub(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
@@ -733,6 +728,346 @@ async def _handle_bt_stub(
 ) -> str:
     """Заглушка кнопки 📉 Backtest (FEAT-008 / D)."""
     return _stage_placeholder("D (Backtest UI)")
+
+
+# --- FEAT-003 / B1: слайдер агрессивности торговли -------------------------
+# Три пресета атомарно записывают 6 параметров в .env и применяют их в
+# памяти через setattr(config, ...). AI_TRADE_GATE_MODE остаётся "active"
+# во всех пресетах (требование владельца — без shadow на 7-14 дней).
+# Per-symbol MIN_ATR_PCT (config.MIN_ATR_PCT) НЕ трогается — пресеты влияют
+# только на дефолт MIN_ATR_PCT_DEFAULT.
+
+_AGGR_FLOAT_TOL = 1e-6  # допуск для сравнения live-значений с пресетом
+
+_AGGRESSIVENESS_PRESETS: dict[str, dict[str, Any]] = {
+    "conservative": {
+        "RISK_PER_TRADE": 0.005,
+        "GLOBAL_RISK_CAP": 0.02,
+        "MIN_ATR_PCT_DEFAULT": 0.0045,
+        "MAX_DAILY_LOSS": 0.02,
+        "MAX_WEEKLY_LOSS": 0.05,
+        "AI_TRADE_GATE_MODE": "active",
+    },
+    "medium": {
+        "RISK_PER_TRADE": 0.01,
+        "GLOBAL_RISK_CAP": 0.04,
+        "MIN_ATR_PCT_DEFAULT": 0.003,
+        "MAX_DAILY_LOSS": 0.03,
+        "MAX_WEEKLY_LOSS": 0.07,
+        "AI_TRADE_GATE_MODE": "active",
+    },
+    "aggressive": {
+        "RISK_PER_TRADE": 0.015,
+        "GLOBAL_RISK_CAP": 0.06,
+        "MIN_ATR_PCT_DEFAULT": 0.0024,
+        "MAX_DAILY_LOSS": 0.04,
+        "MAX_WEEKLY_LOSS": 0.09,
+        "AI_TRADE_GATE_MODE": "active",
+    },
+}
+
+_AGGRESSIVENESS_LABELS: dict[str, str] = {
+    "conservative": "🐢 Консервативно",
+    "medium": "⚡ Средне",
+    "aggressive": "🔥 Агрессивно",
+}
+
+# Порядок отображения пресетов в подменю.
+_AGGRESSIVENESS_ORDER: list[str] = ["conservative", "medium", "aggressive"]
+
+# Список «риск»-параметров (числовых, float).
+_AGGRESSIVENESS_FLOAT_KEYS: tuple[str, ...] = (
+    "RISK_PER_TRADE",
+    "GLOBAL_RISK_CAP",
+    "MIN_ATR_PCT_DEFAULT",
+    "MAX_DAILY_LOSS",
+    "MAX_WEEKLY_LOSS",
+)
+
+
+def _detect_current_preset() -> Optional[str]:
+    """Определить текущий пресет по живым значениям config.*.
+
+    Сравнение float — с допуском ±1e-6. AI_TRADE_GATE_MODE сравнивается
+    как нижний регистр строки. Возвращает ключ ('conservative'|'medium'|
+    'aggressive') или None если ни один пресет не совпал.
+    """
+    live_gate = str(
+        getattr(config, "AI_TRADE_GATE_MODE", "") or ""
+    ).strip().lower()
+    live_floats: dict[str, Any] = {}
+    for key in _AGGRESSIVENESS_FLOAT_KEYS:
+        try:
+            live_floats[key] = float(getattr(config, key))
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    for preset_key in _AGGRESSIVENESS_ORDER:
+        preset = _AGGRESSIVENESS_PRESETS[preset_key]
+        if str(preset["AI_TRADE_GATE_MODE"]).lower() != live_gate:
+            continue
+        match = True
+        for fk in _AGGRESSIVENESS_FLOAT_KEYS:
+            if abs(live_floats[fk] - float(preset[fk])) > _AGGR_FLOAT_TOL:
+                match = False
+                break
+        if match:
+            return preset_key
+    return None
+
+
+def _aggr_preset_summary_lines(preset_key: str) -> list[str]:
+    """Краткое описание параметров пресета — табличные строки."""
+    p = _AGGRESSIVENESS_PRESETS[preset_key]
+    return [
+        _label("Риск/сделка", _fmt_pct(float(p["RISK_PER_TRADE"]) * 100.0, 2)),
+        _label("Сум. риск", _fmt_pct(float(p["GLOBAL_RISK_CAP"]) * 100.0, 2)),
+        _label("ATR мин.",
+               _fmt_pct(float(p["MIN_ATR_PCT_DEFAULT"]) * 100.0, 2)),
+        _label("Дневн. стоп",
+               _fmt_pct(float(p["MAX_DAILY_LOSS"]) * 100.0, 2)),
+        _label("Недельн. стоп",
+               _fmt_pct(float(p["MAX_WEEKLY_LOSS"]) * 100.0, 2)),
+        _label("AI-Gate", str(p["AI_TRADE_GATE_MODE"])),
+    ]
+
+
+def _aggr_live_summary_lines() -> list[str]:
+    """Текущие значения config.* в том же формате, что и summary пресета."""
+    try:
+        risk = float(getattr(config, "RISK_PER_TRADE", 0.0))
+    except (TypeError, ValueError):
+        risk = 0.0
+    try:
+        cap = float(getattr(config, "GLOBAL_RISK_CAP", 0.0))
+    except (TypeError, ValueError):
+        cap = 0.0
+    try:
+        atr_def = float(getattr(config, "MIN_ATR_PCT_DEFAULT", 0.0))
+    except (TypeError, ValueError):
+        atr_def = 0.0
+    try:
+        d_loss = float(getattr(config, "MAX_DAILY_LOSS", 0.0))
+    except (TypeError, ValueError):
+        d_loss = 0.0
+    try:
+        w_loss = float(getattr(config, "MAX_WEEKLY_LOSS", 0.0))
+    except (TypeError, ValueError):
+        w_loss = 0.0
+    gate = str(
+        getattr(config, "AI_TRADE_GATE_MODE", "") or ""
+    ).strip().lower() or "-"
+    return [
+        _label("Риск/сделка", _fmt_pct(risk * 100.0, 2)),
+        _label("Сум. риск", _fmt_pct(cap * 100.0, 2)),
+        _label("ATR мин.", _fmt_pct(atr_def * 100.0, 2)),
+        _label("Дневн. стоп", _fmt_pct(d_loss * 100.0, 2)),
+        _label("Недельн. стоп", _fmt_pct(w_loss * 100.0, 2)),
+        _label("AI-Gate", gate),
+    ]
+
+
+def _apply_aggressiveness_preset(preset_key: str) -> tuple[bool, str]:
+    """Атомарно записать 6 ключей в .env и применить через setattr(config).
+
+    При сбое любого `_write_env_var` — откатывает уже применённые setattr
+    к предыдущим значениям и возвращает (False, причина). Возвращает
+    (True, preset_key) при успехе.
+    """
+    if preset_key not in _AGGRESSIVENESS_PRESETS:
+        return False, f"Неизвестный пресет: {preset_key!r}"
+    preset = _AGGRESSIVENESS_PRESETS[preset_key]
+
+    # Сохраняем предыдущие живые значения для возможного отката.
+    snapshot: dict[str, Any] = {}
+    for name in preset.keys():
+        snapshot[name] = getattr(config, name, None)
+
+    applied: list[str] = []  # имена, которые уже успели записать в .env
+    try:
+        for name, value in preset.items():
+            str_value = str(value)
+            if not _write_env_var(name, str_value):
+                # Откатить уже записанные .env-ключи и setattr.
+                for prev_name in applied:
+                    prev_val = snapshot.get(prev_name)
+                    try:
+                        # Возвращаем .env к прежнему значению.
+                        if prev_val is None:
+                            _write_env_var(prev_name, "")
+                        else:
+                            _write_env_var(prev_name, str(prev_val))
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            f"[TG] _apply_aggressiveness_preset: "
+                            f"ошибка отката .env {prev_name}: {exc}"
+                        )
+                    try:
+                        setattr(config, prev_name, prev_val)
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            f"[TG] _apply_aggressiveness_preset: "
+                            f"ошибка отката setattr {prev_name}: {exc}"
+                        )
+                return False, f"Не удалось записать .env: {name}"
+            applied.append(name)
+            # Применяем in-memory сразу — с правильным типом.
+            if name == "AI_TRADE_GATE_MODE":
+                setattr(config, name, str(value))
+            else:
+                setattr(config, name, float(value))
+        return True, preset_key
+    except Exception as exc:  # noqa: BLE001
+        # На случай неожиданной ошибки — попытка отката.
+        for prev_name, prev_val in snapshot.items():
+            try:
+                setattr(config, prev_name, prev_val)
+            except Exception:  # noqa: BLE001
+                pass
+        return False, f"Внутренняя ошибка: {exc}"
+
+
+async def _handle_aggressiveness_menu(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Подменю «🎚 Агрессивность торговли» — выбор пресета."""
+    current = _detect_current_preset()
+
+    if current is None:
+        current_block: list[str] = [
+            _label("Сейчас", "Кастомные настройки"),
+            _subhr_line(),
+            "Текущие значения:",
+        ]
+        current_block.extend("  " + line for line in _aggr_live_summary_lines())
+    else:
+        current_block = [
+            _label("Сейчас", _AGGRESSIVENESS_LABELS[current]),
+        ]
+
+    body: list[str] = list(current_block)
+    body.append(_subhr_line())
+    body.append("Выберите пресет:")
+
+    for key in _AGGRESSIVENESS_ORDER:
+        body.append("")
+        suffix = "  ◀ сейчас" if key == current else ""
+        body.append(f"{_AGGRESSIVENESS_LABELS[key]}{suffix}")
+        body.extend("  " + line for line in _aggr_preset_summary_lines(key))
+
+    body.append(_subhr_line())
+    body.append("Применение атомарное: 6 параметров в .env")
+    body.append("и в памяти без рестарта.")
+    body.append("Открытые позиции продолжают работать")
+    body.append("по своим параметрам (изменения — для новых).")
+
+    text = _card("Агрессивность торговли", "🎚", body)
+
+    inline_rows: list[list[dict[str, Any]]] = []
+    for key in _AGGRESSIVENESS_ORDER:
+        label = _AGGRESSIVENESS_LABELS[key]
+        if key == current:
+            label = f"{label} ◀ сейчас"
+        inline_rows.append(
+            [{"text": label, "callback_data": f"{CB_AGGR_SET_PREFIX}{key}"}]
+        )
+    inline_rows.append([{"text": "◀ Назад", "callback_data": CB_STATUS}])
+    return text, {"inline_keyboard": inline_rows}
+
+
+async def _handle_aggressiveness_confirm(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    preset_key: str,
+) -> tuple[str, dict[str, Any]]:
+    """Шаг 2: подтверждение применения пресета."""
+    if preset_key not in _AGGRESSIVENESS_PRESETS:
+        return (
+            _card("Агрессивность", "🎚", [f"Неизвестный пресет: {preset_key}"]),
+            {"inline_keyboard": [[
+                {"text": "◀ Назад", "callback_data": CB_AGGR_MENU},
+            ]]},
+        )
+
+    current = _detect_current_preset()
+    current_pretty = (
+        _AGGRESSIVENESS_LABELS[current] if current else "Кастомные настройки"
+    )
+    target_pretty = _AGGRESSIVENESS_LABELS[preset_key]
+
+    body: list[str] = [
+        _label("Сейчас", current_pretty),
+        _label("Станет", target_pretty),
+        _subhr_line(),
+        "Параметры пресета:",
+    ]
+    body.extend("  " + line for line in _aggr_preset_summary_lines(preset_key))
+    body.append(_subhr_line())
+    body.append("Открытые позиции остаются на старых")
+    body.append("параметрах — изменения применятся к новым.")
+    body.append("Подтвердить?")
+
+    text = _card("Применить пресет", "🎚", body)
+    inline = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Да, применить",
+                 "callback_data": f"{CB_AGGR_CONFIRM_PREFIX}{preset_key}"},
+                {"text": "❌ Отмена", "callback_data": CB_AGGR_MENU},
+            ],
+        ]
+    }
+    return text, inline
+
+
+async def _handle_aggressiveness_apply(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    preset_key: str,
+) -> tuple[str, dict[str, Any]]:
+    """Шаг 3: применение пресета (.env + setattr in-memory)."""
+    if preset_key not in _AGGRESSIVENESS_PRESETS:
+        return (
+            _card("Агрессивность", "🎚", [f"Неизвестный пресет: {preset_key}"]),
+            {"inline_keyboard": [[
+                {"text": "◀ Назад", "callback_data": CB_AGGR_MENU},
+            ]]},
+        )
+
+    ok, result = _apply_aggressiveness_preset(preset_key)
+    if not ok:
+        body = [
+            "Не удалось применить пресет.",
+            _label("Причина", str(result)),
+            _subhr_line(),
+            "Изменения откачены.",
+        ]
+        return (
+            _card("Ошибка применения", "🎚", body),
+            {"inline_keyboard": [[
+                {"text": "◀ Назад", "callback_data": CB_AGGR_MENU},
+            ]]},
+        )
+
+    pretty = _AGGRESSIVENESS_LABELS[preset_key]
+    body = [
+        _label("Пресет", pretty),
+        _subhr_line(),
+        "Новые значения:",
+    ]
+    body.extend("  " + line for line in _aggr_live_summary_lines())
+    body.append(_subhr_line())
+    body.append("Сохранено в .env, применено в памяти.")
+    body.append("Открытые позиции продолжаются по")
+    body.append("своим параметрам — изменения для новых.")
+    text = _card("Применён пресет", "🎚", body)
+    inline = {
+        "inline_keyboard": [
+            [{"text": "◀ В подменю", "callback_data": CB_AGGR_MENU}],
+            [{"text": "🏠 Главное меню", "callback_data": CB_BACK_MAIN}],
+        ]
+    }
+    return text, inline
 
 
 # --- Обработчики кнопок главного меню --------------------------------------
@@ -842,13 +1177,11 @@ async def _handle_status(
 
     text = _card("Статус", "📊", body)
 
-    # Кнопка агрессивности — всегда отображает текущий уровень из конфига.
-    aggr_lvl = str(getattr(config, "AGGRESSIVENESS", "balanced") or "balanced")
-    aggr_lvl_ru = {
-        "conservative": "консерв.",
-        "balanced": "баланс",
-        "aggressive": "агрессив.",
-    }.get(aggr_lvl.lower(), aggr_lvl)
+    # Кнопка агрессивности — детектируем текущий пресет по живым значениям
+    # config.* и показываем его метку. Если ни один пресет не совпал —
+    # «кастом» (FEAT-003).
+    aggr_current = _detect_current_preset()
+    aggr_lvl_ru = _AGGRESSIVENESS_LABELS.get(aggr_current, "кастом")
 
     inline: list[list[dict[str, Any]]] = [
         [
@@ -2100,7 +2433,17 @@ async def _process_callback(
         elif data == CB_GROQ or data == CB_GROQ_REFRESH:
             result = await _handle_groq_quota(session, state)
         elif data == CB_AGGR_MENU:
-            result = await _handle_aggr_stub(session, state)
+            result = await _handle_aggressiveness_menu(session, state)
+        elif data.startswith(CB_AGGR_CONFIRM_PREFIX):
+            preset_key = data[len(CB_AGGR_CONFIRM_PREFIX):]
+            result = await _handle_aggressiveness_apply(
+                session, state, preset_key
+            )
+        elif data.startswith(CB_AGGR_SET_PREFIX):
+            preset_key = data[len(CB_AGGR_SET_PREFIX):]
+            result = await _handle_aggressiveness_confirm(
+                session, state, preset_key
+            )
         elif data == CB_BLOCKS:
             result = await _handle_blocks_stub(session, state)
         elif data == CB_EXPORT_ENV:
