@@ -559,6 +559,7 @@ def _bybit_kline_to_dict(k: list[Any]) -> dict[str, Any]:
 
 
 def _sum_open_risk(state: dict[str, Any]) -> float:
+    # При изменении формулы синхронизировать с `_sum_open_risk_local` в telegram_bot.py.
     equity_start = float(state["global"].get("equity_start") or 0.0)
     if equity_start <= 0:
         return 0.0

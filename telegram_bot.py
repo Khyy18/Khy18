@@ -439,9 +439,11 @@ def _progress_bar_10(used: Any, limit: Any) -> str:
 
 # --- Sparkline свечей (15m·30) для карточки позиции -------------------------
 
-# In-memory кэш close-цен на пару: symbol -> (epoch_seconds, list[float]).
-# Снижает частоту обращений к OKX при повторных открытиях экрана позиций.
-_CANDLE_SPARK_CACHE: dict[str, tuple[float, list[float]]] = {}
+# In-memory кэш close-цен: ключ — (symbol, interval, limit), значение —
+# (epoch_seconds, list[float]). Ключ включает interval и limit, чтобы
+# будущие вызовы с другими таймфреймами/глубиной не коллидировали с
+# текущим 15m·30 для карточки позиций.
+_CANDLE_SPARK_CACHE: dict[tuple[str, str, int], tuple[float, list[float]]] = {}
 _CANDLE_SPARK_TTL_SEC = 60
 
 
@@ -482,20 +484,25 @@ def _sparkline_8(values: list[float]) -> str:
 
 
 async def _fetch_sparkline_closes(
-    session: aiohttp.ClientSession, symbol: str, limit: int = 30
+    session: aiohttp.ClientSession,
+    symbol: str,
+    interval: str = "15",
+    limit: int = 30,
 ) -> list[float]:
-    """Подтянуть последние `limit` close-цен 15m-свечей для пары.
+    """Подтянуть последние `limit` close-цен `interval`-свечей для пары.
 
-    Использует in-memory кэш с TTL `_CANDLE_SPARK_TTL_SEC`. При любой ошибке
-    (сеть, таймаут, пустой ответ, не-число) возвращает [] и кэш НЕ обновляет.
+    Использует in-memory кэш с TTL `_CANDLE_SPARK_TTL_SEC` и ключом
+    `(symbol, interval, limit)`. При любой ошибке (сеть, таймаут, пустой
+    ответ, не-число) возвращает [] и кэш НЕ обновляет.
     """
     now_ts = time.time()
-    cached = _CANDLE_SPARK_CACHE.get(symbol)
+    cache_key = (symbol, interval, limit)
+    cached = _CANDLE_SPARK_CACHE.get(cache_key)
     if cached and (now_ts - cached[0]) < _CANDLE_SPARK_TTL_SEC:
         return list(cached[1])
     try:
         klines = await asyncio.wait_for(
-            EXCHANGE.get_klines(session, symbol, "15", limit), timeout=5.0
+            EXCHANGE.get_klines(session, symbol, interval, limit), timeout=5.0
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[TG] sparkline {symbol}: {exc}")
@@ -504,14 +511,20 @@ async def _fetch_sparkline_closes(
         return []
     closes: list[float] = []
     try:
+        # OKX отдаёт list[list[str]], Bybit (через exchanges/base.py) —
+        # list[dict] с ключом 'close'. Поддерживаем оба формата.
         for row in klines:
-            closes.append(float(row[4]))
-    except (TypeError, ValueError, IndexError) as exc:
+            if isinstance(row, dict):
+                val = row.get("close") if "close" in row else row.get(4)
+            else:
+                val = row[4]
+            closes.append(float(val))
+    except (TypeError, ValueError, IndexError, KeyError) as exc:
         print(f"[TG] sparkline {symbol}: {exc}")
         return []
     if not closes:
         return []
-    _CANDLE_SPARK_CACHE[symbol] = (now_ts, list(closes))
+    _CANDLE_SPARK_CACHE[cache_key] = (now_ts, list(closes))
     return closes
 
 
@@ -521,6 +534,8 @@ def _sum_open_risk_local(state: dict[str, Any]) -> float:
 
     Дублируем логику здесь, потому что main импортирует telegram_bot —
     обратный импорт создал бы цикл. Чистый расчёт без побочных эффектов.
+
+    При изменении формулы синхронизировать с `main._sum_open_risk` (main.py).
     """
     g = state.get("global") if isinstance(state, dict) else None
     if not isinstance(g, dict):
@@ -2859,7 +2874,7 @@ async def _handle_status(
         _label("От старта", _fmt_pct(pct_from_start, 2)),
         _subhr_line(),
         _label("Сделки", f"{int(stats.get('count') or 0)}"),
-        _label("Винрейт", f"{_fmt_num(winrate, 1)}%"),
+        _label("Винрейт всё", f"{_fmt_num(winrate, 1)}%"),
         _label("Открыто", f"{open_cnt} / {total_cnt}"),
         _subhr_line(),
     ]
@@ -3012,7 +3027,7 @@ async def _handle_positions(
     # return_exceptions=True гарантирует, что один битый символ не уронит
     # остальную карточку: в этом случае sparkline остаётся пустым.
     spark_results = await asyncio.gather(
-        *[_fetch_sparkline_closes(session, p["symbol"], 30) for p in positions],
+        *[_fetch_sparkline_closes(session, p["symbol"], limit=30) for p in positions],
         return_exceptions=True,
     )
     for p, res in zip(positions, spark_results):
