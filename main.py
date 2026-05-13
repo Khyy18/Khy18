@@ -1041,6 +1041,21 @@ async def _process_symbol(
             f"[AI-GATE] {symbol} {side}: блокируем вход "
             f"({blocker_filter}), reason={detail[:120]}"
         )
+        if gate_verdict == "error":
+            try:
+                strat_for_notify = str(
+                    (order.get("meta") or {}).get("strategy_name") or "strategy_v2"
+                )
+                await telegram_bot.notify_trade_blocked_by_gate_error(
+                    session,
+                    symbol=symbol,
+                    side=side,
+                    strategy_name=strat_for_notify,
+                    price=float(order.get("limit_price") or 0.0),
+                    error_reason=detail,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LOOP] {symbol}: ошибка notify_trade_blocked_by_gate_error: {exc}")
         return
 
     if getattr(config, "DRY_RUN", False):
