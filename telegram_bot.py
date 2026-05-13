@@ -108,6 +108,10 @@ _key_fsm_state: dict[int, dict[str, Any]] = {}
 
 _KEY_FSM_TIMEOUT_SEC = 300  # 5 минут
 
+# Rate-limit для уведомлений о fail-CLOSED блокировке (Groq недоступен).
+# symbol → unix timestamp последней отправки уведомления.
+_gate_error_notify_last_ts: dict[str, float] = {}
+
 
 # --- Маппинги для UI-текстов -------------------------------------------------
 
@@ -234,6 +238,52 @@ async def send_message(
     except Exception as exc:  # noqa: BLE001
         print(f"[TG] Неожиданная ошибка sendMessage: {exc}")
         return None
+
+
+async def notify_trade_blocked_by_gate_error(
+    session: aiohttp.ClientSession,
+    *,
+    symbol: str,
+    side: str,
+    strategy_name: str,
+    price: float,
+    error_reason: str,
+) -> None:
+    """Push-уведомление о fail-CLOSED блокировке сделки (Groq недоступен).
+
+    Отправляется ТОЛЬКО в active-режиме при gate.verdict=error.
+    Встроен rate-limit: не более 1 уведомления за 5 минут на одну пару.
+    Ошибки отправки логируются, main-loop не ломается.
+    """
+    if not getattr(config, "NOTIFY_ON_GATE_ERROR_BLOCK", True):
+        return
+    now_ts = time.time()
+    last_ts = _gate_error_notify_last_ts.get(symbol, 0.0)
+    if now_ts - last_ts < 300:
+        return
+    _gate_error_notify_last_ts[symbol] = now_ts
+
+    side_label = "LONG" if str(side).lower() in ("buy", "long") else "SHORT"
+    raw_reason = error_reason or ""
+    reason_txt = (raw_reason[:200] + "…") if len(raw_reason) > 200 else raw_reason
+    utc_now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    text = (
+        f"⚠️ <b>СДЕЛКА ЗАБЛОКИРОВАНА (Groq недоступен)</b>\n\n"
+        f"Пара: {symbol}\n"
+        f"Сторона: {side_label} (планировалась)\n"
+        f"Сигнал: {strategy_name}\n"
+        f"Цена: {price}\n\n"
+        f"🧠 AI-GATE: ❌ ошибка\n"
+        f"Причина: {reason_txt}\n\n"
+        f"Это не потеря — сделка не открыта из соображений безопасности.\n"
+        f"Переключить в наблюдение: кнопка 🛡 AI-GATE → «Наблюдение»\n\n"
+        f"⏱ {utc_now}"
+    )
+    try:
+        await send_message(session, text, reply_markup=set_keyboard())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] ошибка notify_trade_blocked_by_gate_error: {exc}")
 
 
 async def delete_message(
