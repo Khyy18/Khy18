@@ -446,6 +446,44 @@ async def _fetch_sparkline_closes(
     return closes
 
 
+def _sum_open_risk_local(state: dict[str, Any]) -> float:
+    """Локальная копия main._sum_open_risk: суммарный открытый риск как
+    доля от стартового эквити, по всем открытым позициям.
+
+    Дублируем логику здесь, потому что main импортирует telegram_bot —
+    обратный импорт создал бы цикл. Чистый расчёт без побочных эффектов.
+    """
+    g = state.get("global") if isinstance(state, dict) else None
+    if not isinstance(g, dict):
+        g = state if isinstance(state, dict) else {}
+    try:
+        equity_start = float(g.get("equity_start") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if equity_start <= 0:
+        return 0.0
+    total = 0.0
+    symbols_dict = state.get("symbols") if isinstance(state, dict) else None
+    if not isinstance(symbols_dict, dict):
+        return 0.0
+    for sym_state in symbols_dict.values():
+        if not isinstance(sym_state, dict):
+            continue
+        trade = sym_state.get("open_trade")
+        if not trade:
+            continue
+        try:
+            entry = float(trade.get("entry_price") or 0.0)
+            stop = float(trade.get("current_stop") or 0.0)
+            qty = float(trade.get("qty") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if entry <= 0 or qty <= 0:
+            continue
+        total += abs(entry - stop) * qty / equity_start
+    return total
+
+
 # --- Вспомогательные ---------------------------------------------------------
 
 def _bot_url(method: str) -> str:
@@ -2022,6 +2060,32 @@ async def _handle_blocks_menu(
 
     body.append(_subhr_line())
 
+    # На грани авто-блока: символы с серией LOSS 0 < streak < threshold.
+    # Печатаем секцию ТОЛЬКО когда есть хотя бы один такой символ — пустого
+    # «(нет)» под этим заголовком в этом экране быть не должно.
+    try:
+        edge_threshold = int(getattr(config, "AUTO_BLOCK_LOSS_STREAK", 3) or 3)
+    except (TypeError, ValueError):
+        edge_threshold = 3
+    edge_lines: list[str] = []
+    if edge_threshold > 1:
+        for sym in config.SYMBOLS:
+            try:
+                cur_streak = int(memory.get_consecutive_losses(sym))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[TG] get_consecutive_losses({sym}): {exc}")
+                continue
+            if 0 < cur_streak < edge_threshold:
+                edge_lines.append(
+                    f"{_status_dot('warn')} {sym}  "
+                    f"{_progress_bar_10(cur_streak, edge_threshold)}  "
+                    f"{cur_streak}/{edge_threshold} LOSS"
+                )
+    if edge_lines:
+        body.append("На грани авто-блока:")
+        body.extend(edge_lines)
+        body.append(_subhr_line())
+
     # Текущие настройки.
     try:
         streak = int(getattr(config, "AUTO_BLOCK_LOSS_STREAK", 3) or 3)
@@ -2686,6 +2750,33 @@ async def _handle_status(
 
     winrate = float(stats.get("winrate") or 0.0)
 
+    # Доп. метрики окна 24ч и текущий открытый риск — для прогресс-баров
+    # «Винрейт 24ч / Сделок 24ч / Риск», которые отрисовываются ниже
+    # перед секцией «Режимы:». Все три источника устойчивы к ошибкам:
+    # memory-функции возвращают 0/нулевой словарь при сбое, локальный
+    # _sum_open_risk_local — 0.0 при отсутствии открытых сделок.
+    try:
+        wstats = memory.get_winrate_window_hours(24)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_winrate_window_hours: {exc}")
+        wstats = {"count": 0, "wins": 0, "losses": 0, "winrate": 0.0}
+    wr_24h = float(wstats.get("winrate") or 0.0)
+    cnt_24h_wl = int(wstats.get("count") or 0)
+    try:
+        trades_24h = int(memory.get_trades_count_window_hours(24))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_trades_count_window_hours: {exc}")
+        trades_24h = 0
+    try:
+        max_trades = int(getattr(config, "MAX_TRADES_PER_DAY", 20) or 20)
+    except (TypeError, ValueError):
+        max_trades = 20
+    open_risk = _sum_open_risk_local(state)
+    try:
+        risk_cap = float(getattr(config, "GLOBAL_RISK_CAP", 0.04) or 0.04)
+    except (TypeError, ValueError):
+        risk_cap = 0.04
+
     body: list[str] = [
         _label("Баланс", f"{_fmt_num(equity_now, 2)} USDT"),
         _label("От старта", _fmt_pct(pct_from_start, 2)),
@@ -2694,9 +2785,32 @@ async def _handle_status(
         _label("Винрейт", f"{_fmt_num(winrate, 1)}%"),
         _label("Открыто", f"{open_cnt} / {total_cnt}"),
         _subhr_line(),
-        "Режимы:",
-        f"  {row1}",
     ]
+    body.append(
+        _label(
+            "Винрейт 24ч",
+            f"{_progress_bar_10(wr_24h, 100.0)}  "
+            f"{_fmt_num(wr_24h, 1)}% ({cnt_24h_wl})",
+        )
+    )
+    body.append(
+        _label(
+            "Сделок 24ч",
+            f"{_progress_bar_10(trades_24h, max_trades)}  "
+            f"{trades_24h}/{max_trades}",
+        )
+    )
+    body.append(
+        _label(
+            "Риск",
+            f"{_progress_bar_10(open_risk * 100.0, risk_cap * 100.0)}  "
+            f"{_fmt_num(open_risk * 100.0, 2)}% / "
+            f"{_fmt_num(risk_cap * 100.0, 2)}%",
+        )
+    )
+    body.append(_subhr_line())
+    body.append("Режимы:")
+    body.append(f"  {row1}")
     if row2:
         body.append(f"  {row2}")
     body.append(_subhr_line())

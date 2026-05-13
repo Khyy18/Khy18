@@ -453,6 +453,86 @@ def get_stats() -> dict[str, Any]:
     return stats
 
 
+def get_trades_count_window_hours(hours: int) -> int:
+    """Кол-во сделок (открытых и закрытых), попавших в окно `hours` часов.
+
+    Считаются записи trades, у которых datetime(COALESCE(closed_ts, ts))
+    попадает в последние `hours` часов от текущего момента. Используется
+    для прогресс-бара дневного лимита сделок в карточке СТАТУС. Возвращает
+    0 при ошибке БД.
+    """
+    try:
+        h = int(hours)
+    except (TypeError, ValueError):
+        return 0
+    if h <= 0:
+        return 0
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM trades
+                WHERE datetime(COALESCE(closed_ts, ts))
+                      >= datetime('now', ?)
+                """,
+                (f"-{h} hours",),
+            ).fetchone()
+            if row is None:
+                return 0
+            return int(row["c"] or 0)
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка чтения trades_count_window_hours: {exc}")
+        return 0
+
+
+def get_winrate_window_hours(hours: int) -> dict[str, Any]:
+    """Винрейт за окно `hours` часов (по closed_ts закрытых сделок).
+
+    Шаблон совпадает с get_stats(), но добавлен фильтр окна по closed_ts
+    и считаются только сделки с outcome IN ('WIN','LOSS'). Возвращает
+    словарь { 'count', 'wins', 'losses', 'winrate' } (winrate в процентах).
+    """
+    out: dict[str, Any] = {
+        "count": 0,
+        "wins": 0,
+        "losses": 0,
+        "winrate": 0.0,
+    }
+    try:
+        h = int(hours)
+    except (TypeError, ValueError):
+        return out
+    if h <= 0:
+        return out
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*)                                       AS count,
+                    SUM(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) AS wins,
+                    SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
+                FROM trades
+                WHERE outcome IN ('WIN','LOSS')
+                  AND datetime(closed_ts) >= datetime('now', ?)
+                """,
+                (f"-{h} hours",),
+            ).fetchone()
+            if row is not None:
+                count = int(row["count"] or 0)
+                wins = int(row["wins"] or 0)
+                losses = int(row["losses"] or 0)
+                out["count"] = count
+                out["wins"] = wins
+                out["losses"] = losses
+                total = wins + losses
+                out["winrate"] = (wins / total * 100.0) if total else 0.0
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка чтения winrate_window_hours: {exc}")
+    return out
+
+
 # --- v2: equity_curve и PnL-срезы ---
 
 def record_equity(equity: float, hwm: float, drawdown: float) -> None:
