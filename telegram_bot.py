@@ -100,6 +100,10 @@ CB_PAIR_PICKER = "zc:pair_pick"  # FEAT-006: список пар «Подроб�
 CB_PAIR_DETAIL_PREFIX = "zc:pair:"        # + symbol
 CB_PAIR_BLOCK_PREFIX = "zc:pair_blk:"     # + symbol → перевод в FSM блока
 CB_BT_MENU = "zc:bt"             # FEAT-008: Backtest UI
+CB_BT_PERIOD_PREFIX = "zc:bt_p:"  # + "7"/"30"/"90"
+CB_BT_RUN = "zc:bt_run"
+CB_BT_CSV = "zc:bt_csv"
+CB_BT_BACK = "zc:bt_back"
 
 # Подменю / действия.
 CB_TOGGLE_DRY_RUN = "zc:toggle_dry"
@@ -566,6 +570,52 @@ async def delete_message(
         return False
     except Exception as exc:  # noqa: BLE001
         print(f"[TG] Неожиданная ошибка deleteMessage: {exc}")
+        return False
+
+
+async def edit_message_text(
+    session: aiohttp.ClientSession,
+    chat_id: int,
+    message_id: int,
+    new_text: str,
+    reply_markup: Optional[dict[str, Any]] = None,
+) -> bool:
+    """Отредактировать текст ранее отправленного сообщения через editMessageText.
+
+    Используется в FEAT-008: после старта бэктеста бот шлёт «🔄 Идёт расчёт…»
+    и по завершении подменяет это же сообщение на финальный отчёт без
+    спама в чат. parse_mode/disable_web_page_preview совпадают с
+    `send_message`. Все ошибки логируются, исключения наружу не выбрасывает -
+    возвращает False при любой неудаче.
+    """
+    if not config.TELEGRAM_TOKEN:
+        print("[TG] TELEGRAM_TOKEN не задан - пропускаем editMessageText")
+        return False
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": int(message_id),
+        "text": new_text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+    try:
+        async with session.post(
+            _bot_url("editMessageText"), data=payload, timeout=15
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                print(
+                    f"[TG] editMessageText статус {resp.status}: {body[:200]}"
+                )
+                return False
+            return True
+    except aiohttp.ClientError as exc:
+        print(f"[TG] Сетевая ошибка editMessageText: {exc}")
+        return False
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] Неожиданная ошибка editMessageText: {exc}")
         return False
 
 
@@ -1307,8 +1357,477 @@ async def _handle_pair_block_start(
 async def _handle_bt_stub(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    """Заглушка кнопки 📉 Backtest (FEAT-008 / D)."""
+    """Историческая заглушка кнопки 📉 Backtest (FEAT-008 / D).
+
+    Сохранена ради совместимости старых ссылок в коде - реальный
+    обработчик `_handle_backtest_menu` подключён ниже в диспетчере.
+    """
     return _stage_placeholder("D (Backtest UI)")
+
+
+# --- FEAT-008 / D: Backtest UI ----------------------------------------------
+# Подменю «📉 Backtest» открывается из 📊 СТАТУС. Внутри:
+#   1) переключатель периода 7д / 30д / 90д,
+#   2) кнопка ▶ Запустить (синтетика, asyncio.to_thread, не блокирует loop),
+#   3) после успеха карточка с метриками + сравнением с реальной торговлей,
+#   4) кнопка 📥 CSV — отправка `backtest-Nd.csv` через send_document.
+# Состояние per-chat (выбранный период, флаг «идёт расчёт», текст CSV)
+# хранится в _bt_session_state. Один активный запуск на chat_id одновременно.
+# Решение использовать ИСКЛЮЧИТЕЛЬНО синтетику (а не load_range) принято
+# намеренно: load_range требует сети к Binance, что недопустимо в sandbox/
+# offline-окружении. См. context.json: сделки против OKX/Binance отключены.
+
+# Стартовые цены для генератора random_walk: реалистичные ориентиры по
+# каждой паре, чтобы цифры в отчёте смотрелись правдоподобно.
+_BT_DEFAULT_START_PRICES: dict[str, float] = {
+    "BTCUSDT": 30000.0,
+    "ETHUSDT": 2000.0,
+    "SOLUSDT": 100.0,
+    "BNBUSDT": 250.0,
+    "XRPUSDT": 0.5,
+    "DOGEUSDT": 0.07,
+    "AVAXUSDT": 30.0,
+}
+
+_BT_PERIOD_OPTIONS: tuple[int, ...] = (7, 30, 90)
+_BT_DEFAULT_PERIOD: int = 30
+
+# Ограничители безопасности: даже 90д * 7 пар = 906_080 баров на пару
+# никогда не должны полностью обрабатываться, поэтому сверху держим
+# жёсткий лимит общего числа баров на запуск.
+_BT_MAX_BARS_PER_SYMBOL: int = 90 * 24 * 60
+
+# Per-chat сессия: {chat_id: {'period_days', 'running', 'csv_text'}}.
+_bt_session_state: dict[int, dict[str, Any]] = {}
+
+
+def _bt_get_session(chat_id: int) -> dict[str, Any]:
+    """Вернуть (создать при отсутствии) bag-of-state для чата."""
+    s = _bt_session_state.get(chat_id)
+    if not isinstance(s, dict):
+        s = {
+            "period_days": _BT_DEFAULT_PERIOD,
+            "running": False,
+            "csv_text": None,
+        }
+        _bt_session_state[chat_id] = s
+    return s
+
+
+def _bt_period_label(days: int, current_days: int) -> str:
+    """Текст кнопки периода с маркером ◀ возле выбранного."""
+    base = f"{int(days)}д"
+    return f"{base} ◀" if int(days) == int(current_days) else base
+
+
+def _bt_metric_value(metrics: dict[str, Any], key: str) -> Optional[float]:
+    raw = metrics.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw == "inf":
+        return float("inf")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bt_format_pf(metrics: dict[str, Any]) -> str:
+    pf = _bt_metric_value(metrics, "profit_factor")
+    if pf is None:
+        return "-"
+    if pf == float("inf"):
+        return "∞"
+    return _fmt_num(pf, 2)
+
+
+def _bt_compose_csv(closed_trades: list[dict[str, Any]]) -> str:
+    """Собрать CSV-строку со списком закрытых сделок.
+
+    Колонки: ts_open, ts_close, symbol, side, entry, exit, pnl, qty.
+    ts_* выводятся в ISO8601 UTC, чтобы открывалось в любых табличках.
+    """
+    import csv as _csv  # локальный импорт - модуль нужен только здесь
+    import io as _io
+
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(
+        ["ts_open", "ts_close", "symbol", "side", "entry", "exit", "pnl", "qty"]
+    )
+    for t in closed_trades or []:
+        try:
+            ts_open_ms = int(t.get("entry_ts") or 0)
+            ts_close_ms = int(t.get("exit_ts") or 0)
+        except (TypeError, ValueError):
+            ts_open_ms = ts_close_ms = 0
+        ts_open_iso = (
+            datetime.fromtimestamp(ts_open_ms / 1000.0, tz=timezone.utc)
+            .isoformat() if ts_open_ms > 0 else ""
+        )
+        ts_close_iso = (
+            datetime.fromtimestamp(ts_close_ms / 1000.0, tz=timezone.utc)
+            .isoformat() if ts_close_ms > 0 else ""
+        )
+        writer.writerow([
+            ts_open_iso,
+            ts_close_iso,
+            str(t.get("symbol") or ""),
+            str(t.get("side") or ""),
+            f"{float(t.get('entry') or 0.0):.6f}",
+            f"{float(t.get('exit') or 0.0):.6f}",
+            f"{float(t.get('pnl') or 0.0):.6f}",
+            f"{float(t.get('qty') or 0.0):.8f}",
+        ])
+    return buf.getvalue()
+
+
+async def _run_backtest(period_days: int) -> dict[str, Any]:
+    """Прогнать synthetic-бэктест за period_days по всем config.SYMBOLS.
+
+    Запуск идёт через `asyncio.to_thread` (синхронный движок), чтобы не
+    блокировать event-loop. Возвращает словарь с ключами:
+        - metrics: dict (см. backtester.metrics.compute_metrics)
+        - csv_text: str (CSV всех закрытых сделок)
+        - period_days: int
+        - symbols_count: int
+    Любая ошибка пробрасывается наружу - вызов `_handle_backtest_run`
+    оборачивает её в карточку.
+    """
+    # Локальные импорты, чтобы не утяжелять holod-импорт telegram_bot.
+    import importlib
+
+    import backtester.synthetic as bt_synth
+    from backtester.config import (
+        BacktesterConfig,
+        DEFAULT_TICK_SIZE,
+        HIGHER_TFS,
+        PRIMARY_TF,
+    )
+    from backtester.engine import BacktestEngine
+    from backtester.metrics import compute_metrics
+    from backtester.portfolio import Portfolio
+
+    period = max(1, int(period_days or _BT_DEFAULT_PERIOD))
+    bars = min(period * 24 * 60, _BT_MAX_BARS_PER_SYMBOL)
+
+    symbols = list(config.SYMBOLS)
+    data_1m_by_symbol: dict[str, list[dict]] = {}
+    for idx, sym in enumerate(symbols):
+        start_price = _BT_DEFAULT_START_PRICES.get(sym, 1.0)
+        data_1m_by_symbol[sym] = bt_synth.generate_random_walk(
+            sym, bars, start_price=start_price, seed=42 + idx
+        )
+
+    bt_cfg = BacktesterConfig(initial_equity=10000.0)
+    portfolio = Portfolio(10000.0, bt_cfg)
+    strategy_mod = importlib.import_module("strategy_v2")
+    primary_tf = getattr(bt_cfg, "primary_tf", None) or PRIMARY_TF
+    engine = BacktestEngine(
+        portfolio=portfolio,
+        strategy_module=strategy_mod,
+        symbols=symbols,
+        primary_tf=primary_tf,
+        higher_tfs=HIGHER_TFS,
+        tick_sizes=DEFAULT_TICK_SIZE,
+        config=bt_cfg,
+    )
+
+    def _runner() -> dict[str, Any]:
+        result = engine.run(data_1m_by_symbol)
+        # Метрика exposure_pct требует num_bars - выставляем ту же метку,
+        # что делает backtester.run.main, чтобы цифры совпадали.
+        try:
+            portfolio._num_bars_seen = int(result.get("num_bars") or 0)
+        except Exception:  # noqa: BLE001
+            pass
+        return result
+
+    await asyncio.to_thread(_runner)
+
+    metrics = compute_metrics(portfolio)
+    csv_text = _bt_compose_csv(list(portfolio.closed_trades))
+
+    return {
+        "metrics": metrics,
+        "csv_text": csv_text,
+        "period_days": period,
+        "symbols_count": len(symbols),
+    }
+
+
+def _bt_render_menu(chat_id: int) -> tuple[str, dict[str, Any]]:
+    """Карточка меню backtest + inline-клавиатура.
+
+    Используется и при первом открытии (`_handle_backtest_menu`), и при
+    переключении периода (`_handle_backtest_period`) — чтобы маркер ◀
+    «прыгал» между 7д/30д/90д.
+    """
+    sess = _bt_get_session(chat_id)
+    period_days = int(sess.get("period_days") or _BT_DEFAULT_PERIOD)
+
+    preset_key = _detect_current_preset()
+    preset_label = (
+        _AGGRESSIVENESS_LABELS.get(preset_key, "кастом")
+        if preset_key else "кастом"
+    )
+
+    body = [
+        _label("Период", f"{period_days}д"),
+        _label("Символы", f"Все {len(config.SYMBOLS)}"),
+        _label("Параметры", f"текущие · {preset_label}"),
+        _subhr_line(),
+        "⏱ Запуск займёт ~30с (синтетика).",
+        "Реальные данные не используются —",
+        "сетевые вызовы выключены в sandbox.",
+    ]
+    text = _card("Backtest", "📉", body)
+
+    period_row = [
+        {
+            "text": _bt_period_label(d, period_days),
+            "callback_data": f"{CB_BT_PERIOD_PREFIX}{d}",
+        }
+        for d in _BT_PERIOD_OPTIONS
+    ]
+    inline = {
+        "inline_keyboard": [
+            period_row,
+            [{"text": "▶ Запустить", "callback_data": CB_BT_RUN}],
+            [{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}],
+        ]
+    }
+    return text, inline
+
+
+async def _handle_backtest_menu(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+) -> tuple[str, dict[str, Any]]:
+    """Открыть подменю Backtest c текущим выбранным периодом."""
+    return _bt_render_menu(int(chat_id))
+
+
+async def _handle_backtest_period(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+    period_str: str,
+) -> tuple[str, dict[str, Any]]:
+    """Переключить выбранный период (7/30/90д) и перерисовать меню."""
+    sess = _bt_get_session(int(chat_id))
+    try:
+        period_days = int(period_str)
+    except (TypeError, ValueError):
+        period_days = _BT_DEFAULT_PERIOD
+    if period_days not in _BT_PERIOD_OPTIONS:
+        period_days = _BT_DEFAULT_PERIOD
+    sess["period_days"] = period_days
+    return _bt_render_menu(int(chat_id))
+
+
+def _bt_render_report(
+    *,
+    period_days: int,
+    symbols_count: int,
+    metrics: dict[str, Any],
+) -> str:
+    """Сформировать карточку финального отчёта бэктеста."""
+    today = datetime.now(tz=timezone.utc).date()
+    start = today - timedelta(days=int(period_days))
+    period_line = f"{start.isoformat()} → {today.isoformat()}"
+
+    preset_key = _detect_current_preset()
+    preset_label = (
+        _AGGRESSIVENESS_LABELS.get(preset_key, "кастом")
+        if preset_key else "кастом"
+    )
+
+    num_trades = int(metrics.get("num_trades") or 0)
+    bt_winrate = _bt_metric_value(metrics, "win_rate_pct") or 0.0
+    sharpe = _bt_metric_value(metrics, "sharpe") or 0.0
+    mdd = _bt_metric_value(metrics, "max_drawdown_pct") or 0.0
+    avg_win = _bt_metric_value(metrics, "avg_win") or 0.0
+    avg_loss = _bt_metric_value(metrics, "avg_loss") or 0.0
+    if num_trades > 0:
+        avg_trade = (avg_win * (bt_winrate / 100.0)
+                     + avg_loss * (1.0 - bt_winrate / 100.0))
+    else:
+        avg_trade = 0.0
+
+    body: list[str] = [
+        _label("Период", period_line),
+        _label("Символы", f"Все {int(symbols_count)}"),
+        _label("Параметры", f"текущие · {preset_label}"),
+        _subhr_line(),
+        "Метрики:",
+        _label("  Сделок", _fmt_num(num_trades, 0)),
+        _label("  Винрейт", f"{_fmt_num(bt_winrate, 1)}%"),
+        _label("  Profit factor", _bt_format_pf(metrics)),
+        _label("  Max DD", f"{_fmt_num(mdd, 2)}%"),
+        _label("  Sharpe", _fmt_num(sharpe, 2)),
+        _label("  Avg trade", _fmt_pnl(avg_trade, 2)),
+        _subhr_line(),
+        "Сравнение с реальной торговлей:",
+    ]
+
+    try:
+        real_stats = memory.get_stats()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] backtest get_stats: {exc}")
+        real_stats = {"count": 0, "winrate": 0.0}
+
+    real_count = int(real_stats.get("count") or 0)
+    if real_count <= 0 or num_trades <= 0:
+        body.append("  Недостаточно данных для сравнения")
+    else:
+        real_wr = float(real_stats.get("winrate") or 0.0)
+        delta = real_wr - bt_winrate
+        if abs(delta) < 0.05:
+            arrow = "·"
+        elif delta > 0:
+            arrow = "▲"
+        else:
+            arrow = "▼"
+        sign = "+" if delta > 0 else ""
+        body.append(_label(
+            "  Винрейт реал",
+            f"{_fmt_num(real_wr, 1)}%  {arrow} {sign}{_fmt_num(delta, 1)}",
+        ))
+        body.append(_label("  Сделок реал", _fmt_num(real_count, 0)))
+
+    return _card("Backtest · отчёт", "📉", body)
+
+
+async def _handle_backtest_run(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+) -> Optional[str]:
+    """Запуск бэктеста: «🔄 Идёт расчёт…» → editMessageText с отчётом.
+
+    Возвращает None — диспетчер не шлёт дополнительное сообщение
+    (мы уже обновили progress-сообщение через editMessageText).
+    Если уже идёт расчёт — возвращает текстовую карточку «Уже идёт расчёт».
+    """
+    chat_id_int = int(chat_id)
+    sess = _bt_get_session(chat_id_int)
+    if sess.get("running"):
+        return _card(
+            "Backtest",
+            "📉",
+            ["Уже идёт расчёт. Подождите окончания и повторите."],
+        )
+
+    period_days = int(sess.get("period_days") or _BT_DEFAULT_PERIOD)
+    sess["running"] = True
+
+    # 1) Стартовая «карточка ожидания».
+    progress_text = _card(
+        "Backtest",
+        "🔄",
+        [
+            f"Идёт расчёт за {period_days}д…",
+            _subhr_line(),
+            "Синтетические данные, ~30 секунд.",
+        ],
+    )
+    sent = await send_message(session, progress_text, chat_id=chat_id_int)
+    progress_msg_id: Optional[int] = None
+    try:
+        if sent and isinstance(sent, dict):
+            progress_msg_id = int(((sent.get("result") or {}).get("message_id")) or 0) or None
+    except (TypeError, ValueError):
+        progress_msg_id = None
+
+    # 2) Сам бэктест.
+    try:
+        result = await _run_backtest(period_days)
+    except Exception as exc:  # noqa: BLE001
+        sess["running"] = False
+        err_text = _card(
+            "Backtest · ошибка",
+            "⚠️",
+            [
+                "Не удалось завершить расчёт.",
+                _subhr_line(),
+                _label("Причина", str(exc)[:200] or "неизвестна"),
+            ],
+        )
+        if progress_msg_id is not None:
+            ok = await edit_message_text(
+                session, chat_id_int, progress_msg_id, err_text,
+            )
+            if ok:
+                return None
+        # Фоллбэк: если редактирование не получилось — отдаём как обычное
+        # сообщение через диспетчер.
+        return err_text
+
+    # 3) Финальный отчёт.
+    sess["csv_text"] = result.get("csv_text") or ""
+    report_text = _bt_render_report(
+        period_days=int(result.get("period_days") or period_days),
+        symbols_count=int(result.get("symbols_count") or len(config.SYMBOLS)),
+        metrics=dict(result.get("metrics") or {}),
+    )
+    report_keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "📥 CSV", "callback_data": CB_BT_CSV},
+                {"text": "◀ Назад", "callback_data": CB_BT_BACK},
+            ]
+        ]
+    }
+    if progress_msg_id is not None:
+        ok = await edit_message_text(
+            session,
+            chat_id_int,
+            progress_msg_id,
+            report_text,
+            reply_markup=report_keyboard,
+        )
+        if ok:
+            sess["running"] = False
+            return None
+    # Фоллбэк: editMessageText не прошёл — шлём отчёт обычным сообщением.
+    sess["running"] = False
+    await send_message(
+        session, report_text, reply_markup=report_keyboard, chat_id=chat_id_int,
+    )
+    return None
+
+
+async def _handle_backtest_csv(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+) -> Optional[str]:
+    """Отправить CSV из последнего успешного запуска через send_document."""
+    chat_id_int = int(chat_id)
+    sess = _bt_get_session(chat_id_int)
+    csv_text = sess.get("csv_text")
+    if not csv_text:
+        return _card(
+            "Backtest · CSV",
+            "📥",
+            ["Сначала запустите backtest."],
+        )
+    period_days = int(sess.get("period_days") or _BT_DEFAULT_PERIOD)
+    caption = _card(
+        "Backtest CSV",
+        "📥",
+        [f"Сделки за {period_days}д сохранены в CSV."],
+    )
+    await send_document(
+        session,
+        str(csv_text).encode("utf-8"),
+        filename=f"backtest-{period_days}d.csv",
+        caption=caption,
+        chat_id=chat_id_int,
+    )
+    return None
 
 
 # --- FEAT-004 / B2: запретный список (manual + auto) ----------------------
@@ -3679,7 +4198,21 @@ async def _process_callback(
             sym = data[len(CB_PAIR_DETAIL_PREFIX):]
             result = await _handle_pair_detail(session, state, sym)
         elif data == CB_BT_MENU:
-            result = await _handle_bt_stub(session, state)
+            result = await _handle_backtest_menu(session, state, chat_id_int)
+        elif data.startswith(CB_BT_PERIOD_PREFIX):
+            period_str = data[len(CB_BT_PERIOD_PREFIX):]
+            result = await _handle_backtest_period(
+                session, state, chat_id_int, period_str
+            )
+        elif data == CB_BT_RUN:
+            result = await _handle_backtest_run(session, state, chat_id_int)
+        elif data == CB_BT_CSV:
+            result = await _handle_backtest_csv(session, state, chat_id_int)
+        elif data == CB_BT_BACK:
+            result = (
+                "👋 Главное меню. Выберите действие кнопкой ниже.",
+                set_keyboard(),
+            )
         elif data.startswith(CB_KEY_PREFIX) and not data.startswith(
             CB_KEY_CONFIRM_PREFIX
         ):
