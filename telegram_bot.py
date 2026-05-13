@@ -271,16 +271,15 @@ async def notify_trade_blocked_by_gate_error(
     utc_now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     text = (
-        f"⛔ <b>СДЕЛКА ЗАБЛОКИРОВАНА</b> ⚠️\n"
-        f"<i>Groq API недоступен — fail-CLOSED</i>\n\n"
-        f"🪙 Пара: <b>{symbol}</b>\n"
-        f"{dir_arrow} Сторона: <b>{side_label}</b> (планировалась)\n"
-        f"📊 Сигнал: {strategy_name}\n"
-        f"🎯 Цена: {price}\n\n"
+        f"⚠️ <b>СДЕЛКА ЗАБЛОКИРОВАНА (Groq недоступен)</b>\n\n"
+        f"Пара: {symbol}\n"
+        f"Сторона: {side_label} (планировалась)\n"
+        f"Сигнал: {strategy_name}\n"
+        f"Цена: {price}\n\n"
         f"🧠 AI-GATE: ❌ ошибка\n"
-        f"💬 Причина: {reason_txt}\n\n"
-        f"🛡 Это не потеря — сделка не открыта из соображений безопасности.\n"
-        f"🔀 Переключить в наблюдение: кнопка 🛡 AI-GATE → «Наблюдение»\n\n"
+        f"Причина: {reason_txt}\n\n"
+        f"Это не потеря — сделка не открыта из соображений безопасности.\n"
+        f"Переключить в наблюдение: кнопка 🛡 AI-GATE → «Наблюдение»\n\n"
         f"⏱ {utc_now}"
     )
     try:
