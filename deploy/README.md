@@ -200,6 +200,75 @@ sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
 sudo systemctl restart zenith
 ```
 
+Для перехода на экспериментальную ветку v2 (7 символов + подсистема
+Bollinger mean-reversion, подробности в корневом `README.md`, секция
+«v2: Multi-strategy framework»):
+
+```bash
+sudo -u zenith git -C /opt/zenith fetch origin
+sudo -u zenith git -C /opt/zenith checkout feat/v2-meanrevert
+sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
+sudo systemctl restart zenith
+```
+
+**Предупреждение.** `feat/v2-meanrevert` - экспериментальная ветка без
+полноценного бэктеста. Переключайтесь на неё только после суток
+наблюдений в `DRY_RUN=true`, готовьтесь к возможному откату на
+`feat/zenith-control-ultimate` одной командой `git checkout`.
+
+Для перехода на ветку v3 (AI-veto gate поверх v2 - Groq-проверка сделки
+перед отправкой ордера, подробности в корневом `README.md`, секция
+«v3: AI-veto gate»):
+
+```bash
+sudo -u zenith git -C /opt/zenith fetch origin
+sudo -u zenith git -C /opt/zenith checkout feat/v3-ai-veto
+sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
+# Добавить в .env переменную режима gate (по умолчанию shadow - только логирует).
+grep -q '^AI_TRADE_GATE_MODE=' /opt/zenith/.env \
+    || echo 'AI_TRADE_GATE_MODE=shadow' | sudo tee -a /opt/zenith/.env
+sudo systemctl restart zenith
+```
+
+**Предупреждение.** `feat/v3-ai-veto` - экспериментальная ветка поверх
+`feat/v2-meanrevert` и унаследует все её риски. Стартуйте в
+`AI_TRADE_GATE_MODE=shadow`: решения gate логируются, но не применяются -
+это даёт возможность увидеть в журнале, какие сделки gate хотел бы
+заблокировать, прежде чем переключать на `active`. Откат так же простой:
+`git checkout feat/v2-meanrevert` (или `feat/zenith-control-ultimate`
+чтобы вернуться на v1) + `systemctl restart zenith`.
+
+### Переход на v3-tg-dashboard (расширенный Telegram UI + Демо/Реал)
+
+Ветка `feat/v3-tg-dashboard` добавляет новый Telegram-дашборд (9 кнопок,
+включая 🔑 КЛЮЧИ API и 🏦 Демо/Реал), таблицу `ai_gate_log` для журнала
+решений AI-Gate и раздельные OKX-ключи для demo/mainnet. Подробности в
+корневом README, секция «v3 Telegram UI».
+
+```bash
+sudo -u zenith git -C /opt/zenith fetch origin feat/v3-tg-dashboard
+sudo -u zenith git -C /opt/zenith checkout feat/v3-tg-dashboard
+sudo systemctl restart zenith
+```
+
+Переменные окружения (опциональные, заполняются позже через 🔑 КЛЮЧИ API
+прямо из Telegram, без SSH):
+
+```env
+# OKX Реал (для переключения на mainnet через кнопку 🏦 Демо/Реал).
+OKX_API_KEY_REAL=
+OKX_API_SECRET_REAL=
+OKX_PASSPHRASE_REAL=
+
+# Режим торговли: true = OKX Demo (по умолчанию), false = OKX Mainnet.
+IS_TESTNET=true
+```
+
+При `IS_TESTNET=false` бот работает на реальном счёте - всегда держите
+`DRY_RUN=true` хотя бы одни сутки после переключения, убедитесь что
+`📊 СТАТУС` показывает корректный реальный баланс, и только потом
+выключайте DRY_RUN.
+
 Docker:
 
 ```bash
