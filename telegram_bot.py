@@ -44,6 +44,7 @@ from typing import Any, Optional
 import aiohttp
 
 import ai_analyst
+import ai_groq
 import api_engine  # noqa: F401  # legacy shim
 import config
 import memory
@@ -67,8 +68,14 @@ CB_KEYS = "zc:keys"
 CB_GROQ = "zc:groq"
 CB_GROQ_REFRESH = "zc:groq_refresh"
 
-# Аналитик (FEAT-007 / C3) — пока заглушка, открывается из главного меню.
+# Аналитик (FEAT-007 / C3): подменю и FSM свободного вопроса.
 CB_ANALYST = "zc:analyst"
+CB_ANALYST_ASK = "zc:an_ask"
+CB_ANALYST_EX1 = "zc:an_ex1"
+CB_ANALYST_EX2 = "zc:an_ex2"
+CB_ANALYST_EX3 = "zc:an_ex3"
+CB_ANALYST_EX4 = "zc:an_ex4"
+CB_ANALYST_CANCEL = "zc:an_cancel"
 # Объединённое подменю «Старт/Стоп · PANIC SELL» — широкая нижняя кнопка
 # главного меню. Старые подменю CB_STARTSTOP и CB_PANIC доступны переходом
 # внутрь.
@@ -147,6 +154,20 @@ _KEY_FSM_TIMEOUT_SEC = 300  # 5 минут
 # step == "await_duration" -> ждём callback с длительностью
 _blocks_fsm_state: dict[int, dict[str, Any]] = {}
 _BLOCKS_FSM_TIMEOUT_SEC = 300  # 5 минут
+
+# --- FSM для AI-Аналитика (FEAT-007 / C3) ---
+# Структура:
+#   {chat_id: {"mode": "awaiting_question", "started": float}}
+_analyst_fsm_state: dict[int, dict[str, Any]] = {}
+_ANALYST_FSM_TIMEOUT_SEC = 300  # 5 минут
+
+# Пред-определённые вопросы примеров (CB_ANALYST_EX1..EX4).
+_ANALYST_EXAMPLES: list[tuple[str, str]] = [
+    (CB_ANALYST_EX1, "Почему я слил на XRP?"),
+    (CB_ANALYST_EX2, "Какая моя худшая стратегия?"),
+    (CB_ANALYST_EX3, "Когда AI-Gate ошибался?"),
+    (CB_ANALYST_EX4, "Стоит ли мне перейти на РЕАЛ?"),
+]
 
 # Rate-limit для уведомлений о fail-CLOSED блокировке (Groq недоступен).
 # symbol → unix timestamp последней отправки уведомления.
@@ -2634,9 +2655,245 @@ async def _handle_startstop_panic_menu(
 
 async def _handle_analyst(
     session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Главное меню AI-Аналитика (FEAT-007 / C3).
+
+    Карточка с описанием возможностей + 4 примера вопросов + кнопка ввода
+    своего вопроса.
+    """
+    body = [
+        "Я отвечаю на вопросы по статистике вашего бота за 30 дней.",
+        "Задайте вопрос своими словами или выберите один из примеров.",
+    ]
+    text = _card("AI-Аналитик", "🤖", body)
+    inline: list[list[dict[str, Any]]] = []
+    for cb_data, question in _ANALYST_EXAMPLES:
+        inline.append([
+            {"text": f"💡 {question}", "callback_data": cb_data},
+        ])
+    inline.append([
+        {"text": "✏ Написать свой вопрос", "callback_data": CB_ANALYST_ASK},
+    ])
+    inline.append([{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}])
+    return text, {"inline_keyboard": inline}
+
+
+async def _handle_analyst_ask(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+) -> tuple[str, dict[str, Any]]:
+    """Перевод FSM в режим ожидания свободного вопроса (5 минут).
+
+    Если активен другой FSM (ключи или блоки) — вежливо отказываем.
+    """
+    busy = (
+        chat_id in _key_fsm_state
+        or chat_id in _blocks_fsm_state
+    )
+    if busy:
+        text = _card(
+            "AI-Аналитик",
+            "🤖",
+            ["Сначала завершите текущую операцию."],
+        )
+        kb = {"inline_keyboard": [
+            [{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}],
+        ]}
+        return text, kb
+
+    _analyst_fsm_state[chat_id] = {
+        "mode": "awaiting_question",
+        "started": time.time(),
+    }
+    body = [
+        "Пришлите вопрос одним сообщением.",
+        "Срок: 5 минут.",
+    ]
+    text = _card("AI-Аналитик", "🤖", body)
+    kb = {"inline_keyboard": [
+        [{"text": "❌ Отмена", "callback_data": CB_ANALYST_CANCEL}],
+    ]}
+    return text, kb
+
+
+def _build_analyst_context(state: dict[str, Any]) -> str:
+    """Сборка контекстного блока для Groq (только memory.* + state, без сети).
+
+    Возвращает многострочный текст ~1500-2000 символов с разделами:
+    сводка 30д, эквити/просадка, открытые позиции, AI-Gate 24ч/30д,
+    статистика по символам, последние 20 сделок.
+    """
+    g = _g(state)
+    lines: list[str] = []
+
+    # 1) Сводка 30д.
+    trades_30 = memory.get_trades_since(30) or []
+    closed = [
+        t for t in trades_30
+        if str(t.get("outcome") or "").upper() in ("WIN", "LOSS")
+    ]
+    wins = sum(1 for t in closed if str(t["outcome"]).upper() == "WIN")
+    losses = sum(1 for t in closed if str(t["outcome"]).upper() == "LOSS")
+    total_closed = wins + losses
+    winrate = (wins / total_closed * 100.0) if total_closed else 0.0
+    pnl_sum = sum(float(t.get("pnl") or 0.0) for t in closed)
+
+    lines.append("== СТАТИСТИКА 30 ДНЕЙ ==")
+    lines.append(_label("Сделок", _fmt_num(len(trades_30), 0)))
+    lines.append(_label("Закрыто", _fmt_num(total_closed, 0)))
+    lines.append(_label("Выигрыши", _fmt_num(wins, 0)))
+    lines.append(_label("Проигрыши", _fmt_num(losses, 0)))
+    lines.append(_label("Winrate", f"{_fmt_num(winrate, 2)}%"))
+    lines.append(_label("PnL сумма", _fmt_num(pnl_sum, 2)))
+    lines.append(_subhr_line())
+
+    # 2) Эквити и просадка.
+    equity_start = float(g.get("equity_start") or 0.0)
+    cumulative_pnl = float(g.get("cumulative_pnl") or 0.0)
+    equity_now = equity_start + cumulative_pnl
+    try:
+        drawdown = float(memory.get_current_drawdown() or 0.0)
+    except Exception:  # noqa: BLE001
+        drawdown = 0.0
+
+    lines.append("== БАЛАНС ==")
+    lines.append(_label("Эквити старт", _fmt_num(equity_start, 2)))
+    lines.append(_label("Накопл. PnL", _fmt_num(cumulative_pnl, 2)))
+    lines.append(_label("Эквити сейчас", _fmt_num(equity_now, 2)))
+    lines.append(_label("Просадка", f"{_fmt_num(drawdown, 2)}%"))
+    lines.append(_subhr_line())
+
+    # 3) Открытые позиции.
+    open_list: list[str] = []
+    for sym, sym_state in (state.get("symbols") or {}).items():
+        if not isinstance(sym_state, dict):
+            continue
+        trade = sym_state.get("open_trade")
+        if not trade:
+            continue
+        side = str(trade.get("side") or "-")
+        entry = trade.get("entry_price")
+        qty = trade.get("qty")
+        open_list.append(
+            f"  - {sym} {side} entry={_fmt_num(entry, 4)} "
+            f"qty={_fmt_num(qty, 4)}"
+        )
+    lines.append("== ОТКРЫТЫЕ ПОЗИЦИИ ==")
+    if open_list:
+        lines.extend(open_list)
+    else:
+        lines.append("  (нет)")
+    lines.append(_subhr_line())
+
+    # 4) AI-Gate 24ч и 30д.
+    try:
+        gate_24 = memory.get_ai_gate_stats(24) or {}
+    except Exception:  # noqa: BLE001
+        gate_24 = {}
+    try:
+        gate_30 = memory.get_ai_gate_stats(720) or {}
+    except Exception:  # noqa: BLE001
+        gate_30 = {}
+    lines.append("== AI-GATE ==")
+    lines.append(_label(
+        "24ч",
+        f"approve={gate_24.get('approve', 0)} "
+        f"veto={gate_24.get('veto', 0)} "
+        f"error={gate_24.get('error', 0)} "
+        f"total={gate_24.get('total', 0)} "
+        f"applied={gate_24.get('applied', 0)}",
+    ))
+    lines.append(_label(
+        "30д",
+        f"approve={gate_30.get('approve', 0)} "
+        f"veto={gate_30.get('veto', 0)} "
+        f"error={gate_30.get('error', 0)} "
+        f"total={gate_30.get('total', 0)} "
+        f"applied={gate_30.get('applied', 0)}",
+    ))
+    lines.append(_subhr_line())
+
+    # 5) Per-symbol stats (топ по pnl_sum).
+    try:
+        per_sym = memory.get_per_symbol_stats(30) or []
+    except Exception:  # noqa: BLE001
+        per_sym = []
+    lines.append("== ПО ПАРАМ (30д) ==")
+    if per_sym:
+        for row in per_sym:
+            lines.append(
+                "  - "
+                + _label(str(row.get("symbol") or "-"), "")
+                + f"cnt={row.get('count', 0)} "
+                + f"win={row.get('wins', 0)} "
+                + f"loss={row.get('losses', 0)} "
+                + f"wr={_fmt_num(row.get('winrate', 0.0), 1)}% "
+                + f"pnl={_fmt_num(row.get('pnl_sum', 0.0), 2)}"
+            )
+    else:
+        lines.append("  (нет данных)")
+    lines.append(_subhr_line())
+
+    # 6) Последние 20 сделок (новые сверху).
+    last20 = list(reversed(trades_30))[:20]
+    lines.append("== ПОСЛЕДНИЕ 20 СДЕЛОК ==")
+    if last20:
+        for t in last20:
+            sym = str(t.get("symbol") or "-")
+            side = str(t.get("side") or "-")
+            pnl_v = t.get("pnl")
+            outcome = str(t.get("outcome") or "OPEN").upper()
+            lines.append(
+                f"  - {sym} {side} pnl={_fmt_num(pnl_v, 2)} {outcome}"
+            )
+    else:
+        lines.append("  (нет данных)")
+
+    return "\n".join(lines)
+
+
+async def _ask_analyst(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    question: str,
 ) -> str:
-    """Заглушка кнопки 🤖 АНАЛИТИК (FEAT-007 / C3)."""
-    return "Аналитик появится в этапе C3"
+    """Задать вопрос Groq и вернуть отформатированную карточку-ответ.
+
+    При пустом ответе или ошибке возвращает понятное сообщение.
+    """
+    system = (
+        "Ты — AI-аналитик торгового бота Zenith-Control. "
+        "Отвечаешь на русском, строго по фактам из контекста. "
+        "Если данных не хватает — честно говоришь."
+    )
+    context_block = _build_analyst_context(state)
+    prompt = (
+        system
+        + "\n\nCONTEXT:\n"
+        + context_block
+        + "\n\nQUESTION: "
+        + str(question or "")
+    )
+    try:
+        text = await ai_groq.call_groq_text(
+            session,
+            prompt,
+            max_output_tokens=1024,
+            temperature=0.3,
+            timeout=25,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] AI-Аналитик: ошибка call_groq_text: {exc}")
+        text = ""
+    if not text or not str(text).strip():
+        return _card(
+            "AI-Аналитик · ответ",
+            "🤖",
+            ["Не удалось получить ответ. Попробуйте позже."],
+        )
+    body_lines = str(text).splitlines() or [str(text)]
+    return _card("AI-Аналитик · ответ", "🤖", body_lines)
 
 
 async def _handle_startstop_menu(
@@ -3319,6 +3576,30 @@ async def _process_callback(
             result = await _handle_startstop_panic_menu(session, state)
         elif data == CB_ANALYST:
             result = await _handle_analyst(session, state)
+        elif data == CB_ANALYST_ASK:
+            result = await _handle_analyst_ask(session, state, chat_id_int)
+        elif data == CB_ANALYST_EX1:
+            result = await _ask_analyst(
+                session, state, _ANALYST_EXAMPLES[0][1]
+            )
+        elif data == CB_ANALYST_EX2:
+            result = await _ask_analyst(
+                session, state, _ANALYST_EXAMPLES[1][1]
+            )
+        elif data == CB_ANALYST_EX3:
+            result = await _ask_analyst(
+                session, state, _ANALYST_EXAMPLES[2][1]
+            )
+        elif data == CB_ANALYST_EX4:
+            result = await _ask_analyst(
+                session, state, _ANALYST_EXAMPLES[3][1]
+            )
+        elif data == CB_ANALYST_CANCEL:
+            _analyst_fsm_state.pop(chat_id_int, None)
+            result = (
+                "👋 Главное меню. Выберите действие кнопкой ниже.",
+                set_keyboard(),
+            )
         elif data == CB_START_BOT:
             result = await _handle_start_bot(session, state)
         elif data == CB_STOP_BOT:
@@ -3573,6 +3854,37 @@ async def _process_message(
             ),
             reply_markup=confirm_kb,
         )
+        return
+
+    # FSM (FEAT-007 / C3): если ждём свободный вопрос аналитику —
+    # перехватываем сообщение и шлём его в Groq.
+    analyst_fsm = _analyst_fsm_state.get(chat_id_int)
+    if analyst_fsm and analyst_fsm.get("mode") == "awaiting_question":
+        started = float(analyst_fsm.get("started") or 0.0)
+        if time.time() - started > _ANALYST_FSM_TIMEOUT_SEC:
+            _analyst_fsm_state.pop(chat_id_int, None)
+            await send_message(
+                session,
+                "Сессия аналитика истекла (5 минут). "
+                "Откройте 🤖 АНАЛИТИК заново.",
+                reply_markup=set_keyboard(),
+            )
+            return
+        question = (text or "").strip()
+        if not question:
+            await send_message(
+                session,
+                "Пустой вопрос. Пришлите текст одним сообщением "
+                "или нажмите «❌ Отмена».",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "❌ Отмена",
+                     "callback_data": CB_ANALYST_CANCEL},
+                ]]},
+            )
+            return
+        _analyst_fsm_state.pop(chat_id_int, None)
+        answer = await _ask_analyst(session, state, question)
+        await send_message(session, answer, reply_markup=set_keyboard())
         return
 
     if lowered in ("/start", "/menu", "/help"):
