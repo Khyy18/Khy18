@@ -41,6 +41,15 @@ import news_engine
 import strategy_v2
 import strategy_v2_meanrevert
 import telegram_bot
+# Хелперы единого визуального стиля v3 (FEAT-002).
+from telegram_bot import (
+    _card,
+    _fmt_num,
+    _fmt_pnl,
+    _label as _label_kill,
+    _status_dot,
+    _subhr_line,
+)
 from exchanges import get_adapter
 
 
@@ -198,7 +207,19 @@ async def _apply_kill_switches(
             g["kill_until_utc"] = _iso(until)
             g["kill_detail"] = detail
             print(f"[KILL] DAILY активирован: {detail}")
-            await _notify_kill(session, f"🛑 <b>DAILY kill-switch</b>\n{detail}")
+            await _notify_kill(
+                session,
+                _card(
+                    "DAILY kill-switch",
+                    "🛑",
+                    [
+                        _label_kill("Тип", f"{_status_dot('bad')} DAILY"),
+                        _label_kill("Убыток", f"{_fmt_num(loss_ratio * 100, 2)}%"),
+                        _label_kill("Лимит", f"{_fmt_num(config.MAX_DAILY_LOSS * 100, 2)}%"),
+                        _label_kill("Пауза до", _iso(until)),
+                    ],
+                ),
+            )
             ks_before = "DAILY"
 
     # WEEKLY: loss_pct >= MAX_WEEKLY_LOSS, из NONE или DAILY.
@@ -215,7 +236,19 @@ async def _apply_kill_switches(
             g["kill_until_utc"] = _iso(until)
             g["kill_detail"] = detail
             print(f"[KILL] WEEKLY активирован: {detail}")
-            await _notify_kill(session, f"🛑 <b>WEEKLY kill-switch</b>\n{detail}")
+            await _notify_kill(
+                session,
+                _card(
+                    "WEEKLY kill-switch",
+                    "🛑",
+                    [
+                        _label_kill("Тип", f"{_status_dot('bad')} WEEKLY"),
+                        _label_kill("Убыток", f"{_fmt_num(loss_ratio * 100, 2)}%"),
+                        _label_kill("Лимит", f"{_fmt_num(config.MAX_WEEKLY_LOSS * 100, 2)}%"),
+                        _label_kill("Пауза до", _iso(until)),
+                    ],
+                ),
+            )
             ks_before = "WEEKLY"
 
     # MDD: по текущей просадке от HWM.
@@ -235,7 +268,16 @@ async def _apply_kill_switches(
         print(f"[KILL] MDD активирован: {detail}")
         await _notify_kill(
             session,
-            "🛡 <b>MDD kill-switch</b>\n" + detail,
+            _card(
+                "MDD kill-switch",
+                "🛡",
+                [
+                    _label_kill("Тип", f"{_status_dot('bad')} MDD"),
+                    _label_kill("Просадка", f"{_fmt_num(current_dd * 100, 2)}%"),
+                    _label_kill("Лимит", f"{_fmt_num(config.MAX_DRAWDOWN * 100, 2)}%"),
+                    "Снятие только вручную (📊 СТАТУС → 🆘)",
+                ],
+            ),
         )
 
 
@@ -432,22 +474,35 @@ async def _heartbeat_tick(
             recent_rejections += 1
 
     equity_line = (
-        f"{proxy_equity:.2f}" if proxy_equity is not None else "-"
+        _fmt_num(proxy_equity, 2) if proxy_equity is not None else "-"
     )
-    parts = [
-        "💓 <b>Heartbeat</b> - бот жив",
-        f"Время: {now.strftime('%Y-%m-%d %H:%M UTC')}",
-        f"Торговля: {bot_running}  |  Kill-switch: {ks}  |  Blackout: {blackout_str}",
-        f"Эквити: {equity_line} USDT (cum PnL {cumulative_pnl:+.2f})",
-        f"PnL суточный: {daily_pnl:+.4f}  |  недельный: {weekly_pnl:+.4f}",
-        f"Открытых позиций: {open_positions} / {len(config.SYMBOLS)}",
-        f"Отклонений за {int(interval / 3600)}ч: {recent_rejections}",
+    bot_dot = _status_dot("ok" if g.get("bot_running", True) else "bad")
+    ks_dot = _status_dot("bad" if ks != "NONE" else "ok")
+    bk_dot = _status_dot("warn" if blackout else "ok")
+
+    body = [
+        _label_kill("Время", now.strftime("%Y-%m-%d %H:%M UTC")),
+        _label_kill("Торговля", f"{bot_dot} {bot_running}"),
+        _label_kill("Kill-switch", f"{ks_dot} {ks}"),
+        _label_kill("Blackout", f"{bk_dot} {blackout_str}"),
+        _subhr_line(),
+        _label_kill("Эквити", f"{equity_line} USDT"),
+        _label_kill("Cum PnL", f"{_fmt_pnl(cumulative_pnl, 2)} USDT"),
+        _label_kill("Сутки PnL", _fmt_pnl(daily_pnl, 4)),
+        _label_kill("Неделя PnL", _fmt_pnl(weekly_pnl, 4)),
+        _subhr_line(),
+        _label_kill("Открыто", f"{open_positions} / {len(config.SYMBOLS)}"),
+        _label_kill(
+            f"Отклонений {int(interval / 3600)}ч",
+            str(recent_rejections),
+        ),
     ]
+    text = _card("Heartbeat — бот жив", "💓", body)
 
     try:
         await telegram_bot.send_message(
             session,
-            "\n".join(parts),
+            text,
             reply_markup=telegram_bot.set_keyboard(),
         )
         print(f"[HB] Heartbeat отправлен в Telegram")
@@ -722,21 +777,24 @@ async def _check_closed_exchange_position(
         side = str(trade.get("side") or "")
         side_label = "LONG" if side == "Buy" else "SHORT"
         pnl_pct = ((pnl / (entry * qty)) * 100) if entry > 0 and qty > 0 else 0.0
-        outcome_emoji = "✅" if outcome == "WIN" else "❌"
+        outcome_dot = _status_dot("ok" if outcome == "WIN" else "bad")
         outcome_ru = "ПРИБЫЛЬ" if outcome == "WIN" else "УБЫТОК"
         duration = _format_duration(trade.get("entry_ts_iso"), _utc_now())
-        # Стиль mockup'а: категорийные эмодзи только в заголовке и
-        # ⏱ перед длительностью. Остальное — чистые строки.
-        notify_text = (
-            f"{outcome_emoji} <b>ЗАКРЫТА СДЕЛКА</b> — {outcome_ru}\n\n"
-            f"Пара: {symbol}\n"
-            f"Сторона: {side_label}\n"
-            f"Вход: {entry:.4f} → Выход: {exit_price:.4f}\n"
-            f"PnL: {pnl:+.4f} USDT ({pnl_pct:+.2f}%)\n"
-            f"Исход: {outcome}\n"
-            f"⏱ Длительность: {duration}\n"
-            f"Суточный PnL: {g['daily_pnl']:+.4f} USDT"
-        )
+        body = [
+            _label_kill("Пара", str(symbol)),
+            _label_kill("Сторона", telegram_bot._dir_arrow(side_label)),
+            _label_kill(
+                "Цены",
+                f"{_fmt_num(entry, 4)} → {_fmt_num(exit_price, 4)}",
+            ),
+            _label_kill("PnL", f"{_fmt_pnl(pnl, 4)} USDT"),
+            _label_kill("PnL %", telegram_bot._fmt_pct(pnl_pct, 2)),
+            _label_kill("Исход", f"{outcome_dot} {outcome} · {outcome_ru}"),
+            _label_kill("⏱ Длительность", duration),
+            _subhr_line(),
+            _label_kill("Сутки PnL", f"{_fmt_pnl(g['daily_pnl'], 4)} USDT"),
+        ]
+        notify_text = _card("ЗАКРЫТА СДЕЛКА", "✅" if outcome == "WIN" else "❌", body)
         await telegram_bot.send_message(
             session, notify_text, reply_markup=telegram_bot.set_keyboard()
         )
@@ -1134,8 +1192,7 @@ async def _process_symbol(
             else 0.0
         )
         # Целевая цена по R/R 1:2. Реальный выход - через trailing-stop
-        # (chandelier exit), жёсткого TP в стратегии нет. Пометка
-        # "трейлинг" честно сообщает пользователю это.
+        # (chandelier exit), жёсткого TP в стратегии нет.
         risk_per_unit = abs(entry_price - hard_stop)
         if side == "Buy":
             tp_price = entry_price + 2 * risk_per_unit
@@ -1158,55 +1215,62 @@ async def _process_symbol(
             "CRISIS": "Кризис",
         }.get(regime_raw)
         # Индикатор счёта (ДЕМО / РЕАЛ) по IS_TESTNET.
-        account_label = "📊 ДЕМО" if config.IS_TESTNET else "💰 РЕАЛ"
+        account_dot = _status_dot("ok" if config.IS_TESTNET else "bad")
+        account_label = "ДЕМО" if config.IS_TESTNET else "РЕАЛ"
         reason = str((order.get("meta") or {}).get("reason") or "")
-        # Стиль карточки соответствует утверждённому mockup'у:
-        # категорийный эмодзи только в заголовке и в строках AI-GATE /
-        # режим рынка / счёт. Остальные строки — чистый текст, как в v1/v2.
-        notify_text = (
-            f"📈 <b>ОТКРЫТА СДЕЛКА</b>\n\n"
-            f"Пара: {symbol}\n"
-            f"Сторона: {side_label}\n"
-            f"Размер: {qty} (~${notional:.2f})\n"
-            f"Цена входа: {entry_price:.4f}\n"
-            f"Стоп-лосс: {hard_stop:.4f} (−{stop_pct:.2f}%)\n"
-            f"Тейк-профит: {tp_price:.4f} (+{tp_pct:.2f}%)\n"
-            f"R/R: 1 : 2.0"
-        )
+
+        body = [
+            _label_kill("Пара", str(symbol)),
+            _label_kill("Сторона", telegram_bot._dir_arrow(side_label)),
+            _label_kill(
+                "Размер",
+                f"{_fmt_num(qty, 4)}  (~${_fmt_num(notional, 2)})",
+            ),
+            _label_kill("Вход", _fmt_num(entry_price, 4)),
+            _label_kill(
+                "Стоп-лосс",
+                f"{_fmt_num(hard_stop, 4)}  ({telegram_bot._fmt_pct(-abs(stop_pct), 2)})",
+            ),
+            _label_kill(
+                "Тейк-профит",
+                f"{_fmt_num(tp_price, 4)}  ({telegram_bot._fmt_pct(abs(tp_pct), 2)})",
+            ),
+            _label_kill("R/R", "1 : 2.0"),
+        ]
         if reason:
-            notify_text += f"\nПричина: {reason}"
-        # Строка про AI-veto gate с эмодзи 🧠 в начале (verdict-перевод
-        # одинаковый: approve→одобрено, veto→veto, error→ошибка).
-        notify_text += "\n"
+            body.append(_label_kill("Причина", reason))
+        body.append(_subhr_line())
+
+        # AI-Gate секция.
         if gate_mode == "off":
-            notify_text += "\n🧠 AI-GATE: ⚪ выключен"
+            body.append(_label_kill("AI-GATE", f"{_status_dot('off')} выключен"))
         elif gate_mode == "shadow":
             short_reason = (gate_reason[:80] + "…") if len(gate_reason) > 80 else gate_reason
+            body.append(_label_kill(
+                "AI-GATE",
+                f"{_status_dot('warn')} наблюдение (открыто без блокировки)",
+            ))
             if gate_verdict == "veto":
-                notify_text += (
-                    f"\n🧠 AI-GATE: 👁 наблюдение (сделка открыта без блокировки)\n"
-                    f"Причина: would veto — {short_reason}"
-                )
+                body.append(_label_kill("  Прим.", f"would veto — {short_reason}"))
             elif gate_verdict == "error":
-                notify_text += (
-                    f"\n🧠 AI-GATE: 👁 наблюдение (сделка открыта без блокировки)\n"
-                    f"Причина: ⚠️ error — fail-CLOSED would block ({short_reason})"
-                )
+                body.append(_label_kill(
+                    "  Прим.",
+                    f"error — fail-CLOSED would block ({short_reason})",
+                ))
             else:
-                notify_text += (
-                    "\n🧠 AI-GATE: 👁 наблюдение (сделка открыта без блокировки)\n"
-                    "Причина: would approve"
-                )
+                body.append(_label_kill("  Прим.", "would approve"))
         else:  # active
-            notify_text += f"\n🧠 AI-GATE: ✅ одобрено"
+            body.append(_label_kill("AI-GATE", f"{_status_dot('ok')} одобрено"))
             if gate_reason:
                 short_gate_reason = (
                     gate_reason[:80] + "…" if len(gate_reason) > 80 else gate_reason
                 )
-                notify_text += f"\nПричина: {short_gate_reason}"
+                body.append(_label_kill("  Причина", short_gate_reason))
         if regime_ru:
-            notify_text += f"\nРежим рынка: {regime_ru}"
-        notify_text += f"\nСчёт: {account_label}"
+            body.append(_label_kill("Режим рынка", regime_ru))
+        body.append(_label_kill("Счёт", f"{account_dot} {account_label}"))
+
+        notify_text = _card("ОТКРЫТА СДЕЛКА", "📈", body)
         await telegram_bot.send_message(
             session, notify_text, reply_markup=telegram_bot.set_keyboard()
         )
@@ -1348,12 +1412,16 @@ async def main() -> None:
         # Стартовое push-сообщение. Показываем баланс, режим торговли
         # (ДЕМО / РЕАЛ), DRY_RUN, AI-Gate и список символов - чтобы
         # пользователь сразу видел, на каком счёте бот работает.
+        is_demo = bool(config.IS_TESTNET)
+        mode_dot = _status_dot("ok" if is_demo else "bad")
         mode_label = (
-            "ДЕМО (OKX testnet, виртуальные)"
-            if config.IS_TESTNET
-            else "⚠ РЕАЛ (OKX mainnet, реальные деньги)"
+            "ДЕМО (OKX testnet)"
+            if is_demo
+            else "РЕАЛ (OKX mainnet, реальные деньги)"
         )
-        dry_run_label = "ВКЛ" if getattr(config, "DRY_RUN", False) else "ВЫКЛ"
+        dry_run_on = bool(getattr(config, "DRY_RUN", False))
+        dry_run_label = "ВКЛ" if dry_run_on else "ВЫКЛ"
+        dry_dot = _status_dot("warn" if dry_run_on else "ok")
         gate_mode_raw = str(
             getattr(config, "AI_TRADE_GATE_MODE", "off") or "off"
         ).lower()
@@ -1362,20 +1430,25 @@ async def main() -> None:
             "shadow": "наблюдение",
             "off": "выключен",
         }.get(gate_mode_raw, gate_mode_raw)
+        gate_dot = _status_dot({
+            "active": "ok",
+            "shadow": "warn",
+            "off": "off",
+        }.get(gate_mode_raw, "off"))
         balance_str = (
-            f"{float(balance):.2f}"
+            f"{_fmt_num(float(balance), 2)} USDT"
             if balance is not None
             else "не удалось получить"
         )
         symbols_line = " ".join(config.SYMBOLS)
-        start_msg = (
-            "🚀 <b>Zenith-Control Ultimate v3 запущен</b>\n\n"
-            f"💰 Баланс: {balance_str} USDT\n"
-            f"🏦 Режим: {mode_label}\n"
-            f"🧪 DRY_RUN: {dry_run_label}\n"
-            f"🛡 AI-Gate: {gate_mode_label}\n"
-            f"🎯 Символы: {symbols_line}"
-        )
+        body = [
+            _label_kill("Баланс", balance_str),
+            _label_kill("Режим", f"{mode_dot} {mode_label}"),
+            _label_kill("DRY_RUN", f"{dry_dot} {dry_run_label}"),
+            _label_kill("AI-Gate", f"{gate_dot} {gate_mode_label}"),
+            _label_kill("Символы", symbols_line),
+        ]
+        start_msg = _card("Zenith-Control v3 запущен", "🚀", body)
         await telegram_bot.send_message(
             session,
             start_msg,

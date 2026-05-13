@@ -73,6 +73,14 @@ CB_ANALYST = "zc:analyst"
 # внутрь.
 CB_STARTSTOP_PANIC = "zc:ssp"
 
+# Заглушки для следующих этапов — кнопки появляются сейчас, реальные
+# обработчики будут добавлены в соответствующих FEAT-ах.
+CB_AGGR_MENU = "zc:aggr"        # FEAT-003: слайдер агрессивности
+CB_BLOCKS = "zc:blocks"          # FEAT-004: запретный список (manual + auto)
+CB_EXPORT_ENV = "zc:env_export"  # FEAT-005: экспорт настроек .env
+CB_PAIRS = "zc:pairs"            # FEAT-006: статистика по парам
+CB_BT_MENU = "zc:bt"             # FEAT-008: Backtest UI
+
 # Подменю / действия.
 CB_TOGGLE_DRY_RUN = "zc:toggle_dry"
 CB_AIGATE_MENU = "zc:aigate_menu"
@@ -459,22 +467,30 @@ async def notify_trade_blocked_by_gate_error(
 
     is_long = str(side).lower() in ("buy", "long")
     side_label = "LONG" if is_long else "SHORT"
-    dir_arrow = "↗️" if is_long else "↘️"
     raw_reason = error_reason or ""
     reason_txt = (raw_reason[:200] + "…") if len(raw_reason) > 200 else raw_reason
     utc_now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    text = (
-        f"⚠️ <b>СДЕЛКА ЗАБЛОКИРОВАНА (Groq недоступен)</b>\n\n"
-        f"Пара: {symbol}\n"
-        f"Сторона: {side_label} (планировалась)\n"
-        f"Сигнал: {strategy_name}\n"
-        f"Цена: {price}\n\n"
-        f"🧠 AI-GATE: ❌ ошибка\n"
-        f"Причина: {reason_txt}\n\n"
-        f"Это не потеря — сделка не открыта из соображений безопасности.\n"
-        f"Переключить в наблюдение: кнопка 🛡 AI-GATE → «Наблюдение»\n\n"
-        f"⏱ {utc_now}"
+    body = [
+        _label("Пара", str(symbol)),
+        _label("Сторона", f"{_dir_arrow(side_label)} (планировалась)"),
+        _label("Сигнал", str(strategy_name)),
+        _label("Цена", _fmt_num(price, 4)),
+        _subhr_line(),
+        f"AI-GATE: {_status_dot('warn')} ошибка",
+        _label("Причина", reason_txt),
+        _subhr_line(),
+        "Это не потеря — сделка не открыта",
+        "из соображений безопасности.",
+        "Перейти в наблюдение:",
+        "  🛡 AI-GATE → «Перейти в наблюдение»",
+        _subhr_line(),
+        _label("⏱", utc_now),
+    ]
+    text = _card(
+        "СДЕЛКА ЗАБЛОКИРОВАНА (Groq недоступен)",
+        "⚠️",
+        body,
     )
     try:
         await send_message(session, text, reply_markup=set_keyboard())
@@ -670,6 +686,55 @@ def _write_env_var(name: str, value: str) -> bool:
         return False
 
 
+# --- Заглушки для следующих этапов -----------------------------------------
+# Новые кнопки FEAT-002 показываются уже сейчас; их обработчики появятся в
+# FEAT-003/004/005/006/008. Чтобы не плодить веточки в диспетчере на каждый
+# этап, отдаём единый плейсхолдер с указанием стадии.
+
+def _stage_placeholder(stage: str) -> str:
+    """Единый плейсхолдер для кнопок будущих этапов."""
+    return _card(
+        f"Этап {stage}",
+        "🛠",
+        ["Будет добавлено в этапе " + stage],
+    )
+
+
+async def _handle_aggr_stub(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Заглушка кнопки 🎚 Агрессивность (FEAT-003 / B1)."""
+    return _stage_placeholder("B1 (агрессивность)")
+
+
+async def _handle_blocks_stub(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Заглушка кнопки 🚫 Запреты (FEAT-004 / B2)."""
+    return _stage_placeholder("B2 (запретный список)")
+
+
+async def _handle_export_env_stub(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Заглушка кнопки 📤 Экспорт .env (FEAT-005 / B3)."""
+    return _stage_placeholder("B3 (экспорт .env)")
+
+
+async def _handle_pairs_stub(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Заглушка кнопки 📈 По парам (FEAT-006 / C2)."""
+    return _stage_placeholder("C2 (статистика по парам)")
+
+
+async def _handle_bt_stub(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Заглушка кнопки 📉 Backtest (FEAT-008 / D)."""
+    return _stage_placeholder("D (Backtest UI)")
+
+
 # --- Обработчики кнопок главного меню --------------------------------------
 
 async def _handle_status(
@@ -690,7 +755,8 @@ async def _handle_status(
     )
     total_cnt = len(config.SYMBOLS)
 
-    # Режимы: две строки для 7 символов (4 + 3).
+    # Режимы: две строки для 7 символов (4 + 3). Каждый символ — `dot SYM`
+    # с обрезанием хвоста USDT для компактности (BTCUSDT → BTC).
     regime_blocks: list[str] = []
     for symbol in config.SYMBOLS:
         sym_state = (state.get("symbols") or {}).get(symbol) or {}
@@ -698,9 +764,8 @@ async def _handle_status(
         emoji = _regime_emoji(regime.get("regime") or "")
         short_sym = symbol.replace("USDT", "")
         regime_blocks.append(f"{emoji} {short_sym}")
-    # Делим на строки по 4 в первой строке и остаток во второй.
-    row1 = " ".join(regime_blocks[:4])
-    row2 = " ".join(regime_blocks[4:])
+    row1 = "  ".join(regime_blocks[:4])
+    row2 = "  ".join(regime_blocks[4:])
 
     # AI-Gate статистика.
     try:
@@ -712,17 +777,23 @@ async def _handle_status(
         getattr(config, "AI_TRADE_GATE_MODE", "off") or "off"
     ).lower()
     gate_mode_ru = {
-        "active": "активен (строгая защита)",
-        "shadow": "наблюдение (без блокировки)",
+        "active": "активен",
+        "shadow": "наблюдение",
         "off": "выключен",
     }.get(gate_mode_raw, gate_mode_raw)
+    gate_dot = _status_dot({
+        "active": "ok",
+        "shadow": "warn",
+        "off": "off",
+    }.get(gate_mode_raw, "off"))
 
-    dry_run_label = "ВКЛ" if getattr(config, "DRY_RUN", False) else "ВЫКЛ"
-    mode_label = (
-        "ДЕМО (OKX testnet)"
-        if config.IS_TESTNET
-        else "⚠ РЕАЛ (OKX mainnet, реальные деньги)"
-    )
+    dry_run_on = bool(getattr(config, "DRY_RUN", False))
+    dry_run_label = "ВКЛ" if dry_run_on else "ВЫКЛ"
+    dry_dot = _status_dot("warn" if dry_run_on else "ok")
+
+    is_demo = bool(config.IS_TESTNET)
+    mode_label = "ДЕМО (OKX testnet)" if is_demo else "РЕАЛ (OKX mainnet)"
+    mode_dot = _status_dot("ok" if is_demo else "bad")
 
     kill_state = str(g.get("kill_switch_state") or "NONE")
     kill_until_iso = g.get("kill_until_utc")
@@ -732,53 +803,79 @@ async def _handle_status(
         kill_line = f"{kill_state} (без срока)"
     else:
         kill_line = "NONE"
+    kill_dot = _status_dot("bad" if kill_state != "NONE" else "ok")
 
     started_epoch = float(g.get("started_epoch") or 0.0)
     uptime = _format_uptime(time.time() - started_epoch) if started_epoch else "-"
 
-    bot_running = "🟢 запущен" if g.get("bot_running", True) else "🔴 на паузе"
+    bot_running = bool(g.get("bot_running", True))
+    bot_dot = _status_dot("ok" if bot_running else "bad")
+    bot_label = "запущен" if bot_running else "на паузе"
 
-    lines = [
-        "📊 <b>Статус</b>",
-        "",
-        f"💰 Баланс: {equity_now:.2f} USDT ({pct_from_start:+.2f}% от старта)",
-        f"📈 Сделки: {stats['count']} всего, винрейт {stats['winrate']:.1f}%",
-        f"📂 Открыто: {open_cnt} / {total_cnt}",
-        "",
-        "🎯 Режимы:",
-        f"   {row1}",
+    winrate = float(stats.get("winrate") or 0.0)
+
+    body: list[str] = [
+        _label("Баланс", f"{_fmt_num(equity_now, 2)} USDT"),
+        _label("От старта", _fmt_pct(pct_from_start, 2)),
+        _subhr_line(),
+        _label("Сделки", f"{int(stats.get('count') or 0)}"),
+        _label("Винрейт", f"{_fmt_num(winrate, 1)}%"),
+        _label("Открыто", f"{open_cnt} / {total_cnt}"),
+        _subhr_line(),
+        "Режимы:",
+        f"  {row1}",
     ]
     if row2:
-        lines.append(f"   {row2}")
-    lines += [
-        "",
-        f"🛡 AI-Gate: {gate_mode_ru}",
-        f"   За 24ч: ✅ {gate_stats['approve']}  🚫 {gate_stats['veto']}  "
-        f"⚠ {gate_stats['error']}  (всего {gate_stats['total']})",
-        "",
-        f"🧪 DRY_RUN: {dry_run_label}",
-        f"🏦 Режим: {mode_label}",
-        f"🛡 Kill-switch: {kill_line}",
-        f"⏱ Uptime: {uptime}",
-        f"⏯ Торговля: {bot_running}",
-    ]
+        body.append(f"  {row2}")
+    body.append(_subhr_line())
+    body.append(_label("AI-Gate", f"{gate_dot} {gate_mode_ru}"))
+    body.append(
+        f"  24ч: 🟢 {gate_stats['approve']}  🔴 {gate_stats['veto']}  "
+        f"🟡 {gate_stats['error']}  · {gate_stats['total']}"
+    )
+    body.append(_subhr_line())
+    body.append(_label("DRY_RUN", f"{dry_dot} {dry_run_label}"))
+    body.append(_label("Режим", f"{mode_dot} {mode_label}"))
+    body.append(_label("Kill", f"{kill_dot} {kill_line}"))
+    body.append(_label("Uptime", uptime))
+    body.append(_label("Торговля", f"{bot_dot} {bot_label}"))
+
+    text = _card("Статус", "📊", body)
+
+    # Кнопка агрессивности — всегда отображает текущий уровень из конфига.
+    aggr_lvl = str(getattr(config, "AGGRESSIVENESS", "balanced") or "balanced")
+    aggr_lvl_ru = {
+        "conservative": "консерв.",
+        "balanced": "баланс",
+        "aggressive": "агрессив.",
+    }.get(aggr_lvl.lower(), aggr_lvl)
 
     inline: list[list[dict[str, Any]]] = [
         [
-            {"text": "🧪 Переключить DRY_RUN", "callback_data": CB_TOGGLE_DRY_RUN},
-            {"text": "🤖 Режим AI-Gate", "callback_data": CB_AIGATE_MENU},
+            {"text": f"🎚 Агрессивность: {aggr_lvl_ru}",
+             "callback_data": CB_AGGR_MENU},
+            {"text": "🧪 DRY_RUN", "callback_data": CB_TOGGLE_DRY_RUN},
         ],
         [
+            {"text": "🤖 AI-Gate", "callback_data": CB_AIGATE_MENU},
             {"text": "🏦 Демо/Реал", "callback_data": CB_MODE_SWITCH},
+        ],
+        [
+            {"text": "🚫 Запреты", "callback_data": CB_BLOCKS},
+            {"text": "📈 По парам", "callback_data": CB_PAIRS},
+        ],
+        [
+            {"text": "📉 Backtest", "callback_data": CB_BT_MENU},
+            {"text": "🤖 GROQ", "callback_data": CB_GROQ},
         ],
     ]
     if kill_state != "NONE":
         inline.append(
             [{"text": "🆘 Снять kill-switch", "callback_data": CB_KILL_CLEAR}]
         )
-    inline.append([{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}])
+    inline.append([{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}])
 
-    return "\n".join(lines), {"inline_keyboard": inline}
+    return text, {"inline_keyboard": inline}
 
 
 async def _handle_positions(
@@ -837,40 +934,47 @@ async def _handle_positions(
         })
 
     if not positions:
-        return "💼 Открытых позиций нет."
+        return _card("Позиции", "📈", ["Нет открытых позиций"])
 
     # Сортировка по PnL abs по убыванию.
     positions.sort(key=lambda p: p["pnl_abs"], reverse=True)
 
     now = datetime.now(tz=timezone.utc)
-    lines = ["📈 <b>Открытые позиции</b>", ""]
-    for p in positions:
-        is_long = p["side"] == "Buy"
-        side_emoji = "🟢" if is_long else "🔴"
-        side_label = "LONG" if is_long else "SHORT"
+    body: list[str] = []
+    for idx, p in enumerate(positions):
+        if idx > 0:
+            body.append(_subhr_line())
+        side_label = "LONG" if p["side"] == "Buy" else "SHORT"
+        # Точечный индикатор по знаку PnL.
+        if p["pnl_abs"] > 0:
+            dot = _status_dot("ok")
+        elif p["pnl_abs"] < 0:
+            dot = _status_dot("bad")
+        else:
+            dot = _status_dot("warn")
         entry_ts = _parse_iso(p["entry_ts_iso"])
         hold = (
             _format_uptime((now - entry_ts).total_seconds())
             if entry_ts else "-"
         )
-        # Прогресс к TP: TP у нас не жёсткий (trailing), показываем nan.
-        # Безопаснее не показывать строку, чем обмануть пользователя.
-        lines.append(
-            f"{side_emoji} <b>{p['symbol']}</b> {side_label}\n"
-            f"   вход: {p['entry']:.4f} → сейчас: {p['cur']:.4f}\n"
-            f"   PnL: {p['pnl_abs']:+.2f} USDT ({p['pnl_pct']:+.2f}%)\n"
-            f"   время: {hold}\n"
-            f"   стоп: {p['stop']:.4f} ({p['stop_pct']:+.2f}% от входа)"
-        )
-        lines.append("")
-    return "\n".join(lines).rstrip()
+        body.append(f"{dot} {p['symbol']}  {_dir_arrow(side_label)}")
+        body.append(_label("  Вход", _fmt_num(p["entry"], 4)))
+        body.append(_label("  Сейчас", _fmt_num(p["cur"], 4)))
+        body.append(_label("  PnL", f"{_fmt_pnl(p['pnl_abs'], 2)} USDT"))
+        body.append(_label("  PnL %", _fmt_pct(p["pnl_pct"], 2)))
+        body.append(_label("  Время", hold))
+        body.append(_label(
+            "  Стоп",
+            f"{_fmt_num(p['stop'], 4)}  ({_fmt_pct(p['stop_pct'], 2)})",
+        ))
+    return _card("Позиции", "📈", body)
 
 
 async def _handle_regimes(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
     """Режимы рынка по 7 символам + последнее обновление."""
-    lines = ["🎯 <b>Режимы рынка</b>", ""]
+    body: list[str] = []
     last_ts: Optional[datetime] = None
     for symbol in config.SYMBOLS:
         sym_state = (state.get("symbols") or {}).get(symbol) or {}
@@ -878,24 +982,28 @@ async def _handle_regimes(
         r_name = str(regime.get("regime") or "-")
         conf = regime.get("confidence")
         reason = str(regime.get("reason") or "").strip()
-        if len(reason) > 80:
-            reason = reason[:77] + "..."
+        if len(reason) > 60:
+            reason = reason[:57] + "..."
         ts = _parse_iso(regime.get("ts"))
         if ts and (last_ts is None or ts > last_ts):
             last_ts = ts
-        emoji = _regime_emoji(r_name)
+        # Точечный индикатор: тренд = ok, боковик = warn, кризис = bad.
+        r_up = r_name.upper()
+        dot = _status_dot({
+            "TRENDING": "ok",
+            "RANGING": "warn",
+            "CRISIS": "bad",
+        }.get(r_up, "off"))
         conf_str = f"{int(conf)}" if conf is not None else "?"
-        lines.append(
-            f"{emoji} <b>{symbol}</b> - {_ru_regime(r_name)} (уверенность {conf_str})"
+        body.append(
+            f"{dot} {symbol}  {_ru_regime(r_name)}  conf={conf_str}"
         )
         if reason:
-            lines.append(f"   «{reason}»")
-        lines.append("")
+            body.append(f"  «{reason}»")
     if last_ts:
-        lines.append(
-            f"🕐 Последнее обновление: {last_ts.strftime('%H:%M UTC')}"
-        )
-    return "\n".join(lines).rstrip()
+        body.append(_subhr_line())
+        body.append(_label("Обновлено", last_ts.strftime("%H:%M UTC")))
+    return _card("Режимы", "🎯", body)
 
 
 async def _handle_aigate(
@@ -906,10 +1014,15 @@ async def _handle_aigate(
         getattr(config, "AI_TRADE_GATE_MODE", "off") or "off"
     ).lower()
     gate_mode_ru = {
-        "active": "активен (строгая защита)",
-        "shadow": "наблюдение (без блокировки)",
+        "active": "активен",
+        "shadow": "наблюдение",
         "off": "выключен",
     }.get(gate_mode_raw, gate_mode_raw)
+    gate_dot = _status_dot({
+        "active": "ok",
+        "shadow": "warn",
+        "off": "off",
+    }.get(gate_mode_raw, "off"))
 
     try:
         stats24 = memory.get_ai_gate_stats(24)
@@ -921,97 +1034,107 @@ async def _handle_aigate(
         stats7d = dict(stats24)
         top_reasons = []
 
-    lines = [
-        f"🛡 <b>AI-Gate</b>: {gate_mode_ru}",
-        "",
-        "📊 За 24 часа:",
-        f"   ✅ одобрено:  {stats24['approve']}",
-        f"   🚫 veto:      {stats24['veto']}",
-        f"   ⚠ ошибка:    {stats24['error']}",
-        f"   Всего:       {stats24['total']}",
-        "",
-        "📅 За 7 дней:",
-        f"   ✅ {stats7d['approve']} / 🚫 {stats7d['veto']} / ⚠ {stats7d['error']}",
-        "",
-        "🎯 Топ причин блокировки (7 дней):",
+    body: list[str] = [
+        _label("Режим", f"{gate_dot} {gate_mode_ru}"),
+        _subhr_line(),
+        "За 24 часа:",
+        _label("  Одобрено", f"{stats24['approve']}"),
+        _label("  Veto", f"{stats24['veto']}"),
+        _label("  Ошибка", f"{stats24['error']}"),
+        _label("  Всего", f"{stats24['total']}"),
+        _subhr_line(),
+        "За 7 дней:",
+        f"  🟢 {stats7d['approve']}  🔴 {stats7d['veto']}  🟡 {stats7d['error']}",
+        _subhr_line(),
+        "Топ причин блокировки (7 дней):",
     ]
     if top_reasons:
         for i, r in enumerate(top_reasons, start=1):
             reason = str(r.get("reason") or "-")
-            if len(reason) > 80:
-                reason = reason[:77] + "..."
-            lines.append(f"   {i}. {reason} ({r['count']})")
+            if len(reason) > 60:
+                reason = reason[:57] + "..."
+            body.append(f"  {i}. {reason} ({r['count']})")
     else:
-        lines.append("   (блокировок за 7 дней нет)")
+        body.append("  (блокировок за 7 дней нет)")
 
-    # Inline-кнопки: адаптивно под текущий режим.
+    text = _card("AI-Gate", "🛡", body)
+
+    # Inline-кнопки: адаптивно под текущий режим. Лаконичные ASCII-метки.
     inline: list[list[dict[str, Any]]] = []
     if gate_mode_raw == "active":
         inline.append([
-            {"text": "🔀 Переключить в наблюдение",
+            {"text": "Перейти в наблюдение",
              "callback_data": CB_AIGATE_SET_SHADOW},
         ])
         inline.append([
-            {"text": "🔀 Выключить AI-Gate",
+            {"text": "Выключить",
              "callback_data": CB_AIGATE_SET_OFF},
         ])
     elif gate_mode_raw == "shadow":
         inline.append([
-            {"text": "🔀 Включить защиту (active)",
+            {"text": "Включить active",
              "callback_data": CB_AIGATE_SET_ACTIVE},
         ])
         inline.append([
-            {"text": "🔀 Выключить AI-Gate",
+            {"text": "Выключить",
              "callback_data": CB_AIGATE_SET_OFF},
         ])
     else:  # off
         inline.append([
-            {"text": "🔀 Включить защиту (active)",
+            {"text": "Включить active",
              "callback_data": CB_AIGATE_SET_ACTIVE},
         ])
         inline.append([
-            {"text": "🔀 Включить наблюдение (shadow)",
+            {"text": "Перейти в наблюдение",
              "callback_data": CB_AIGATE_SET_SHADOW},
         ])
     inline.append([
-        {"text": "📜 Последние 10 решений",
+        {"text": "📜 Последние 10",
          "callback_data": CB_AIGATE_RECENT},
     ])
-    inline.append([{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}])
+    inline.append([{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}])
 
-    return "\n".join(lines), {"inline_keyboard": inline}
+    return text, {"inline_keyboard": inline}
 
 
 async def _handle_aigate_recent(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    """Последние 10 решений AI-Gate."""
+    """Последние 10 решений AI-Gate. Таблица: время · символ · side · verdict."""
     try:
         recs = memory.get_ai_gate_recent(10)
     except Exception as exc:  # noqa: BLE001
         print(f"[TG] get_ai_gate_recent: {exc}")
         recs = []
     if not recs:
-        return "📜 Решений AI-Gate пока нет."
-    lines = ["📜 <b>Последние решения AI-Gate</b>", ""]
+        return _card("AI-Gate · последние 10", "📜", ["Решений пока нет"])
+    body: list[str] = []
     for r in recs:
         ts = _parse_iso(r.get("ts"))
         ts_s = ts.strftime("%d.%m %H:%M") if ts else (r.get("ts") or "-")
-        symbol = r.get("symbol") or "-"
-        side = r.get("side") or "-"
-        verdict_ru = _ru_verdict(r.get("verdict") or "")
-        applied_mark = " ✅" if r.get("applied") else ""
-        conf = r.get("confidence")
-        conf_s = f" conf={int(conf)}" if conf is not None else ""
-        reason = str(r.get("reason") or "").strip()
-        if len(reason) > 100:
-            reason = reason[:97] + "..."
-        lines.append(
-            f"• {ts_s} {symbol} {side}: {verdict_ru}{applied_mark}{conf_s}"
+        symbol = str(r.get("symbol") or "-")
+        side = str(r.get("side") or "-")
+        verdict_raw = str(r.get("verdict") or "").lower()
+        verdict_ru = _ru_verdict(verdict_raw)
+        applied_mark = " ✓" if r.get("applied") else ""
+        # Точечный индикатор по verdict.
+        dot = _status_dot({
+            "approve": "ok",
+            "veto": "bad",
+            "error": "warn",
+        }.get(verdict_raw, "off"))
+        # Выровненная строка: 11-симв время, 8 — символ, 5 — side, остаток — verdict.
+        sym_padded = (symbol[:8]).ljust(8)
+        side_padded = (side[:5]).ljust(5)
+        body.append(
+            f"{dot} {ts_s.ljust(11)} {sym_padded} {side_padded} {verdict_ru}{applied_mark}"
         )
+        reason = str(r.get("reason") or "").strip()
         if reason:
-            lines.append(f"   «{reason}»")
-    return "\n".join(lines)
+            if len(reason) > 60:
+                reason = reason[:57] + "..."
+            body.append(f"  «{reason}»")
+    return _card("AI-Gate · последние 10", "📜", body)
 
 
 async def _handle_why(
@@ -1029,18 +1152,26 @@ async def _handle_why(
         print(f"[TG] get_last_rejected_check: {exc}")
         last = None
 
-    lines = ["🔍 <b>Отклонённые сигналы</b>", ""]
     total = sum(c["count"] for c in counts)
-    lines.append(f"📊 За последние 24ч отклонено {total} сигналов:")
+    body: list[str] = [
+        _label("За 24ч отклонено", str(total)),
+    ]
     if counts:
+        body.append(_subhr_line())
         for c in counts:
-            lines.append(
-                f"   • {_ru_filter_tag(c['filter'])}: {c['count']}"
-            )
+            cnt = int(c["count"])
+            # Цветной индикатор интенсивности: > 5 = bad, 1..5 = warn, 0 = off.
+            if cnt > 5:
+                dot = _status_dot("bad")
+            elif cnt >= 1:
+                dot = _status_dot("warn")
+            else:
+                dot = _status_dot("off")
+            body.append(f"{dot} {_label(_ru_filter_tag(c['filter']), str(cnt), 22)}")
     else:
-        lines.append("   (отклонений нет)")
-    lines.append("")
+        body.append("  (отклонений нет)")
 
+    body.append(_subhr_line())
     if last:
         ts = _parse_iso(last.get("ts"))
         minutes_ago = "?"
@@ -1052,12 +1183,12 @@ async def _handle_why(
         detail = str(last.get("detail") or "").strip()
         if len(detail) > 200:
             detail = detail[:197] + "..."
-        lines.append(f"🕐 Последнее ({minutes_ago} мин назад):")
-        lines.append(f"   {symbol} → {_ru_filter_tag(flt)}")
+        body.append(f"Последнее ({minutes_ago} мин назад):")
+        body.append(f"  {symbol} → {_ru_filter_tag(flt)}")
         if detail:
-            lines.append(f"   «{detail}»")
+            body.append(f"  «{detail}»")
     else:
-        lines.append("🕐 Последнее: отклонений не было")
+        body.append("Последнее: отклонений не было")
 
     inline = {
         "inline_keyboard": [
@@ -1065,10 +1196,10 @@ async def _handle_why(
               "callback_data": CB_WHY_AI}],
             [{"text": "🛡 Только AI-Gate блокировки",
               "callback_data": CB_WHY_GATE_ONLY}],
-            [{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}],
+            [{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}],
         ]
     }
-    return "\n".join(lines), inline
+    return _card("Почему мимо?", "🔍", body), inline
 
 
 async def _handle_why_ai(
@@ -1080,7 +1211,7 @@ async def _handle_why_ai(
         print(f"[TG] get_last_rejected_check: {exc}")
         last = None
     if not last:
-        return "🤖 Отклонений пока нет - разбирать нечего."
+        return _card("AI-разбор", "🤖", ["Отклонений пока нет — разбирать нечего"])
     try:
         errors = memory.get_recent_errors(5)
     except Exception as exc:  # noqa: BLE001
@@ -1095,12 +1226,13 @@ async def _handle_why_ai(
         explanation = "Объяснение временно недоступно."
     symbol = last.get("symbol") or "-"
     flt = last.get("filter") or "-"
-    return (
-        f"🤖 <b>AI-разбор последнего отклонения</b>\n\n"
-        f"Символ: {symbol}\n"
-        f"Фильтр: {_ru_filter_tag(flt)}\n\n"
-        f"{explanation}"
-    )
+    body = [
+        _label("Символ", str(symbol)),
+        _label("Фильтр", _ru_filter_tag(flt)),
+        _subhr_line(),
+        str(explanation),
+    ]
+    return _card("AI-разбор", "🤖", body)
 
 
 async def _handle_why_gate_only(
@@ -1115,17 +1247,23 @@ async def _handle_why_gate_only(
     gate_counts = [
         c for c in counts if str(c.get("filter") or "").startswith("ai_gate")
     ]
-    lines = ["🛡 <b>AI-Gate блокировки (24ч)</b>", ""]
     total = sum(c["count"] for c in gate_counts)
+    body: list[str] = []
     if not gate_counts:
-        lines.append("За 24 часа AI-Gate не блокировал сделок.")
+        body.append("За 24 часа AI-Gate не блокировал сделок")
     else:
-        lines.append(f"Всего: {total}")
+        body.append(_label("Всего", str(total)))
+        body.append(_subhr_line())
         for c in gate_counts:
-            lines.append(
-                f"   • {_ru_filter_tag(c['filter'])}: {c['count']}"
-            )
-    return "\n".join(lines)
+            cnt = int(c["count"])
+            if cnt > 5:
+                dot = _status_dot("bad")
+            elif cnt >= 1:
+                dot = _status_dot("warn")
+            else:
+                dot = _status_dot("off")
+            body.append(f"{dot} {_label(_ru_filter_tag(c['filter']), str(cnt), 22)}")
+    return _card("AI-Gate блокировки", "🛡", body)
 
 
 async def _handle_logs(
@@ -1183,13 +1321,14 @@ async def _handle_logs(
     if len(text) > 3800:
         text = "...\n" + text[-3800:]
 
-    title = {
-        "errors": "📝 <b>Логи (только ошибки)</b>",
-        "aigate": "📝 <b>Логи (только AI-GATE)</b>",
-        "base": "📝 <b>Логи (последние 40 строк)</b>",
-    }.get(variant, "📝 <b>Логи</b>")
+    hint = {
+        "errors": "Фильтр: только ошибки",
+        "aigate": "Фильтр: только AI-GATE",
+        "base": "Последние 40 строк журнала",
+    }.get(variant, "Логи")
 
-    msg = f"{title}\n\n<pre>{text}</pre>"
+    body = [hint, _subhr_line(), f"<pre>{text}</pre>"]
+    msg = _card("Логи", "📝", body)
 
     inline = {
         "inline_keyboard": [
@@ -1200,7 +1339,7 @@ async def _handle_logs(
                 {"text": "🔍 Только ошибки", "callback_data": CB_LOGS_ERRORS},
                 {"text": "🛡 Только AI-Gate", "callback_data": CB_LOGS_AIGATE},
             ],
-            [{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}],
+            [{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}],
         ]
     }
     return msg, inline
@@ -1217,27 +1356,31 @@ async def _handle_startstop_panic_menu(
     """
     g = _g(state)
     bot_running = bool(g.get("bot_running", True))
-    status_s = "🟢 запущен" if bot_running else "🔴 на паузе"
-    dry_label = "ВКЛ" if getattr(config, "DRY_RUN", False) else "ВЫКЛ"
-    text = (
-        "⏯ <b>Старт/Стоп · 🚨 PANIC SELL</b>\n\n"
-        f"<b>Старт / Стоп</b>\n"
-        f"Статус: {status_s}\n"
-        f"DRY_RUN: {dry_label}\n\n"
-        f"<b>Panic Sell</b>\n"
-        f"Закрытие всех открытых позиций reduce-only маркетом\n"
-        f"и пауза торговли. Подтверждение в два шага."
-    )
+    bot_dot = _status_dot("ok" if bot_running else "bad")
+    status_s = "запущен" if bot_running else "на паузе"
+    dry_on = bool(getattr(config, "DRY_RUN", False))
+    dry_label = "ВКЛ" if dry_on else "ВЫКЛ"
+    dry_dot = _status_dot("warn" if dry_on else "ok")
+    body = [
+        "Старт / Стоп",
+        _label("  Статус", f"{bot_dot} {status_s}"),
+        _label("  DRY_RUN", f"{dry_dot} {dry_label}"),
+        _subhr_line(),
+        "Panic Sell",
+        "  Закрытие всех открытых позиций",
+        "  reduce-only маркетом и пауза.",
+        "  Подтверждение в два шага.",
+    ]
     inline = {
         "inline_keyboard": [
             [
                 {"text": "⏯ Старт / Стоп", "callback_data": CB_STARTSTOP},
                 {"text": "🚨 PANIC SELL", "callback_data": CB_PANIC},
             ],
-            [{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}],
+            [{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}],
         ]
     }
-    return text, inline
+    return _card("Старт/Стоп · PANIC SELL", "⏯", body), inline
 
 
 async def _handle_analyst(
@@ -1252,17 +1395,18 @@ async def _handle_startstop_menu(
 ) -> tuple[str, dict[str, Any]]:
     g = _g(state)
     bot_running = bool(g.get("bot_running", True))
-    status_s = "🟢 запущен" if bot_running else "🔴 на паузе"
-    dry_label = "ВКЛ" if getattr(config, "DRY_RUN", False) else "ВЫКЛ"
-    text = (
-        "⏯ <b>Старт / Стоп</b>\n\n"
-        f"Статус: {status_s}\n"
-        f"Режим DRY_RUN: {dry_label}"
-    )
+    bot_dot = _status_dot("ok" if bot_running else "bad")
+    status_s = "запущен" if bot_running else "на паузе"
+    dry_on = bool(getattr(config, "DRY_RUN", False))
+    dry_label = "ВКЛ" if dry_on else "ВЫКЛ"
+    dry_dot = _status_dot("warn" if dry_on else "ok")
+    body = [
+        _label("Статус", f"{bot_dot} {status_s}"),
+        _label("DRY_RUN", f"{dry_dot} {dry_label}"),
+    ]
+    text = _card("Старт / Стоп", "⏯", body)
     dry_btn_text = (
-        "⚠ Выключить DRY_RUN"
-        if getattr(config, "DRY_RUN", False)
-        else "🧪 Включить DRY_RUN"
+        "Выключить DRY_RUN" if dry_on else "Включить DRY_RUN"
     )
     inline: list[list[dict[str, Any]]] = []
     if bot_running:
@@ -1276,7 +1420,7 @@ async def _handle_startstop_menu(
         ])
     inline.append([{"text": dry_btn_text, "callback_data": CB_TOGGLE_DRY_RUN}])
     inline.append([{"text": "🚨 PANIC SELL всё", "callback_data": CB_PANIC}])
-    inline.append([{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}])
+    inline.append([{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}])
     return text, {"inline_keyboard": inline}
 
 
@@ -1352,21 +1496,22 @@ async def _handle_aigate_set_confirm(
         getattr(config, "AI_TRADE_GATE_MODE", "off") or "off"
     ).lower()
     target_ru = {
-        "active": "активен (строгая защита)",
-        "shadow": "наблюдение (без блокировки)",
+        "active": "активен",
+        "shadow": "наблюдение",
         "off": "выключен",
     }.get(new_mode, new_mode)
     current_ru = {
-        "active": "активен (строгая защита)",
-        "shadow": "наблюдение (без блокировки)",
+        "active": "активен",
+        "shadow": "наблюдение",
         "off": "выключен",
     }.get(current, current)
-    text = (
-        "🛡 <b>Переключение AI-Gate</b>\n\n"
-        f"Сейчас: {current_ru}\n"
-        f"Станет: {target_ru}\n\n"
-        "Подтвердить?"
-    )
+    body = [
+        _label("Сейчас", current_ru),
+        _label("Станет", target_ru),
+        _subhr_line(),
+        "Подтвердить?",
+    ]
+    text = _card("Переключение AI-Gate", "🛡", body)
     inline = {
         "inline_keyboard": [
             [
@@ -1387,10 +1532,19 @@ async def _handle_aigate_confirm(
 ) -> str:
     ok, result = _set_gate_mode_safely(new_mode)
     if not ok:
-        return f"⚠ Не удалось переключить AI-Gate: {result}"
-    return (
-        f"✅ AI-Gate переключён в режим <b>{result}</b>.\n"
-        f"Значение применено сразу (без рестарта) и сохранено в .env."
+        return _card(
+            "AI-Gate",
+            "🛡",
+            [f"Не удалось переключить: {result}"],
+        )
+    return _card(
+        "AI-Gate переключён",
+        "🛡",
+        [
+            _label("Режим", str(result)),
+            "Применено сразу (без рестарта)",
+            "Сохранено в .env",
+        ],
     )
 
 
@@ -1399,18 +1553,19 @@ async def _handle_aigate_confirm(
 async def _handle_panic(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
-    text = (
-        "🚨 <b>PANIC SELL - подтверждение</b>\n\n"
-        "Будут закрыты <b>все открытые позиции</b> по "
-        f"{', '.join(config.SYMBOLS)} reduce-only маркетом, "
-        "и торговля будет поставлена на паузу.\n\n"
-        "Вы уверены?"
-    )
+    body = [
+        "Будут закрыты все открытые позиции",
+        f"по {', '.join(config.SYMBOLS)}",
+        "reduce-only маркетом, торговля встанет.",
+        _subhr_line(),
+        "Вы уверены?",
+    ]
+    text = _card("PANIC SELL — подтверждение", "🚨", body)
     keyboard = {
         "inline_keyboard": [
             [
                 {"text": "⚠ ДА, ЗАКРЫТЬ ВСЁ", "callback_data": CB_PANIC_CONFIRM},
-                {"text": "❌ Отмена", "callback_data": CB_PANIC_CANCEL},
+                {"text": "Отмена", "callback_data": CB_PANIC_CANCEL},
             ],
         ]
     }
@@ -1422,9 +1577,14 @@ async def _handle_panic_confirm(
 ) -> str:
     _g(state)["bot_running"] = False
     if getattr(config, "DRY_RUN", False):
-        return (
-            "[DRY RUN] 🚨 PANIC SELL имитация: реальные ордера не отправлены. "
-            "Торговля поставлена на паузу."
+        return _card(
+            "PANIC SELL",
+            "🚨",
+            [
+                "[DRY RUN] имитация",
+                "Реальные ордера не отправлены",
+                "Торговля поставлена на паузу",
+            ],
         )
     total_orders = 0
     for sym in config.SYMBOLS:
@@ -1435,10 +1595,19 @@ async def _handle_panic_confirm(
             results = []
         total_orders += len(results or [])
     if total_orders == 0:
-        return "🚨 PANIC SELL: открытых позиций не было. Торговля поставлена на паузу."
-    return (
-        f"🚨 PANIC SELL выполнен: отправлено {total_orders} ордеров на закрытие "
-        f"по {len(config.SYMBOLS)} символам. Торговля поставлена на паузу."
+        return _card(
+            "PANIC SELL",
+            "🚨",
+            ["Открытых позиций не было", "Торговля поставлена на паузу"],
+        )
+    return _card(
+        "PANIC SELL выполнен",
+        "🚨",
+        [
+            _label("Ордеров", str(total_orders)),
+            _label("Символов", str(len(config.SYMBOLS))),
+            "Торговля поставлена на паузу",
+        ],
     )
 
 
@@ -1455,13 +1624,15 @@ async def _handle_mode_switch(
 ) -> tuple[str, dict[str, Any]]:
     """Первый шаг: показать текущий/будущий режим + warning."""
     is_testnet_now = bool(config.IS_TESTNET)
+    current_dot = _status_dot("ok" if is_testnet_now else "bad")
+    target_dot = _status_dot("bad" if is_testnet_now else "ok")
     current_ru = (
         "ДЕМО (OKX testnet, виртуальные 5000 USDT)"
         if is_testnet_now
-        else "⚠ РЕАЛ (OKX mainnet, реальные деньги)"
+        else "РЕАЛ (OKX mainnet, реальные деньги)"
     )
     target_ru = (
-        "⚠ РЕАЛ (OKX mainnet, реальные деньги)"
+        "РЕАЛ (OKX mainnet, реальные деньги)"
         if is_testnet_now
         else "ДЕМО (OKX testnet, виртуальные 5000 USDT)"
     )
@@ -1470,62 +1641,66 @@ async def _handle_mode_switch(
     open_count = sum(
         1 for s in state.get("symbols", {}).values() if s.get("open_trade")
     )
-    open_warn = ""
+    body: list[str] = [
+        _label("Сейчас", f"{current_dot} {current_ru}"),
+        _label("Станет", f"{target_dot} {target_ru}"),
+    ]
+
+    real_warn_lines: list[str] = []
+    if is_testnet_now:
+        real_warn_lines = [
+            "ВНИМАНИЕ — реальные деньги.",
+            "Все сделки уйдут на боевой OKX-аккаунт.",
+            "Убедитесь:",
+            "  · OKX_API_KEY_REAL и др. заполнены",
+            "    (🔑 КЛЮЧИ API → OKX Real *)",
+            "  · открытых позиций на демо нет",
+        ]
+
+    open_warn_lines: list[str] = []
     if open_count > 0:
         account_label = "демо" if is_testnet_now else "реал"
-        open_warn = (
-            f"\n\n⚠ Сейчас открыто позиций ({open_count}) на {account_label}-счёте. "
-            f"После переключения они останутся на {account_label}-аккаунте, "
-            f"но бот их НЕ сможет управлять (ключи поменяются).\n"
-            f"Рекомендуется сначала закрыть позиции через 🚨 PANIC SELL."
-        )
+        open_warn_lines = [
+            f"Сейчас открыто позиций: {open_count} ({account_label})",
+            "После переключения они останутся",
+            f"на {account_label}-аккаунте, но бот не будет",
+            "ими управлять (ключи поменяются).",
+            "Сначала закройте через 🚨 PANIC SELL.",
+        ]
 
-    # Проверка заполненности целевых ключей.
-    keys_warn = ""
+    keys_warn_lines: list[str] = []
+    keys_blocked = False
     if is_testnet_now:
-        # Переходим на mainnet - нужны real-ключи.
         if not config.OKX_API_KEY_REAL:
-            keys_warn = (
-                "\n\n❌ <b>Реал-ключи не заполнены</b>\n"
-                "В .env нет OKX_API_KEY_REAL (или он пустой). Без реал-ключей "
-                "бот не сможет авторизоваться на OKX mainnet.\n"
-                "Заполните через: 🔑 КЛЮЧИ API → OKX Real *"
-            )
+            keys_blocked = True
+            keys_warn_lines = [
+                "❌ Реал-ключи не заполнены",
+                "В .env пусто OKX_API_KEY_REAL.",
+                "Заполните: 🔑 КЛЮЧИ API → OKX Real *",
+            ]
     else:
-        # Переходим на demo - нужны demo-ключи.
         if not config.OKX_API_KEY_DEMO:
-            keys_warn = (
-                "\n\n❌ <b>Демо-ключи не заполнены</b>\n"
-                "В .env нет OKX_API_KEY (демо). Без них бот не сможет "
-                "авторизоваться на OKX testnet.\n"
-                "Заполните через: 🔑 КЛЮЧИ API → OKX Demo *"
-            )
+            keys_blocked = True
+            keys_warn_lines = [
+                "❌ Демо-ключи не заполнены",
+                "В .env пусто OKX_API_KEY (демо).",
+                "Заполните: 🔑 КЛЮЧИ API → OKX Demo *",
+            ]
 
-    # Специальное предупреждение при переходе на РЕАЛ.
-    real_warn = ""
-    if is_testnet_now:
-        real_warn = (
-            "\n\n⚠⚠⚠ <b>ВНИМАНИЕ</b> ⚠⚠⚠\n\n"
-            "Это переключение на боевой счёт с реальными деньгами. "
-            "Все сделки будут исполняться на ваш реальный OKX-аккаунт.\n\n"
-            "Убедитесь что:\n"
-            "• OKX_API_KEY_REAL / _SECRET_REAL / _PASSPHRASE_REAL заполнены "
-            "(🔑 КЛЮЧИ API → OKX Real *)\n"
-            "• Открытых позиций на демо сейчас нет (или готовы оставить их на демо)"
-        )
+    if real_warn_lines:
+        body.append(_subhr_line())
+        body.extend(real_warn_lines)
+    if open_warn_lines:
+        body.append(_subhr_line())
+        body.extend(open_warn_lines)
+    if keys_warn_lines:
+        body.append(_subhr_line())
+        body.extend(keys_warn_lines)
 
-    text = (
-        "🏦 <b>Переключение режима торговли</b>\n\n"
-        f"Сейчас: {current_ru}\n"
-        f"Станет: {target_ru}"
-        + real_warn
-        + open_warn
-        + keys_warn
-    )
+    text = _card("Демо/Реал", "🏦", body)
 
-    # Если целевые ключи пусты - кнопку «Да» не показываем.
     inline_rows: list[list[dict[str, Any]]] = []
-    if keys_warn:
+    if keys_blocked:
         inline_rows.append([
             {"text": "❌ Отмена", "callback_data": CB_MODE_SWITCH_NO},
         ])
@@ -1548,14 +1723,22 @@ async def _handle_mode_switch_ok(
     is_testnet_now = bool(config.IS_TESTNET)
     new_val = "false" if is_testnet_now else "true"
     target_label = (
-        "⚠ РЕАЛ (OKX mainnet)" if is_testnet_now else "ДЕМО (OKX testnet)"
+        "РЕАЛ (OKX mainnet)" if is_testnet_now else "ДЕМО (OKX testnet)"
     )
     if not _write_env_var("IS_TESTNET", new_val):
-        return "⚠ Не удалось записать IS_TESTNET в .env. Переключение отменено."
+        return _card(
+            "Демо/Реал",
+            "🏦",
+            ["Не удалось записать IS_TESTNET в .env", "Переключение отменено"],
+        )
     asyncio.get_event_loop().call_later(1.0, _self_terminate)
-    return (
-        f"✅ Переключение на <b>{target_label}</b> сохранено в .env.\n"
-        f"Бот перезапускается... (~20 секунд)"
+    return _card(
+        "Демо/Реал — сохранено",
+        "🏦",
+        [
+            _label("Режим", target_label),
+            "Бот перезапускается (~20 секунд)",
+        ],
     )
 
 
@@ -1620,22 +1803,25 @@ async def _handle_keys_menu(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
     """Меню замены ключей."""
-    text = (
-        "🔑 <b>Замена ключей API</b>\n\n"
-        "⚠ Внимание:\n"
-        "• Сообщение с новым ключом бот удалит автоматически\n"
-        "• После замены бот перезапустится (~20 секунд)\n\n"
-        "▼ OKX Демо (активны при IS_TESTNET=true):\n"
-        "▼ OKX Реал (активны при IS_TESTNET=false):\n"
-        "▼ Общие для всех режимов."
-    )
+    body = [
+        "Внимание:",
+        "  · сообщение с ключом будет удалено",
+        "  · после замены бот перезапустится",
+        "    (~20 секунд)",
+        _subhr_line(),
+        "OKX Демо (если IS_TESTNET=true)",
+        "OKX Реал (если IS_TESTNET=false)",
+        "Общие для всех режимов",
+    ]
+    text = _card("Ключи API", "🔑", body)
     rows: list[list[dict[str, Any]]] = []
     for ui_name, env_name, emoji in _KEY_UI_NAMES:
         rows.append([{
             "text": f"{emoji} {ui_name}",
             "callback_data": f"{CB_KEY_PREFIX}{env_name}",
         }])
-    rows.append([{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}])
+    rows.append([{"text": "📤 Экспорт .env", "callback_data": CB_EXPORT_ENV}])
+    rows.append([{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}])
     return text, {"inline_keyboard": rows}
 
 
@@ -1662,23 +1848,21 @@ async def _handle_key_start(
     )
     if is_okx_demo and config.IS_TESTNET and open_count > 0:
         warnings.append(
-            f"⚠ Сейчас открыто {open_count} демо-позиций. После замены "
-            f"демо-ключа бот потеряет с ними связь.\n"
-            f"Рекомендуется сначала закрыть через 🚨 PANIC SELL."
+            f"Открыто {open_count} демо-позиций. После замены"
         )
+        warnings.append("демо-ключа бот потеряет с ними связь.")
+        warnings.append("Сначала закройте через 🚨 PANIC SELL.")
     if is_okx_real and (not config.IS_TESTNET) and open_count > 0:
         warnings.append(
-            f"⚠⚠⚠ Сейчас открыто {open_count} РЕАЛ-позиций. После замены "
-            f"реал-ключа бот потеряет с ними связь, они останутся на "
-            f"бирже без управления.\n"
-            f"Строго рекомендуется сначала закрыть через 🚨 PANIC SELL."
+            f"Открыто {open_count} РЕАЛ-позиций. После замены"
         )
+        warnings.append("реал-ключа бот потеряет с ними связь —")
+        warnings.append("они останутся на бирже без управления.")
+        warnings.append("Сначала закройте через 🚨 PANIC SELL.")
     if env_name == "TELEGRAM_TOKEN":
-        warnings.append(
-            "⚠⚠⚠ <b>КРИТИЧНО</b>: смена TELEGRAM_TOKEN приведёт к тому, "
-            "что этот чат потеряет связь с ботом. Восстановление возможно "
-            "только через SSH на сервер (правка /opt/zenith/.env)."
-        )
+        warnings.append("КРИТИЧНО: смена TELEGRAM_TOKEN")
+        warnings.append("разорвёт связь этого чата с ботом.")
+        warnings.append("Восстановление только через SSH.")
 
     # Переводим FSM в состояние «ждём значение».
     _key_fsm_state[chat_id] = {
@@ -1687,23 +1871,22 @@ async def _handle_key_start(
         "started": time.time(),
     }
 
-    lines = [f"🔑 <b>Замена: {ui_name}</b>"]
+    body: list[str] = [_label("Ключ", str(ui_name))]
     if warnings:
-        lines.append("")
-        for w in warnings:
-            lines.append(w)
-    lines.append("")
-    lines.append("Пришлите новое значение ОДНИМ сообщением.")
-    lines.append("Бот удалит ваше сообщение сразу после получения.")
-    lines.append("")
-    lines.append("У вас есть 5 минут.")
+        body.append(_subhr_line())
+        body.extend(warnings)
+    body.append(_subhr_line())
+    body.append("Пришлите новое значение одним сообщением.")
+    body.append("Сообщение будет удалено сразу.")
+    body.append("Время на ввод: 5 минут.")
 
+    text = _card("Замена ключа", "🔑", body)
     inline = {
         "inline_keyboard": [
             [{"text": "❌ Отмена", "callback_data": CB_KEY_CANCEL}],
         ]
     }
-    return "\n".join(lines), inline
+    return text, inline
 
 
 async def _handle_key_cancel(
@@ -1762,19 +1945,19 @@ async def _handle_groq_quota(
     inline = {
         "inline_keyboard": [
             [{"text": "🔄 Обновить", "callback_data": CB_GROQ_REFRESH}],
-            [{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}],
+            [{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}],
         ]
     }
 
     if snap.get("updated_epoch", 0.0) == 0.0:
-        text = (
-            "🤖 <b>Квота Groq API</b>\n\n"
-            "⏱ Снапшот квоты ещё не получен.\n\n"
-            "Дождитесь первого вызова Groq "
-            "(macro-sentinel / ai_regime / AI-Gate) — обычно это "
-            "происходит в течение минуты после старта."
-        )
-        return text, inline
+        body = [
+            "Снапшот квоты ещё не получен.",
+            _subhr_line(),
+            "Дождитесь первого вызова Groq",
+            "(macro-sentinel / ai_regime / AI-Gate).",
+            "Обычно — в течение минуты после старта.",
+        ]
+        return _card("Квота Groq", "🤖", body), inline
 
     age_sec = int(max(0, time.time() - snap["updated_epoch"]))
     if age_sec < 60:
@@ -1784,48 +1967,50 @@ async def _handle_groq_quota(
     else:
         age_str = f"{age_sec // 3600}ч {(age_sec % 3600) // 60}м назад"
 
-    def _pct(used: int, limit: int) -> str:
-        if limit <= 0:
-            return "0.0%"
-        return f"{(used / limit) * 100.0:.1f}%"
-
     rpd_used = max(0, snap["rpd_limit"] - snap["rpd_remaining"])
     tpd_used = max(0, snap["tpd_limit"] - snap["tpd_remaining"])
     rpm_used = max(0, snap["rpm_limit"] - snap["rpm_remaining"])
 
-    lines = [
-        "🤖 <b>Квота Groq API</b>",
-        "",
-        "📊 Сегодня:",
-        f"   ✅ Запросов: {rpd_used} / {snap['rpd_limit']} ({_pct(rpd_used, snap['rpd_limit'])})",
-        f"   🔵 Токенов:  {tpd_used} / {snap['tpd_limit']} ({_pct(tpd_used, snap['tpd_limit'])})",
-        "",
-        "⏱ Текущая минута:",
-        f"   Запросов: {rpm_used} / {snap['rpm_limit']} ({_pct(rpm_used, snap['rpm_limit'])})",
+    def _pct_label(used: int, lim: int) -> str:
+        if lim <= 0:
+            return f"{_fmt_num(0.0, 1)}%"
+        return f"{_fmt_num((used / lim) * 100.0, 1)}%"
+
+    body = [
+        "Сегодня:",
+        f"  Запросы {_progress_bar_10(rpd_used, snap['rpd_limit'])}  "
+        f"{_fmt_num(rpd_used, 0)} / {_fmt_num(snap['rpd_limit'], 0)}  "
+        f"({_pct_label(rpd_used, snap['rpd_limit'])})",
+        f"  Токены  {_progress_bar_10(tpd_used, snap['tpd_limit'])}  "
+        f"{_fmt_num(tpd_used, 0)} / {_fmt_num(snap['tpd_limit'], 0)}  "
+        f"({_pct_label(tpd_used, snap['tpd_limit'])})",
+        _subhr_line(),
+        "Текущая минута:",
+        f"  Запросы {_progress_bar_10(rpm_used, snap['rpm_limit'])}  "
+        f"{_fmt_num(rpm_used, 0)} / {_fmt_num(snap['rpm_limit'], 0)}  "
+        f"({_pct_label(rpm_used, snap['rpm_limit'])})",
     ]
-
-    reset_lines = []
+    reset_lines: list[str] = []
     if snap.get("rpd_reset"):
-        reset_lines.append(f"   Запросы (сутки): {snap['rpd_reset']}")
+        reset_lines.append(_label("  Запросы (сутки)", str(snap["rpd_reset"])))
     if snap.get("tpd_reset"):
-        reset_lines.append(f"   Токены (сутки):  {snap['tpd_reset']}")
+        reset_lines.append(_label("  Токены (сутки)", str(snap["tpd_reset"])))
     if snap.get("rpm_reset"):
-        reset_lines.append(f"   Минутный лимит:  {snap['rpm_reset']}")
+        reset_lines.append(_label("  Минутный лимит", str(snap["rpm_reset"])))
     if reset_lines:
-        lines.append("")
-        lines.append("🔄 Квота сбрасывается через:")
-        lines.extend(reset_lines)
+        body.append(_subhr_line())
+        body.append("Сброс через:")
+        body.extend(reset_lines)
+    body.append(_subhr_line())
+    body.append(_label("Снапшот", age_str))
+    body.append(_subhr_line())
+    body.append("Ориентир. потребление:")
+    body.append("  · macro-sentinel: ~1/час")
+    body.append("  · ai_regime:      ~14/час")
+    body.append("  · ai_trade_gate:  0-5/час")
+    body.append("  Итого ≈ 360-480 в сутки")
 
-    lines.append("")
-    lines.append(f"📡 Снапшот обновлён: {age_str}")
-    lines.append("")
-    lines.append("💡 Ориентировочное потребление:")
-    lines.append("   • macro-sentinel: ~1 / час")
-    lines.append("   • ai_regime:     ~14 / час (7 символов × 2 обновл.)")
-    lines.append("   • ai_trade_gate: 0-5 / час (зависит от сигналов)")
-    lines.append("   Итого ≈ 360-480 вызовов в сутки")
-
-    return "\n".join(lines), inline
+    return _card("Квота Groq", "🤖", body), inline
 
 
 # --- Диспетчер callback-ов -------------------------------------------------
@@ -1914,6 +2099,16 @@ async def _process_callback(
             result = await _handle_keys_menu(session, state)
         elif data == CB_GROQ or data == CB_GROQ_REFRESH:
             result = await _handle_groq_quota(session, state)
+        elif data == CB_AGGR_MENU:
+            result = await _handle_aggr_stub(session, state)
+        elif data == CB_BLOCKS:
+            result = await _handle_blocks_stub(session, state)
+        elif data == CB_EXPORT_ENV:
+            result = await _handle_export_env_stub(session, state)
+        elif data == CB_PAIRS:
+            result = await _handle_pairs_stub(session, state)
+        elif data == CB_BT_MENU:
+            result = await _handle_bt_stub(session, state)
         elif data.startswith(CB_KEY_PREFIX) and not data.startswith(
             CB_KEY_CONFIRM_PREFIX
         ):
