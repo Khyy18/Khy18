@@ -724,16 +724,18 @@ async def _check_closed_exchange_position(
         pnl_pct = ((pnl / (entry * qty)) * 100) if entry > 0 and qty > 0 else 0.0
         outcome_emoji = "✅" if outcome == "WIN" else "❌"
         outcome_ru = "ПРИБЫЛЬ" if outcome == "WIN" else "УБЫТОК"
-        dir_arrow = "↗️" if side == "Buy" else "↘️"
         duration = _format_duration(trade.get("entry_ts_iso"), _utc_now())
+        # Стиль mockup'а: категорийные эмодзи только в заголовке и
+        # ⏱ перед длительностью. Остальное — чистые строки.
         notify_text = (
             f"{outcome_emoji} <b>ЗАКРЫТА СДЕЛКА</b> — {outcome_ru}\n\n"
-            f"🪙 Пара: <b>{symbol}</b>\n"
-            f"{dir_arrow} Сторона: <b>{side_label}</b>\n"
-            f"🎯 Вход: {entry:.4f} → 🏁 Выход: {exit_price:.4f}\n"
-            f"💰 PnL: {pnl:+.4f} USDT ({pnl_pct:+.2f}%)\n"
+            f"Пара: {symbol}\n"
+            f"Сторона: {side_label}\n"
+            f"Вход: {entry:.4f} → Выход: {exit_price:.4f}\n"
+            f"PnL: {pnl:+.4f} USDT ({pnl_pct:+.2f}%)\n"
+            f"Исход: {outcome}\n"
             f"⏱ Длительность: {duration}\n"
-            f"📊 Суточный PnL: {g['daily_pnl']:+.4f} USDT"
+            f"Суточный PnL: {g['daily_pnl']:+.4f} USDT"
         )
         await telegram_bot.send_message(
             session, notify_text, reply_markup=telegram_bot.set_keyboard()
@@ -1123,7 +1125,6 @@ async def _process_symbol(
     try:
         hard_stop = float(order["hard_stop"])
         side_label = "LONG" if side == "Buy" else "SHORT"
-        side_emoji = "🟢" if side == "Buy" else "🔴"
         notional = entry_price * qty
         stop_pct = (
             ((entry_price - hard_stop) / entry_price) * 100
@@ -1159,42 +1160,53 @@ async def _process_symbol(
         # Индикатор счёта (ДЕМО / РЕАЛ) по IS_TESTNET.
         account_label = "📊 ДЕМО" if config.IS_TESTNET else "💰 РЕАЛ"
         reason = str((order.get("meta") or {}).get("reason") or "")
-        # Стрелка направления в шапке: для LONG ↗️, для SHORT ↘️.
-        dir_arrow = "↗️" if side == "Buy" else "↘️"
+        # Стиль карточки соответствует утверждённому mockup'у:
+        # категорийный эмодзи только в заголовке и в строках AI-GATE /
+        # режим рынка / счёт. Остальные строки — чистый текст, как в v1/v2.
         notify_text = (
-            f"📈 <b>ОТКРЫТА СДЕЛКА</b> {side_emoji}\n\n"
-            f"🪙 Пара: <b>{symbol}</b>\n"
-            f"{dir_arrow} Сторона: <b>{side_label}</b>\n"
-            f"📦 Размер: {qty} (~${notional:.2f})\n"
-            f"🎯 Цена входа: {entry_price:.4f}\n"
-            f"🛑 Стоп-лосс: {hard_stop:.4f} (−{stop_pct:.2f}%)\n"
-            f"🎁 Цель R/R 1:2 (трейлинг): {tp_price:.4f} (+{tp_pct:.2f}%)\n"
-            f"⚖️ Риск на сделку: {config.RISK_PER_TRADE * 100:.2f}%"
+            f"📈 <b>ОТКРЫТА СДЕЛКА</b>\n\n"
+            f"Пара: {symbol}\n"
+            f"Сторона: {side_label}\n"
+            f"Размер: {qty} (~${notional:.2f})\n"
+            f"Цена входа: {entry_price:.4f}\n"
+            f"Стоп-лосс: {hard_stop:.4f} (−{stop_pct:.2f}%)\n"
+            f"Тейк-профит: {tp_price:.4f} (+{tp_pct:.2f}%)\n"
+            f"R/R: 1 : 2.0"
         )
         if reason:
-            notify_text += f"\n💡 Причина: {reason}"
-        if regime_ru:
-            regime_emoji = {
-                "Тренд": "🟢",
-                "Боковик": "🔴",
-                "Кризис": "⚪",
-            }.get(regime_ru, "🎯")
-            notify_text += f"\n{regime_emoji} Режим рынка: {regime_ru}"
-        notify_text += f"\n🏦 Счёт: {account_label}"
-        # Строка про AI-veto gate: показываем какое решение вынес gate и
-        # в каком режиме он работает (off/shadow/active).
+            notify_text += f"\nПричина: {reason}"
+        # Строка про AI-veto gate с эмодзи 🧠 в начале (verdict-перевод
+        # одинаковый: approve→одобрено, veto→veto, error→ошибка).
+        notify_text += "\n"
         if gate_mode == "off":
             notify_text += "\n🧠 AI-GATE: ⚪ выключен"
         elif gate_mode == "shadow":
             short_reason = (gate_reason[:80] + "…") if len(gate_reason) > 80 else gate_reason
             if gate_verdict == "veto":
-                notify_text += f"\n🧠 AI-GATE (👁 наблюдение): 🚫 would veto ({short_reason})"
+                notify_text += (
+                    f"\n🧠 AI-GATE: 👁 наблюдение (сделка открыта без блокировки)\n"
+                    f"Причина: would veto — {short_reason}"
+                )
             elif gate_verdict == "error":
-                notify_text += f"\n🧠 AI-GATE (👁 наблюдение): ⚠️ error — fail-CLOSED would block ({short_reason})"
+                notify_text += (
+                    f"\n🧠 AI-GATE: 👁 наблюдение (сделка открыта без блокировки)\n"
+                    f"Причина: ⚠️ error — fail-CLOSED would block ({short_reason})"
+                )
             else:
-                notify_text += "\n🧠 AI-GATE (👁 наблюдение): ✅ would approve"
+                notify_text += (
+                    "\n🧠 AI-GATE: 👁 наблюдение (сделка открыта без блокировки)\n"
+                    "Причина: would approve"
+                )
         else:  # active
-            notify_text += f"\n🧠 AI-GATE: ✅ одобрено (уверенность {gate_conf})"
+            notify_text += f"\n🧠 AI-GATE: ✅ одобрено"
+            if gate_reason:
+                short_gate_reason = (
+                    gate_reason[:80] + "…" if len(gate_reason) > 80 else gate_reason
+                )
+                notify_text += f"\nПричина: {short_gate_reason}"
+        if regime_ru:
+            notify_text += f"\nРежим рынка: {regime_ru}"
+        notify_text += f"\nСчёт: {account_label}"
         await telegram_bot.send_message(
             session, notify_text, reply_markup=telegram_bot.set_keyboard()
         )
