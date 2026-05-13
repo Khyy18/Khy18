@@ -1011,6 +1011,18 @@ async def _process_symbol(
     if sym_state.get("open_trade"):
         return
 
+    # Guard по бару должен стоять ДО проверки запретного списка: иначе на
+    # заблокированном символе на каждой итерации цикла (раз в минуту) в
+    # rejected_checks писалась бы новая запись `manual_block` /
+    # `auto_block_loss_streak`, что: а) спамит таблицу, б) отравляет
+    # historical_context AI-Gate (`get_top_loss_reasons` берёт топ-N
+    # filter из той же rejected_checks). После guard'а запись идёт максимум
+    # раз на бар.
+    if sym_state.get("last_signal_bar_ts") == last_bar_ts:
+        return
+    # Продвигаем безусловно, чтобы не оценивать один бар повторно
+    sym_state["last_signal_bar_ts"] = last_bar_ts
+
     # Запретный список (FEAT-004 / B2). Проверяем ДО любых тяжёлых вычислений
     # стратегии и AI-Gate: на заблокированном символе сделок не открываем.
     # Блок может быть manual (из Telegram) или auto (после N подряд LOSS).
@@ -1061,11 +1073,6 @@ async def _process_symbol(
             }
         )
         return
-
-    if sym_state.get("last_signal_bar_ts") == last_bar_ts:
-        return
-    # Продвигаем безусловно, чтобы не оценивать один бар повторно
-    sym_state["last_signal_bar_ts"] = last_bar_ts
 
     try:
         closes = [c["close"] for c in candles_1h]

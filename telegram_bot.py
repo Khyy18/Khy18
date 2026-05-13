@@ -1512,28 +1512,33 @@ async def _run_backtest(period_days: int) -> dict[str, Any]:
     bars = min(period * 24 * 60, _BT_MAX_BARS_PER_SYMBOL)
 
     symbols = list(config.SYMBOLS)
-    data_1m_by_symbol: dict[str, list[dict]] = {}
-    for idx, sym in enumerate(symbols):
-        start_price = _BT_DEFAULT_START_PRICES.get(sym, 1.0)
-        data_1m_by_symbol[sym] = bt_synth.generate_random_walk(
-            sym, bars, start_price=start_price, seed=42 + idx
-        )
-
-    bt_cfg = BacktesterConfig(initial_equity=10000.0)
-    portfolio = Portfolio(10000.0, bt_cfg)
-    strategy_mod = importlib.import_module("strategy_v2")
-    primary_tf = getattr(bt_cfg, "primary_tf", None) or PRIMARY_TF
-    engine = BacktestEngine(
-        portfolio=portfolio,
-        strategy_module=strategy_mod,
-        symbols=symbols,
-        primary_tf=primary_tf,
-        higher_tfs=HIGHER_TFS,
-        tick_sizes=DEFAULT_TICK_SIZE,
-        config=bt_cfg,
-    )
 
     def _runner() -> dict[str, Any]:
+        # Вся синхронная подготовка (генерация синтетики, движок,
+        # метрики, CSV) выполняется ВНУТРИ to_thread, чтобы не блокировать
+        # event loop Telegram long-poll. Для 7 символов × до 129 600 баров
+        # на 90д генерация одна тянет несколько сотен миллисекунд CPU.
+        data_1m_by_symbol: dict[str, list[dict]] = {}
+        for idx, sym in enumerate(symbols):
+            start_price = _BT_DEFAULT_START_PRICES.get(sym, 1.0)
+            data_1m_by_symbol[sym] = bt_synth.generate_random_walk(
+                sym, bars, start_price=start_price, seed=42 + idx
+            )
+
+        bt_cfg = BacktesterConfig(initial_equity=10000.0)
+        portfolio = Portfolio(10000.0, bt_cfg)
+        strategy_mod = importlib.import_module("strategy_v2")
+        primary_tf = getattr(bt_cfg, "primary_tf", None) or PRIMARY_TF
+        engine = BacktestEngine(
+            portfolio=portfolio,
+            strategy_module=strategy_mod,
+            symbols=symbols,
+            primary_tf=primary_tf,
+            higher_tfs=HIGHER_TFS,
+            tick_sizes=DEFAULT_TICK_SIZE,
+            config=bt_cfg,
+        )
+
         result = engine.run(data_1m_by_symbol)
         # Метрика exposure_pct требует num_bars - выставляем ту же метку,
         # что делает backtester.run.main, чтобы цифры совпадали.
@@ -1541,19 +1546,17 @@ async def _run_backtest(period_days: int) -> dict[str, Any]:
             portfolio._num_bars_seen = int(result.get("num_bars") or 0)
         except Exception:  # noqa: BLE001
             pass
-        return result
 
-    await asyncio.to_thread(_runner)
+        metrics = compute_metrics(portfolio)
+        csv_text = _bt_compose_csv(list(portfolio.closed_trades))
+        return {
+            "metrics": metrics,
+            "csv_text": csv_text,
+            "period_days": period,
+            "symbols_count": len(symbols),
+        }
 
-    metrics = compute_metrics(portfolio)
-    csv_text = _bt_compose_csv(list(portfolio.closed_trades))
-
-    return {
-        "metrics": metrics,
-        "csv_text": csv_text,
-        "period_days": period,
-        "symbols_count": len(symbols),
-    }
+    return await asyncio.to_thread(_runner)
 
 
 def _bt_render_menu(chat_id: int) -> tuple[str, dict[str, Any]]:
