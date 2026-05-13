@@ -957,6 +957,7 @@ def get_top_loss_reasons(
                 FROM rejected_checks
                 WHERE symbol = ?
                   AND datetime(ts) >= datetime('now', ?)
+                  AND filter NOT IN ('manual_block', 'auto_block_loss_streak')
                 GROUP BY filter
                 ORDER BY cnt DESC
                 LIMIT ?
