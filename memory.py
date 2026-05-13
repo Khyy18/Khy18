@@ -28,18 +28,36 @@ from typing import Any, Optional
 
 
 # Путь к SQLite trades.db.
-# Приоритет: TRADES_DB_PATH (env) -> /app/data/trades.db если такой каталог
-# смонтирован (persistent volume на Fly.io/Docker) -> рядом с memory.py
-# (локальный запуск). Это даёт плавный переход между dev и prod без правок
-# кода: на Fly.io монтируем volume на /app/data и переменную не трогаем.
+# Приоритет: TRADES_DB_PATH (env) -> /app/data/trades[_real].db если такой
+# каталог смонтирован (persistent volume на Fly.io/Docker) -> рядом с
+# memory.py (локальный запуск). Это даёт плавный переход между dev и prod
+# без правок кода: на Fly.io монтируем volume на /app/data и переменную
+# не трогаем.
+#
+# Суффикс выбирается по IS_TESTNET: демо пишет в trades.db, реал - в
+# trades_real.db. История не должна смешиваться: MDD-трекинг, daily/weekly
+# PnL и статистика винрейта считаются отдельно для каждого аккаунта.
+# Если TRADES_DB_PATH задан явно в env - уважаем выбор пользователя,
+# режим не учитываем.
 def _resolve_db_path() -> str:
     env_path = os.getenv("TRADES_DB_PATH", "").strip()
     if env_path:
         return env_path
+    # Импорт config внутри функции: модуль memory иногда импортируется
+    # до полной инициализации config (например в тестах). Импорт лениво
+    # безопаснее, чем module-level.
+    try:
+        import config as _cfg  # noqa: PLC0415
+        is_testnet = bool(getattr(_cfg, "IS_TESTNET", True))
+    except Exception:  # noqa: BLE001
+        is_testnet = True
+    suffix = "trades.db" if is_testnet else "trades_real.db"
     persistent_dir = "/app/data"
     if os.path.isdir(persistent_dir) and os.access(persistent_dir, os.W_OK):
-        return os.path.join(persistent_dir, "trades.db")
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "trades.db")
+        return os.path.join(persistent_dir, suffix)
+    return os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), suffix
+    )
 
 
 DB_PATH = _resolve_db_path()
