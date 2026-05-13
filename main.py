@@ -987,6 +987,29 @@ async def _process_symbol(
             f"conf={gate_conf} reason={gate_reason[:120]}"
         )
 
+        # Записываем решение gate в журнал ai_gate_log. applied=True только
+        # если решение фактически применится к торговле: active-режим +
+        # verdict veto/error (в shadow applied всегда False, т.к. сделка
+        # будет открыта независимо от verdict).
+        try:
+            strat_for_log = str(
+                (order.get("meta") or {}).get("strategy_name") or "strategy_v2"
+            )
+            applied = (gate_mode == "active") and (
+                gate_verdict in ("veto", "error")
+            )
+            memory.record_ai_gate(
+                symbol=symbol,
+                side=("LONG" if side == "Buy" else "SHORT"),
+                strategy=strat_for_log,
+                verdict=gate_verdict,
+                reason=gate_reason,
+                confidence=gate_conf,
+                applied=applied,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LOOP] {symbol}: ошибка record_ai_gate: {exc}")
+
     # В active mode veto ИЛИ error блокируют вход (fail-CLOSED);
     # в shadow mode - только логирование.
     if gate_mode == "active" and gate_verdict in ("veto", "error"):
@@ -1191,6 +1214,9 @@ def _build_state() -> dict[str, Any]:
             "last_postmortem_iso_week": None,
             "last_heartbeat_epoch": 0.0,
             "rejection_ring": collections.deque(maxlen=50),
+            # Эпоха старта процесса. Используется 📊 СТАТУС-кнопкой в
+            # Telegram для расчёта uptime (time.time() - started_epoch).
+            "started_epoch": time.time(),
         },
         "instruments": {},
     }
@@ -1210,7 +1236,7 @@ async def main() -> None:
     state = _build_state()
 
     async with aiohttp.ClientSession() as session:
-        print("[MAIN] Zenith-Control Ultimate v2 запущен")
+        print("[MAIN] Zenith-Control Ultimate v3 запущен")
 
         # Стартовый баланс: ставим equity_start и HWM. На сбое биржи - warn.
         exch_label = config.EXCHANGE.upper()
@@ -1247,13 +1273,41 @@ async def main() -> None:
                 state["instruments"][symbol] = info
 
         print("[MAIN] Telegram-бот запущен в режиме Long Polling")
+
+        # Стартовое push-сообщение. Показываем баланс, режим торговли
+        # (ДЕМО / РЕАЛ), DRY_RUN, AI-Gate и список символов - чтобы
+        # пользователь сразу видел, на каком счёте бот работает.
+        mode_label = (
+            "ДЕМО (OKX testnet, виртуальные)"
+            if config.IS_TESTNET
+            else "⚠ РЕАЛ (OKX mainnet, реальные деньги)"
+        )
+        dry_run_label = "ВКЛ" if getattr(config, "DRY_RUN", False) else "ВЫКЛ"
+        gate_mode_raw = str(
+            getattr(config, "AI_TRADE_GATE_MODE", "off") or "off"
+        ).lower()
+        gate_mode_label = {
+            "active": "активен",
+            "shadow": "наблюдение",
+            "off": "выключен",
+        }.get(gate_mode_raw, gate_mode_raw)
+        balance_str = (
+            f"{float(balance):.2f}"
+            if balance is not None
+            else "не удалось получить"
+        )
+        symbols_line = " ".join(config.SYMBOLS)
+        start_msg = (
+            "🚀 <b>Zenith-Control Ultimate v3 запущен</b>\n\n"
+            f"💰 Баланс: {balance_str} USDT\n"
+            f"🏦 Режим: {mode_label}\n"
+            f"🧪 DRY_RUN: {dry_run_label}\n"
+            f"🛡 AI-Gate: {gate_mode_label}\n"
+            f"🎯 Символы: {symbols_line}"
+        )
         await telegram_bot.send_message(
             session,
-            (
-                "🚀 <b>Zenith-Control Ultimate v2</b> запущен.\n"
-                "Мульти-символ: " + ", ".join(config.SYMBOLS) + ".\n"
-                "Выберите действие ниже."
-            ),
+            start_msg,
             reply_markup=telegram_bot.set_keyboard(),
         )
         await asyncio.gather(
