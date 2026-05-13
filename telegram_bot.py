@@ -6,13 +6,13 @@ Long polling через aiohttp напрямую (без python-telegram-bot).
 пользователя отвечаем answerCallbackQuery с текстом «Доступ запрещён»,
 но ничего в системе не меняем.
 
-Главное меню v3 - 9 кнопок (4 ряда по 2 + 1 широкая снизу):
+Главное меню v3 - 10 кнопок (4 ряда по 2 + 1 ряд из 2):
 
     📊 СТАТУС        📈 ПОЗИЦИИ
     🛡 AI-GATE       🎯 РЕЖИМЫ
     🔍 ПОЧЕМУ МИМО?  📝 ЛОГИ
     ⏯ СТАРТ/СТОП    🚨 PANIC SELL
-    🔑 КЛЮЧИ API             (широкая)
+    🔑 КЛЮЧИ API    🤖 GROQ
 
 Все тексты для пользователя - на русском. Технические теги (vol_low,
 ai_gate_veto и т.п.) в БД остаются английскими для совместимости с
@@ -60,6 +60,8 @@ CB_LOGS = "zc:logs"
 CB_STARTSTOP = "zc:startstop"
 CB_PANIC = "zc:panic"
 CB_KEYS = "zc:keys"
+CB_GROQ = "zc:groq"
+CB_GROQ_REFRESH = "zc:groq_refresh"
 
 # Подменю / действия.
 CB_TOGGLE_DRY_RUN = "zc:toggle_dry"
@@ -173,7 +175,7 @@ def _g(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def set_keyboard() -> dict[str, Any]:
-    """Главная reply-клавиатура v3: 9 кнопок (4 ряда по 2 + 1 широкая)."""
+    """Главная reply-клавиатура v3: 10 кнопок (4 ряда по 2 + 1 ряд из 2)."""
     return {
         "inline_keyboard": [
             [
@@ -194,6 +196,7 @@ def set_keyboard() -> dict[str, Any]:
             ],
             [
                 {"text": "🔑 КЛЮЧИ API", "callback_data": CB_KEYS},
+                {"text": "🤖 GROQ", "callback_data": CB_GROQ},
             ],
         ]
     }
@@ -1455,6 +1458,89 @@ async def _handle_key_confirm(
     )
 
 
+# --- Квота Groq API (пассивный мониторинг) --------------------------------
+
+async def _handle_groq_quota(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Показать текущее состояние квоты Groq API.
+
+    Использует пассивный снапшот ai_groq.get_quota_snapshot() - не делает
+    дополнительных сетевых вызовов. Снапшот обновляется на каждом HTTP-ответе
+    от Groq (macro-sentinel / ai_regime / ai_trade_gate).
+    """
+    import ai_groq
+    snap = ai_groq.get_quota_snapshot()
+
+    inline = {
+        "inline_keyboard": [
+            [{"text": "🔄 Обновить", "callback_data": CB_GROQ_REFRESH}],
+            [{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}],
+        ]
+    }
+
+    if snap.get("updated_epoch", 0.0) == 0.0:
+        text = (
+            "🤖 <b>Квота Groq API</b>\n\n"
+            "⏱ Снапшот квоты ещё не получен.\n\n"
+            "Дождитесь первого вызова Groq "
+            "(macro-sentinel / ai_regime / AI-Gate) — обычно это "
+            "происходит в течение минуты после старта."
+        )
+        return text, inline
+
+    age_sec = int(max(0, time.time() - snap["updated_epoch"]))
+    if age_sec < 60:
+        age_str = f"{age_sec}с назад"
+    elif age_sec < 3600:
+        age_str = f"{age_sec // 60}м назад"
+    else:
+        age_str = f"{age_sec // 3600}ч {(age_sec % 3600) // 60}м назад"
+
+    def _pct(used: int, limit: int) -> str:
+        if limit <= 0:
+            return "0.0%"
+        return f"{(used / limit) * 100.0:.1f}%"
+
+    rpd_used = max(0, snap["rpd_limit"] - snap["rpd_remaining"])
+    tpd_used = max(0, snap["tpd_limit"] - snap["tpd_remaining"])
+    rpm_used = max(0, snap["rpm_limit"] - snap["rpm_remaining"])
+
+    lines = [
+        "🤖 <b>Квота Groq API</b>",
+        "",
+        "📊 Сегодня:",
+        f"   ✅ Запросов: {rpd_used} / {snap['rpd_limit']} ({_pct(rpd_used, snap['rpd_limit'])})",
+        f"   🔵 Токенов:  {tpd_used} / {snap['tpd_limit']} ({_pct(tpd_used, snap['tpd_limit'])})",
+        "",
+        "⏱ Текущая минута:",
+        f"   Запросов: {rpm_used} / {snap['rpm_limit']} ({_pct(rpm_used, snap['rpm_limit'])})",
+    ]
+
+    reset_lines = []
+    if snap.get("rpd_reset"):
+        reset_lines.append(f"   Запросы (сутки): {snap['rpd_reset']}")
+    if snap.get("tpd_reset"):
+        reset_lines.append(f"   Токены (сутки):  {snap['tpd_reset']}")
+    if snap.get("rpm_reset"):
+        reset_lines.append(f"   Минутный лимит:  {snap['rpm_reset']}")
+    if reset_lines:
+        lines.append("")
+        lines.append("🔄 Квота сбрасывается через:")
+        lines.extend(reset_lines)
+
+    lines.append("")
+    lines.append(f"📡 Снапшот обновлён: {age_str}")
+    lines.append("")
+    lines.append("💡 Ориентировочное потребление:")
+    lines.append("   • macro-sentinel: ~1 / час")
+    lines.append("   • ai_regime:     ~14 / час (7 символов × 2 обновл.)")
+    lines.append("   • ai_trade_gate: 0-5 / час (зависит от сигналов)")
+    lines.append("   Итого ≈ 360-480 вызовов в сутки")
+
+    return "\n".join(lines), inline
+
+
 # --- Диспетчер callback-ов -------------------------------------------------
 
 async def _process_callback(
@@ -1535,6 +1621,8 @@ async def _process_callback(
             )
         elif data == CB_KEYS:
             result = await _handle_keys_menu(session, state)
+        elif data == CB_GROQ or data == CB_GROQ_REFRESH:
+            result = await _handle_groq_quota(session, state)
         elif data.startswith(CB_KEY_PREFIX) and not data.startswith(
             CB_KEY_CONFIRM_PREFIX
         ):
