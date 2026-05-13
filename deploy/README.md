@@ -238,6 +238,37 @@ sudo systemctl restart zenith
 `git checkout feat/v2-meanrevert` (или `feat/zenith-control-ultimate`
 чтобы вернуться на v1) + `systemctl restart zenith`.
 
+### Переход на v3-tg-dashboard (расширенный Telegram UI + Демо/Реал)
+
+Ветка `feat/v3-tg-dashboard` добавляет новый Telegram-дашборд (9 кнопок,
+включая 🔑 КЛЮЧИ API и 🏦 Демо/Реал), таблицу `ai_gate_log` для журнала
+решений AI-Gate и раздельные OKX-ключи для demo/mainnet. Подробности в
+корневом README, секция «v3 Telegram UI».
+
+```bash
+sudo -u zenith git -C /opt/zenith fetch origin feat/v3-tg-dashboard
+sudo -u zenith git -C /opt/zenith checkout feat/v3-tg-dashboard
+sudo systemctl restart zenith
+```
+
+Переменные окружения (опциональные, заполняются позже через 🔑 КЛЮЧИ API
+прямо из Telegram, без SSH):
+
+```env
+# OKX Реал (для переключения на mainnet через кнопку 🏦 Демо/Реал).
+OKX_API_KEY_REAL=
+OKX_API_SECRET_REAL=
+OKX_PASSPHRASE_REAL=
+
+# Режим торговли: true = OKX Demo (по умолчанию), false = OKX Mainnet.
+IS_TESTNET=true
+```
+
+При `IS_TESTNET=false` бот работает на реальном счёте - всегда держите
+`DRY_RUN=true` хотя бы одни сутки после переключения, убедитесь что
+`📊 СТАТУС` показывает корректный реальный баланс, и только потом
+выключайте DRY_RUN.
+
 Docker:
 
 ```bash
