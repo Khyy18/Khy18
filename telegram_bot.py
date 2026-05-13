@@ -89,6 +89,9 @@ CB_BLOCKS_AUTOSETTINGS = "zc:blk_set"
 CB_BLOCKS_AUTOSET_PREFIX = "zc:blk_set_v:"  # + "<field>:<value>" (s=streak, h=hours)
 CB_EXPORT_ENV = "zc:env_export"  # FEAT-005: экспорт настроек .env
 CB_PAIRS = "zc:pairs"            # FEAT-006: статистика по парам
+CB_PAIR_PICKER = "zc:pair_pick"  # FEAT-006: список пар «Подробнее ▾»
+CB_PAIR_DETAIL_PREFIX = "zc:pair:"        # + symbol
+CB_PAIR_BLOCK_PREFIX = "zc:pair_blk:"     # + symbol → перевод в FSM блока
 CB_BT_MENU = "zc:bt"             # FEAT-008: Backtest UI
 
 # Подменю / действия.
@@ -921,8 +924,363 @@ async def _handle_env_export(
 async def _handle_pairs_stub(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    """Заглушка кнопки 📈 По парам (FEAT-006 / C2)."""
+    """Заглушка кнопки 📈 По парам (FEAT-006 / C2) — оставлена для
+    обратной совместимости callback-имён, реальный обработчик ниже."""
     return _stage_placeholder("C2 (статистика по парам)")
+
+
+# --- FEAT-006 / C2: статистика по парам (per-symbol stats) -----------------
+# `📈 По парам` доступно из 📊 СТАТУС. Сводная таблица за 30 дней по всем
+# config.SYMBOLS с цветовыми индикаторами:
+#   🟢  winrate >= 60% AND pnl > 0
+#   🔴  winrate < 40% OR pnl < -10
+#   ⚪  меньше 5 сделок (мало данных)
+#   🟡  иначе
+# Из таблицы по кнопке `Подробнее ▾` открывается выбор символа; на per-symbol
+# detail-странице показываются profit factor, среднее время удержания (если
+# можно вычислить), топ причин убытков и AI-Gate статистика по символу. На
+# detail доступна кнопка «🚫 Заблокировать» — она ставит symbol в FSM
+# из FEAT-004 сразу на шаг выбора длительности.
+
+def _pair_dot(count: int, winrate: float, pnl_sum: float) -> str:
+    """Цветовая точка по правилам FEAT-006."""
+    if count < 5:
+        return _status_dot("off")
+    if winrate >= 60.0 and pnl_sum > 0.0:
+        return _status_dot("ok")
+    if winrate < 40.0 or pnl_sum < -10.0:
+        return _status_dot("bad")
+    return _status_dot("warn")
+
+
+def _short_symbol(symbol: str) -> str:
+    """Короткое имя символа (без хвоста USDT) для компактных таблиц."""
+    s = str(symbol or "-")
+    return s[: -len("USDT")] if s.endswith("USDT") else s
+
+
+async def _handle_per_symbol_stats(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Карточка `📈 Статистика · 30д` — таблица по всем парам + Итого."""
+    try:
+        rows = memory.get_per_symbol_stats(30)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_per_symbol_stats: {exc}")
+        rows = []
+
+    body: list[str] = []
+    # Заголовок таблицы (моноширинный, выровнен по ширине _short_symbol).
+    body.append("Символ      Сделок  Винрейт      PnL")
+    body.append("─" * 36)
+
+    if not rows:
+        body.append("(нет данных за период)")
+    else:
+        for r in rows:
+            sym_short = _short_symbol(str(r.get("symbol") or "-"))
+            count = int(r.get("count") or 0)
+            winrate = float(r.get("winrate") or 0.0)
+            pnl_sum = float(r.get("pnl_sum") or 0.0)
+            dot = _pair_dot(count, winrate, pnl_sum)
+            body.append(
+                f"{dot} {sym_short:<6}  "
+                f"{count:>5}   "
+                f"{_fmt_num(winrate, 1):>6}%   "
+                f"{_fmt_pnl(pnl_sum, 1)}"
+            )
+
+    body.append(_subhr_line())
+    total_count = sum(int(r.get("count") or 0) for r in rows)
+    total_wins = sum(int(r.get("wins") or 0) for r in rows)
+    total_losses = sum(int(r.get("losses") or 0) for r in rows)
+    total_decided = total_wins + total_losses
+    total_winrate = (
+        (total_wins / total_decided * 100.0) if total_decided else 0.0
+    )
+    total_pnl = sum(float(r.get("pnl_sum") or 0.0) for r in rows)
+    body.append(
+        f"Итого: сделок {total_count}, "
+        f"винрейт {_fmt_num(total_winrate, 1)}%, "
+        f"PnL {_fmt_pnl(total_pnl, 1)}"
+    )
+
+    text = _card("Статистика · 30д", "📈", body)
+    inline = {
+        "inline_keyboard": [
+            [{"text": "Подробнее ▾", "callback_data": CB_PAIR_PICKER}],
+            [{"text": "◀ Назад", "callback_data": CB_STATUS}],
+        ]
+    }
+    return text, inline
+
+
+async def _handle_pair_picker(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Сетка кнопок: выбор пары для перехода в detail-карточку."""
+    body = [
+        "Выберите пару для подробной статистики.",
+        _subhr_line(),
+        "Период анализа: последние 30 дней.",
+    ]
+    text = _card("Подробнее по парам", "📈", body)
+    inline_rows: list[list[dict[str, Any]]] = []
+    row: list[dict[str, Any]] = []
+    for symbol in config.SYMBOLS:
+        row.append({
+            "text": _short_symbol(symbol),
+            "callback_data": f"{CB_PAIR_DETAIL_PREFIX}{symbol}",
+        })
+        if len(row) == 2:
+            inline_rows.append(row)
+            row = []
+    if row:
+        inline_rows.append(row)
+    inline_rows.append([
+        {"text": "◀ К таблице", "callback_data": CB_PAIRS},
+    ])
+    return text, {"inline_keyboard": inline_rows}
+
+
+def _format_avg_holding(symbol: str) -> Optional[str]:
+    """Среднее время удержания закрытых сделок за 30 дней.
+
+    Считаем разницу `closed_ts - ts` для всех закрытых сделок символа
+    из последних 30 суток. Если в выборке нет валидных пар времени —
+    возвращаем None (UI скрывает строку).
+    """
+    sym = str(symbol or "-").strip().upper()
+    try:
+        trades = memory.get_trades_since(30)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_trades_since(30): {exc}")
+        return None
+    deltas: list[float] = []
+    for t in trades:
+        if str(t.get("symbol") or "").upper() != sym:
+            continue
+        closed = t.get("closed_ts")
+        opened = t.get("ts")
+        if not closed or not opened:
+            continue
+        dt_open = _parse_iso(str(opened))
+        dt_close = _parse_iso(str(closed))
+        if dt_open is None or dt_close is None:
+            continue
+        delta = (dt_close - dt_open).total_seconds()
+        if delta > 0:
+            deltas.append(delta)
+    if not deltas:
+        return None
+    avg_sec = sum(deltas) / len(deltas)
+    # Округляем до часов и минут.
+    hours = int(avg_sec // 3600)
+    minutes = int((avg_sec % 3600) // 60)
+    if hours <= 0:
+        return f"{minutes}м"
+    return f"{hours}ч {minutes}м"
+
+
+def _ai_gate_stats_for_symbol(
+    symbol: str, days: int = 30, scan_limit: int = 500,
+) -> dict[str, int]:
+    """AI-Gate агрегация по конкретному символу: approve/veto/error/total.
+
+    Делаем простой фильтр свежих записей gate-лога локально. Базовых
+    хелперов хватает: get_ai_gate_recent уже даёт нам новейшие записи
+    с пагинацией.
+    """
+    sym = str(symbol or "-").strip().upper()
+    out = {"approve": 0, "veto": 0, "error": 0, "total": 0}
+    try:
+        recent = memory.get_ai_gate_recent(int(scan_limit))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_ai_gate_recent: {exc}")
+        return out
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=int(days))
+    for r in recent:
+        if str(r.get("symbol") or "").upper() != sym:
+            continue
+        ts_dt = _parse_iso(str(r.get("ts") or ""))
+        if ts_dt is not None and ts_dt < cutoff:
+            continue
+        verdict = str(r.get("verdict") or "").lower()
+        if verdict in out:
+            out[verdict] += 1
+        out["total"] += 1
+    return out
+
+
+async def _handle_pair_detail(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    symbol: str,
+) -> tuple[str, dict[str, Any]]:
+    """Подробная карточка по символу: PF, средн. время, AI-Gate, top-loss."""
+    sym = str(symbol or "-").strip().upper()
+    if sym not in [s.upper() for s in config.SYMBOLS]:
+        return await _handle_per_symbol_stats(session, state)
+
+    try:
+        stats = memory.get_symbol_stats_30d(sym)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_symbol_stats_30d({sym}): {exc}")
+        stats = {
+            "count": 0, "wins": 0, "losses": 0, "winrate": 0.0,
+            "pnl_sum": 0.0, "avg_pnl": 0.0, "avg_rr_realized": 0.0,
+        }
+    try:
+        recent = memory.get_last_trades(sym, 5)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_last_trades({sym}): {exc}")
+        recent = []
+    try:
+        top_loss = memory.get_top_loss_reasons(sym, 30, 5)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_top_loss_reasons({sym}): {exc}")
+        top_loss = []
+    gate_stats = _ai_gate_stats_for_symbol(sym, days=30)
+
+    # Profit factor: сумма выигрышей / |сумма проигрышей|. Сделки берём
+    # из get_trades_since за 30 дней и фильтруем по символу.
+    sum_wins = 0.0
+    sum_losses_abs = 0.0
+    try:
+        trades = memory.get_trades_since(30)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] get_trades_since(30) for PF: {exc}")
+        trades = []
+    for t in trades:
+        if str(t.get("symbol") or "").upper() != sym:
+            continue
+        outcome = str(t.get("outcome") or "").upper()
+        try:
+            pnl = float(t.get("pnl") or 0.0)
+        except (TypeError, ValueError):
+            pnl = 0.0
+        if outcome == "WIN" and pnl > 0:
+            sum_wins += pnl
+        elif outcome == "LOSS" and pnl < 0:
+            sum_losses_abs += abs(pnl)
+    if sum_losses_abs > 0:
+        pf_str = f"{sum_wins / sum_losses_abs:.2f}"
+    elif sum_wins > 0:
+        pf_str = "∞"
+    else:
+        pf_str = "-"
+
+    avg_holding = _format_avg_holding(sym)
+
+    count = int(stats.get("count") or 0)
+    wins = int(stats.get("wins") or 0)
+    losses = int(stats.get("losses") or 0)
+    winrate = float(stats.get("winrate") or 0.0)
+    pnl_sum = float(stats.get("pnl_sum") or 0.0)
+    avg_pnl = float(stats.get("avg_pnl") or 0.0)
+    dot = _pair_dot(count, winrate, pnl_sum)
+
+    body: list[str] = [
+        _label("Статус", f"{dot}  30 дней"),
+        _subhr_line(),
+        _label("Сделок", f"{count}  ({wins} win / {losses} loss)"),
+        _label("Винрейт", f"{_fmt_num(winrate, 1)}%"),
+        _label("PnL", _fmt_pnl(pnl_sum, 2)),
+        _label("Средний", _fmt_pnl(avg_pnl, 2)),
+        _label("Profit factor", pf_str),
+    ]
+    if avg_holding:
+        body.append(_label("Среднее время", avg_holding))
+    body.append(_subhr_line())
+
+    body.append("Последние сделки:")
+    if not recent:
+        body.append("  (нет закрытых сделок)")
+    else:
+        for r in recent:
+            outcome = str(r.get("outcome") or "-").upper()
+            side = str(r.get("side") or "-")
+            try:
+                pnl = float(r.get("pnl") or 0.0)
+            except (TypeError, ValueError):
+                pnl = 0.0
+            body.append(
+                f"  {outcome:<4} {side:<5} {_fmt_pnl(pnl, 2)}"
+            )
+
+    body.append(_subhr_line())
+    body.append("Топ причин убытков (rejected_checks):")
+    if not top_loss:
+        body.append("  (нет данных)")
+    else:
+        for r in top_loss:
+            f_name = str(r.get("filter") or "-")
+            cnt = int(r.get("count") or 0)
+            body.append(f"  · {f_name} ({cnt})")
+
+    body.append(_subhr_line())
+    body.append("AI-Gate (30 дней):")
+    body.append(
+        f"  🟢 {gate_stats['approve']}  🔴 {gate_stats['veto']}  "
+        f"🟡 {gate_stats['error']}  · {gate_stats['total']}"
+    )
+
+    text = _card(f"📈 {sym}", "", body)
+
+    inline = {
+        "inline_keyboard": [
+            [{
+                "text": "🚫 Заблокировать",
+                "callback_data": f"{CB_PAIR_BLOCK_PREFIX}{sym}",
+            }],
+            [{"text": "◀ К таблице", "callback_data": CB_PAIRS}],
+        ]
+    }
+    return text, inline
+
+
+async def _handle_pair_block_start(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+    symbol: str,
+) -> tuple[str, dict[str, Any]]:
+    """Подготовить FSM из FEAT-004 на шаге `await_duration`, заполнив
+    symbol заранее, и сразу показать выбор длительности — без необходимости
+    повторно вводить тикер."""
+    sym = str(symbol or "-").strip().upper()
+    if not sym or not _looks_like_symbol(sym):
+        return await _handle_per_symbol_stats(session, state)
+
+    _blocks_fsm_state[chat_id] = {
+        "step": "await_duration",
+        "symbol": sym,
+        "started": time.time(),
+    }
+    body = [
+        _label("Пара", sym),
+        _subhr_line(),
+        "Выберите длительность блока:",
+    ]
+    duration_buttons: list[list[dict[str, Any]]] = []
+    row: list[dict[str, Any]] = []
+    for value, label in _BLOCKS_DURATIONS:
+        row.append({
+            "text": label,
+            "callback_data": f"{CB_BLOCKS_DURATION_PREFIX}{value}",
+        })
+        if len(row) == 3:
+            duration_buttons.append(row)
+            row = []
+    if row:
+        duration_buttons.append(row)
+    duration_buttons.append([{
+        "text": "❌ Отмена",
+        "callback_data": CB_BLOCKS_CANCEL,
+    }])
+    return _card("Добавить запрет", "🚫", body), {
+        "inline_keyboard": duration_buttons,
+    }
 
 
 async def _handle_bt_stub(
@@ -3028,7 +3386,17 @@ async def _process_callback(
         elif data == CB_EXPORT_ENV:
             result = await _handle_env_export(session, state, chat_id_int)
         elif data == CB_PAIRS:
-            result = await _handle_pairs_stub(session, state)
+            result = await _handle_per_symbol_stats(session, state)
+        elif data == CB_PAIR_PICKER:
+            result = await _handle_pair_picker(session, state)
+        elif data.startswith(CB_PAIR_BLOCK_PREFIX):
+            sym = data[len(CB_PAIR_BLOCK_PREFIX):]
+            result = await _handle_pair_block_start(
+                session, state, chat_id_int, sym
+            )
+        elif data.startswith(CB_PAIR_DETAIL_PREFIX):
+            sym = data[len(CB_PAIR_DETAIL_PREFIX):]
+            result = await _handle_pair_detail(session, state, sym)
         elif data == CB_BT_MENU:
             result = await _handle_bt_stub(session, state)
         elif data.startswith(CB_KEY_PREFIX) and not data.startswith(

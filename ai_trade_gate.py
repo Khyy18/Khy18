@@ -48,7 +48,7 @@ verdict="error".
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 import aiohttp
 
@@ -88,12 +88,28 @@ def _build_prompt(
     blackout: bool,
     news_headlines: list[str],
     news_limit: int,
+    historical_context: Optional[str] = None,
 ) -> str:
     """Собрать prompt для Groq. Инструкция по умолчанию approve; veto
     разрешён только если один из перечисленных red-flag явно упомянут в
-    заголовках И он касается нашего символа или биржи (OKX)."""
+    заголовках И он касается нашего символа или биржи (OKX).
+
+    `historical_context` — опциональный многострочный блок со статистикой
+    по символу (винрейт, средний R/R, последние сделки, топ причин
+    убытков). Если передан и не пустой, добавляется отдельной секцией
+    после «Параметры сделки» — даёт модели представление о том, как
+    конкретная пара себя ведёт исторически. Если None или пустая
+    строка — секция не добавляется (поведение совместимо с прежним
+    промптом).
+    """
     hl_block = _format_headlines_block(news_headlines, news_limit)
     blackout_str = "ON" if blackout else "OFF"
+    history_section = ""
+    hist_clean = (historical_context or "").strip()
+    if hist_clean:
+        history_section = (
+            f"\n\nИСТОРИЧЕСКИЙ КОНТЕКСТ {symbol} (30 дней):\n{hist_clean}\n"
+        )
     return (
         "Ты ай-veto gate для криптобота. Стратегия и все детерминистические "
         "фильтры уже решили открыть сделку. Твоя задача - найти в новостях "
@@ -124,7 +140,8 @@ def _build_prompt(
         f"- цена входа: {entry_price}\n"
         f"- ATR(1h) / close: {atr_pct:.5f}\n"
         f"- режим рынка: {regime} (conf={regime_confidence})\n"
-        f"- blackout macro-sentinel: {blackout_str}\n\n"
+        f"- blackout macro-sentinel: {blackout_str}"
+        f"{history_section}\n\n"
         f"Свежие заголовки по символу:\n{hl_block}\n"
     )
 
@@ -141,6 +158,7 @@ async def check_trade(
     regime_confidence: int,
     blackout: bool,
     news_headlines: list[str],
+    historical_context: Optional[str] = None,
 ) -> dict[str, Any]:
     """Спросить Groq: approve/veto? Гарантированно возвращает dict, не raises.
 
@@ -151,6 +169,11 @@ async def check_trade(
 
     "error" означает сбой gate (сеть, таймаут, битый JSON). Верхний слой в
     active-режиме обязан трактовать "error" как veto (fail-CLOSED).
+
+    `historical_context` — опциональный текст со статистикой по символу
+    за последние 30 дней (винрейт, последние сделки, топ причин убытков).
+    Если передан и не пустой — подмешивается в prompt отдельной секцией;
+    иначе игнорируется.
     """
     news_limit = int(getattr(config, "AI_TRADE_GATE_NEWS_LIMIT", 10) or 10)
     timeout = int(getattr(config, "AI_TRADE_GATE_TIMEOUT", 8) or 8)
@@ -167,6 +190,7 @@ async def check_trade(
             blackout=bool(blackout),
             news_headlines=list(news_headlines or []),
             news_limit=news_limit,
+            historical_context=historical_context,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[AI-GATE] ошибка построения промпта: {exc}")

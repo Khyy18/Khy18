@@ -848,6 +848,184 @@ def is_symbol_blocked(
         return False, None
 
 
+def get_symbol_stats_30d(symbol: str) -> dict[str, Any]:
+    """Сводная статистика по конкретному символу за последние 30 суток.
+
+    Возвращает dict с ключами:
+        count, wins, losses, winrate, pnl_sum, avg_pnl, avg_rr_realized.
+
+    Учитываются только закрытые сделки (outcome IN ('WIN','LOSS') и
+    closed_ts IS NOT NULL). avg_rr_realized оставлен 0.0 — расчёт R по
+    риску требует знать risk_per_trade на момент открытия (сейчас в схеме
+    trades такой колонки нет, поэтому подменить нечем). Поле оставлено
+    в сигнатуре чтобы не ломать вызывающий код, когда расчёт появится.
+    """
+    stats: dict[str, Any] = {
+        "count": 0,
+        "wins": 0,
+        "losses": 0,
+        "winrate": 0.0,
+        "pnl_sum": 0.0,
+        "avg_pnl": 0.0,
+        "avg_rr_realized": 0.0,
+    }
+    sym = str(symbol or "-").strip().upper()
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*)                                       AS count,
+                    SUM(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) AS wins,
+                    SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses,
+                    COALESCE(SUM(pnl), 0.0)                        AS pnl_sum,
+                    COALESCE(AVG(pnl), 0.0)                        AS avg_pnl
+                FROM trades
+                WHERE symbol = ?
+                  AND outcome IN ('WIN','LOSS')
+                  AND closed_ts IS NOT NULL
+                  AND datetime(closed_ts) >= datetime('now', '-30 days')
+                """,
+                (sym,),
+            ).fetchone()
+            if row is not None:
+                count = int(row["count"] or 0)
+                wins = int(row["wins"] or 0)
+                losses = int(row["losses"] or 0)
+                stats["count"] = count
+                stats["wins"] = wins
+                stats["losses"] = losses
+                stats["pnl_sum"] = float(row["pnl_sum"] or 0.0)
+                stats["avg_pnl"] = float(row["avg_pnl"] or 0.0)
+                total = wins + losses
+                stats["winrate"] = (wins / total * 100.0) if total else 0.0
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_symbol_stats_30d({symbol}): {exc}")
+    return stats
+
+
+def get_last_trades(symbol: str, n: int = 3) -> list[dict[str, Any]]:
+    """Последние n WIN/LOSS-сделок по символу, новейшие первыми.
+
+    Возвращает список dict с полями {ts, side, pnl, outcome}. ts —
+    closed_ts (момент закрытия), если он есть; иначе ts открытия.
+    """
+    sym = str(symbol or "-").strip().upper()
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT ts, closed_ts, side, pnl, outcome
+                FROM trades
+                WHERE symbol = ?
+                  AND outcome IN ('WIN','LOSS')
+                  AND closed_ts IS NOT NULL
+                ORDER BY closed_ts DESC, id DESC
+                LIMIT ?
+                """,
+                (sym, int(n)),
+            ).fetchall()
+            return [
+                {
+                    "ts": r["closed_ts"] or r["ts"],
+                    "side": str(r["side"] or "-"),
+                    "pnl": float(r["pnl"] or 0.0),
+                    "outcome": str(r["outcome"] or "-"),
+                }
+                for r in rows
+            ]
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_last_trades({symbol}): {exc}")
+        return []
+
+
+def get_top_loss_reasons(
+    symbol: str, days: int = 30, limit: int = 3,
+) -> list[dict[str, Any]]:
+    """Топ-N filter из rejected_checks за `days` суток для конкретного
+    символа: «какие фильтры чаще всего блокируют этот символ».
+
+    Возвращает список [{"filter": str, "count": int}, ...] длиной до
+    `limit`. На пустой выборке — пустой список.
+    """
+    sym = str(symbol or "-").strip().upper()
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT filter, COUNT(*) AS cnt
+                FROM rejected_checks
+                WHERE symbol = ?
+                  AND datetime(ts) >= datetime('now', ?)
+                GROUP BY filter
+                ORDER BY cnt DESC
+                LIMIT ?
+                """,
+                (sym, f"-{int(days)} days", int(limit)),
+            ).fetchall()
+            return [
+                {"filter": str(r["filter"]), "count": int(r["cnt"] or 0)}
+                for r in rows
+            ]
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_top_loss_reasons({symbol}): {exc}")
+        return []
+
+
+def get_per_symbol_stats(days: int = 30) -> list[dict[str, Any]]:
+    """По каждому символу из config.SYMBOLS — сводка за `days` суток.
+
+    Возвращает список dict с ключами {symbol, count, wins, losses,
+    winrate, pnl_sum}, отсортированный по pnl_sum DESC. Сделки учитываются
+    только закрытые (outcome IN ('WIN','LOSS') и closed_ts NOT NULL).
+
+    Итог по всем символам считается отдельно вызывающей стороной (для UI).
+    """
+    try:
+        import config as _cfg  # noqa: PLC0415
+        symbols = list(getattr(_cfg, "SYMBOLS", []) or [])
+    except Exception:  # noqa: BLE001
+        symbols = []
+    out: list[dict[str, Any]] = []
+    try:
+        with _connect() as conn:
+            for sym in symbols:
+                row = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*)                                       AS count,
+                        SUM(CASE WHEN outcome='WIN'  THEN 1 ELSE 0 END) AS wins,
+                        SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses,
+                        COALESCE(SUM(pnl), 0.0)                        AS pnl_sum
+                    FROM trades
+                    WHERE symbol = ?
+                      AND outcome IN ('WIN','LOSS')
+                      AND closed_ts IS NOT NULL
+                      AND datetime(closed_ts) >= datetime('now', ?)
+                    """,
+                    (str(sym), f"-{int(days)} days"),
+                ).fetchone()
+                count = int(row["count"] or 0) if row else 0
+                wins = int(row["wins"] or 0) if row else 0
+                losses = int(row["losses"] or 0) if row else 0
+                pnl_sum = float(row["pnl_sum"] or 0.0) if row else 0.0
+                total = wins + losses
+                winrate = (wins / total * 100.0) if total else 0.0
+                out.append({
+                    "symbol": str(sym),
+                    "count": count,
+                    "wins": wins,
+                    "losses": losses,
+                    "winrate": winrate,
+                    "pnl_sum": pnl_sum,
+                })
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_per_symbol_stats: {exc}")
+        return []
+    out.sort(key=lambda r: r["pnl_sum"], reverse=True)
+    return out
+
+
 def get_consecutive_losses(symbol: str, limit: int = 10) -> int:
     """Количество подряд идущих LOSS по символу с самой свежей закрытой
     сделки до первого не-LOSS (WIN или OPEN). Open-сделки игнорируются —
