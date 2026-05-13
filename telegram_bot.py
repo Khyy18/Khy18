@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import tempfile
 import time
@@ -704,6 +705,141 @@ def _write_env_var(name: str, value: str) -> bool:
         return False
 
 
+# --- FEAT-005 / B3: экспорт настроек .env с маскированием секретов ---------
+# Регулярка имени переменной, значение которой нужно замаскировать. Матчит
+# суффиксы _KEY / _SECRET / _TOKEN, а также самостоятельное PASSPHRASE.
+_SECRET_NAME_RE = re.compile(r"(?i)(_KEY|_SECRET|_TOKEN|PASSPHRASE)")
+# Строка вида KEY=VALUE: валидное имя переменной, остальное - значение.
+_ENV_KV_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+
+
+def _mask_env_line(line: str) -> str:
+    """Замаскировать секрет в одной строке .env.
+
+    Правила:
+      * пустые строки и строки-комментарии (начинаются с `#`) возвращаются
+        как есть (без правок);
+      * если строка имеет форму ``KEY=VALUE`` и имя ``KEY`` матчится
+        ``_SECRET_NAME_RE`` (case-insensitive) - правая часть заменяется
+        на ``***``;
+      * все остальные строки возвращаются без изменений.
+
+    Сохраняется завершающий перенос строки, если он был.
+    """
+    if line is None:
+        return ""
+    # Сохраняем завершающий перенос строки, чтобы вернуть ровно тот же формат.
+    nl = ""
+    body = line
+    if body.endswith("\r\n"):
+        nl = "\r\n"
+        body = body[:-2]
+    elif body.endswith("\n"):
+        nl = "\n"
+        body = body[:-1]
+
+    stripped = body.lstrip()
+    if not stripped or stripped.startswith("#"):
+        return body + nl
+
+    m = _ENV_KV_RE.match(body)
+    if not m:
+        return body + nl
+    key = m.group(1)
+    if _SECRET_NAME_RE.search(key):
+        return f"{key}=***" + nl
+    return body + nl
+
+
+def _parse_env_example_keys() -> list[str]:
+    """Прочитать .env.example и вернуть имена ключей в порядке появления.
+
+    Используется как белый список для fallback-режима экспорта (когда .env
+    отсутствует на диске и собирается из ``os.environ``).
+    Закомментированные строки (``# KEY=...``) тоже учитываются - так в
+    .env.example документируются опциональные переменные.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, ".env.example")
+    keys: list[str] = []
+    seen: set[str] = set()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                # Снимаем ведущий `#` чтобы поймать опциональные ключи.
+                if line.startswith("#"):
+                    line = line.lstrip("#").strip()
+                if not line or "=" not in line:
+                    continue
+                m = _ENV_KV_RE.match(line)
+                if not m:
+                    continue
+                key = m.group(1)
+                if key in seen:
+                    continue
+                seen.add(key)
+                keys.append(key)
+    except OSError:
+        return []
+    return keys
+
+
+def _build_env_export() -> bytes:
+    """Собрать снимок .env с маскированными секретами.
+
+    Алгоритм:
+      1. Если файл ``_env_file_path()`` существует - читаем построчно и
+         пропускаем каждую строку через ``_mask_env_line`` (комментарии,
+         пустые строки и порядок строк сохраняются как есть).
+      2. Если файла нет - собираем снимок из ``os.environ`` по белому
+         списку имён из ``.env.example`` (порядок появления). Отсутствующие
+         в окружении ключи пропускаются.
+      3. В начало добавляется заголовок с временем UTC и пометкой о
+         маскировке.
+
+    Возвращает ``bytes`` в utf-8. Никогда не пишет реальные секреты в
+    stdout/log - только сами имена переменных.
+    """
+    iso_utc = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    header = (
+        "# Zenith-Control v3 — экспорт настроек\n"
+        f"# Сгенерировано: {iso_utc}\n"
+        "# Секреты замаскированы как ***\n"
+        "\n"
+    )
+
+    body_text = ""
+    path = _env_file_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                masked_lines = [_mask_env_line(raw) for raw in fh]
+            body_text = "".join(masked_lines)
+            # Гарантируем перевод строки на конце.
+            if body_text and not body_text.endswith("\n"):
+                body_text += "\n"
+        except OSError as exc:
+            print(f"[TG] _build_env_export: ошибка чтения {path}: {exc}")
+            body_text = ""
+
+    if not body_text:
+        # Fallback: синтезируем из os.environ по списку ключей .env.example.
+        keys = _parse_env_example_keys()
+        out: list[str] = []
+        for key in keys:
+            if key not in os.environ:
+                continue
+            value = os.environ[key]
+            if _SECRET_NAME_RE.search(key):
+                out.append(f"{key}=***\n")
+            else:
+                out.append(f"{key}={value}\n")
+        body_text = "".join(out)
+
+    return (header + body_text).encode("utf-8")
+
+
 # --- Заглушки для следующих этапов -----------------------------------------
 # Новые кнопки FEAT-002 показываются уже сейчас; их обработчики появятся в
 # FEAT-003/004/005/006/008. Чтобы не плодить веточки в диспетчере на каждый
@@ -718,11 +854,68 @@ def _stage_placeholder(stage: str) -> str:
     )
 
 
-async def _handle_export_env_stub(
-    session: aiohttp.ClientSession, state: dict[str, Any]
-) -> str:
-    """Заглушка кнопки 📤 Экспорт .env (FEAT-005 / B3)."""
-    return _stage_placeholder("B3 (экспорт .env)")
+async def _handle_env_export(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+) -> Optional[str]:
+    """Реальный обработчик кнопки 📤 Экспорт .env (FEAT-005 / B3).
+
+    Собирает снимок настроек через ``_build_env_export`` (секреты заменены
+    на ``***``) и шлёт его через ``send_document`` с короткой карточкой в
+    caption. Возвращает None при успехе (документ уже отправлен) или
+    строку-описание ошибки - её диспетчер пошлёт обычным send_message.
+    """
+    try:
+        file_bytes = _build_env_export()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] _handle_env_export: ошибка _build_env_export: {exc}")
+        return _card(
+            "Экспорт .env",
+            "📤",
+            ["Не удалось собрать снимок настроек.", str(exc)],
+        )
+
+    if not file_bytes or len(file_bytes) < 4:
+        return _card(
+            "Экспорт .env",
+            "📤",
+            ["Снимок настроек пуст: ни .env, ни os.environ"
+             " не содержат известных ключей."],
+        )
+
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = f".env-export-{ts}.txt"
+    caption_html = _card(
+        "Экспорт .env",
+        "📤",
+        [
+            "Секреты замаскированы как ***.",
+            "Файл можно загрузить на новом сервере",
+            "как стартовую точку настройки.",
+            _subhr_line(),
+            _label("Размер", f"{len(file_bytes)} байт"),
+            _label("Файл", filename),
+        ],
+    )
+
+    ok = await send_document(
+        session,
+        file_bytes,
+        filename,
+        caption=caption_html,
+        chat_id=chat_id,
+    )
+    if not ok:
+        return _card(
+            "Экспорт .env",
+            "📤",
+            ["Не удалось отправить файл (sendDocument).",
+             "Проверьте логи бота."],
+        )
+    # Документ уже доставлен - возвращаем None, чтобы диспетчер не слал
+    # дополнительное сообщение.
+    return None
 
 
 async def _handle_pairs_stub(
@@ -2833,7 +3026,7 @@ async def _process_callback(
             payload = data[len(CB_BLOCKS_AUTOSET_PREFIX):]
             result = await _handle_blocks_autoset(session, state, payload)
         elif data == CB_EXPORT_ENV:
-            result = await _handle_export_env_stub(session, state)
+            result = await _handle_env_export(session, state, chat_id_int)
         elif data == CB_PAIRS:
             result = await _handle_pairs_stub(session, state)
         elif data == CB_BT_MENU:
