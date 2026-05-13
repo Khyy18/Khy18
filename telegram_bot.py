@@ -6,13 +6,16 @@ Long polling через aiohttp напрямую (без python-telegram-bot).
 пользователя отвечаем answerCallbackQuery с текстом «Доступ запрещён»,
 но ничего в системе не меняем.
 
-Главное меню v3 - 10 кнопок (4 ряда по 2 + 1 ряд из 2):
+Главное меню v3 - 9 кнопок (4 ряда по 2 + 1 широкая снизу):
 
     📊 СТАТУС        📈 ПОЗИЦИИ
     🛡 AI-GATE       🎯 РЕЖИМЫ
     🔍 ПОЧЕМУ МИМО?  📝 ЛОГИ
-    ⏯ СТАРТ/СТОП    🚨 PANIC SELL
-    🔑 КЛЮЧИ API    🤖 GROQ
+    🤖 АНАЛИТИК      🔑 КЛЮЧИ API
+    ⏯ СТАРТ/СТОП  ·  🚨 PANIC SELL
+
+Кнопка 🤖 GROQ переехала из главного меню в подменю 📊 СТАТУС
+(пассивный мониторинг квоты Groq API).
 
 Все тексты для пользователя - на русском. Технические теги (vol_low,
 ai_gate_veto и т.п.) в БД остаются английскими для совместимости с
@@ -62,6 +65,13 @@ CB_PANIC = "zc:panic"
 CB_KEYS = "zc:keys"
 CB_GROQ = "zc:groq"
 CB_GROQ_REFRESH = "zc:groq_refresh"
+
+# Аналитик (FEAT-007 / C3) — пока заглушка, открывается из главного меню.
+CB_ANALYST = "zc:analyst"
+# Объединённое подменю «Старт/Стоп · PANIC SELL» — широкая нижняя кнопка
+# главного меню. Старые подменю CB_STARTSTOP и CB_PANIC доступны переходом
+# внутрь.
+CB_STARTSTOP_PANIC = "zc:ssp"
 
 # Подменю / действия.
 CB_TOGGLE_DRY_RUN = "zc:toggle_dry"
@@ -164,6 +174,145 @@ def _ru_verdict(v: str) -> str:
     return {"approve": "одобрено", "veto": "veto", "error": "ошибка"}.get(vv, vv)
 
 
+# --- Визуальные хелперы -----------------------------------------------------
+# Низкоуровневые форматтеры карточек: горизонтальные разделители, числа с
+# тонким пробелом U+202F и истинным минусом U+2212, статусные индикаторы,
+# прогресс-бары квот, стрелки для PnL и направления сделки. Чистые функции
+# без I/O. HTML-теги добавляет вызывающий код (parse_mode=HTML стоит на
+# уровне send_message).
+
+HR = "━" * 24
+SUBHR = "─" * 24
+
+_NBSP = "\u202f"   # узкий неразрывный пробел (разделитель тысяч)
+_MINUS = "\u2212"  # типографский минус
+
+
+def _card(title: str, emoji: str, body_lines: list[str]) -> str:
+    """Карточка в едином стиле: HR / "{emoji} {title}" / HR / body / HR.
+
+    Возвращает обычный текст без HTML-обёрток. Вызывающий может обернуть
+    нужные строки в <b>...</b> до передачи в send_message.
+    """
+    head = f"{emoji} {title}".strip() if emoji else (title or "")
+    parts: list[str] = [HR, head, HR]
+    parts.extend(body_lines or [])
+    parts.append(HR)
+    return "\n".join(parts)
+
+
+def _subhr_line() -> str:
+    """Тонкий разделитель внутри карточки."""
+    return SUBHR
+
+
+def _label(name: str, value: str, pad: int = 12) -> str:
+    """Строка вида "<имя ровно pad>  <значение>" для табличного вида."""
+    name_s = str(name or "")
+    if pad < 0:
+        pad = 0
+    if len(name_s) < pad:
+        name_s = name_s + " " * (pad - len(name_s))
+    return f"{name_s} {value}"
+
+
+def _fmt_num(value: Any, decimals: int = 2) -> str:
+    """Число с разделителем тысяч U+202F и истинным минусом U+2212.
+
+    Не-числа возвращают "-".
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    sign = _MINUS if v < 0 else ""
+    abs_v = abs(v)
+    s = f"{abs_v:,.{max(0, int(decimals))}f}".replace(",", _NBSP)
+    return f"{sign}{s}"
+
+
+def _pnl_arrow(value: Any) -> str:
+    """Стрелка PnL: ▲ для >0, ▼ для <0, · для нуля/невалидного."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "·"
+    if v > 0:
+        return "▲"
+    if v < 0:
+        return "▼"
+    return "·"
+
+
+def _fmt_pnl(value: Any, decimals: int = 2) -> str:
+    """PnL со стрелкой направления и числом в едином формате."""
+    arrow = _pnl_arrow(value)
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return f"{arrow} -"
+    return f"{arrow} {_fmt_num(value, decimals)}"
+
+
+def _fmt_pct(value: Any, decimals: int = 2) -> str:
+    """Процент со стрелкой направления и знаком; "·" для нуля."""
+    arrow = _pnl_arrow(value)
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return f"{arrow} -%"
+    return f"{arrow} {_fmt_num(value, decimals)}%"
+
+
+def _dir_arrow(side: Any) -> str:
+    """Направление сделки: 'LONG ↗' / 'SHORT ↘'. Иначе - исходник."""
+    s = str(side or "").strip().upper()
+    if s == "LONG":
+        return "LONG ↗"
+    if s == "SHORT":
+        return "SHORT ↘"
+    return s or "-"
+
+
+def _status_dot(level: Any) -> str:
+    """Точечный индикатор статуса:
+    'ok' -> 🟢, 'warn' -> 🟡, 'bad' -> 🔴, 'off' -> ⚪.
+    Любой другой ключ возвращает ⚪.
+    """
+    return {
+        "ok": "🟢",
+        "warn": "🟡",
+        "bad": "🔴",
+        "off": "⚪",
+    }.get(str(level or "").strip().lower(), "⚪")
+
+
+def _progress_bar_10(used: Any, limit: Any) -> str:
+    """Прогресс-бар длиной ровно 10 символов: ▰ заполнено, ▱ пусто.
+
+    При limit<=0 или некорректных аргументах возвращает 10 пустых клеток.
+    used клипуется в диапазон [0, limit].
+    """
+    try:
+        u = float(used)
+        lim = float(limit)
+    except (TypeError, ValueError):
+        return "▱" * 10
+    if lim <= 0:
+        return "▱" * 10
+    frac = u / lim
+    if frac < 0.0:
+        frac = 0.0
+    if frac > 1.0:
+        frac = 1.0
+    filled = int(round(frac * 10))
+    if filled < 0:
+        filled = 0
+    if filled > 10:
+        filled = 10
+    return ("▰" * filled) + ("▱" * (10 - filled))
+
+
 # --- Вспомогательные ---------------------------------------------------------
 
 def _bot_url(method: str) -> str:
@@ -179,7 +328,7 @@ def _g(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def set_keyboard() -> dict[str, Any]:
-    """Главная reply-клавиатура v3: 10 кнопок (4 ряда по 2 + 1 ряд из 2)."""
+    """Главная reply-клавиатура v3: 9 кнопок (4 ряда по 2 + 1 широкая снизу)."""
     return {
         "inline_keyboard": [
             [
@@ -195,12 +344,12 @@ def set_keyboard() -> dict[str, Any]:
                 {"text": "📝 ЛОГИ", "callback_data": CB_LOGS},
             ],
             [
-                {"text": "⏯ СТАРТ/СТОП", "callback_data": CB_STARTSTOP},
-                {"text": "🚨 PANIC SELL", "callback_data": CB_PANIC},
+                {"text": "🤖 АНАЛИТИК", "callback_data": CB_ANALYST},
+                {"text": "🔑 КЛЮЧИ API", "callback_data": CB_KEYS},
             ],
             [
-                {"text": "🔑 КЛЮЧИ API", "callback_data": CB_KEYS},
-                {"text": "🤖 GROQ", "callback_data": CB_GROQ},
+                {"text": "⏯ СТАРТ/СТОП  ·  🚨 PANIC SELL",
+                 "callback_data": CB_STARTSTOP_PANIC},
             ],
         ]
     }
@@ -238,6 +387,51 @@ async def send_message(
     except Exception as exc:  # noqa: BLE001
         print(f"[TG] Неожиданная ошибка sendMessage: {exc}")
         return None
+
+
+async def send_document(
+    session: aiohttp.ClientSession,
+    file_bytes: bytes,
+    filename: str,
+    caption: Optional[str] = None,
+    chat_id: Optional[int] = None,
+) -> bool:
+    """Отправить файл через sendDocument (multipart/form-data).
+
+    Используется в B3 (экспорт .env-снимка) и D (отчёты бэктеста).
+    Все ошибки логируются и не пробрасываются - возвращает False.
+    parse_mode для caption фиксирован в HTML, как и в send_message.
+    """
+    if not config.TELEGRAM_TOKEN:
+        print("[TG] TELEGRAM_TOKEN не задан - пропускаем sendDocument")
+        return False
+    target_chat = chat_id if chat_id is not None else config.TELEGRAM_CHAT_ID
+    try:
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(target_chat))
+        if caption:
+            form.add_field("caption", caption)
+            form.add_field("parse_mode", "HTML")
+        form.add_field(
+            "document",
+            file_bytes if isinstance(file_bytes, (bytes, bytearray)) else bytes(file_bytes),
+            filename=filename,
+            content_type="application/octet-stream",
+        )
+        async with session.post(
+            _bot_url("sendDocument"), data=form, timeout=30
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                print(f"[TG] sendDocument статус {resp.status}: {body[:200]}")
+                return False
+            return True
+    except aiohttp.ClientError as exc:
+        print(f"[TG] Сетевая ошибка sendDocument: {exc}")
+        return False
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] Неожиданная ошибка sendDocument: {exc}")
+        return False
 
 
 async def notify_trade_blocked_by_gate_error(
@@ -1012,6 +1206,47 @@ async def _handle_logs(
     return msg, inline
 
 
+async def _handle_startstop_panic_menu(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Объединённая карточка-перекрёсток для широкой кнопки главного меню.
+
+    Две секции - «Старт/Стоп» (текущий статус торговли + DRY_RUN) и «Panic
+    Sell» (закрытие всех позиций reduce-only). Сами действия выполняются в
+    подменю CB_STARTSTOP / CB_PANIC, сюда вынесены только переходы.
+    """
+    g = _g(state)
+    bot_running = bool(g.get("bot_running", True))
+    status_s = "🟢 запущен" if bot_running else "🔴 на паузе"
+    dry_label = "ВКЛ" if getattr(config, "DRY_RUN", False) else "ВЫКЛ"
+    text = (
+        "⏯ <b>Старт/Стоп · 🚨 PANIC SELL</b>\n\n"
+        f"<b>Старт / Стоп</b>\n"
+        f"Статус: {status_s}\n"
+        f"DRY_RUN: {dry_label}\n\n"
+        f"<b>Panic Sell</b>\n"
+        f"Закрытие всех открытых позиций reduce-only маркетом\n"
+        f"и пауза торговли. Подтверждение в два шага."
+    )
+    inline = {
+        "inline_keyboard": [
+            [
+                {"text": "⏯ Старт / Стоп", "callback_data": CB_STARTSTOP},
+                {"text": "🚨 PANIC SELL", "callback_data": CB_PANIC},
+            ],
+            [{"text": "◀ Главное меню", "callback_data": CB_BACK_MAIN}],
+        ]
+    }
+    return text, inline
+
+
+async def _handle_analyst(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Заглушка кнопки 🤖 АНАЛИТИК (FEAT-007 / C3)."""
+    return "Аналитик появится в этапе C3"
+
+
 async def _handle_startstop_menu(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
@@ -1646,6 +1881,10 @@ async def _process_callback(
             result = await _handle_logs(session, state, "aigate")
         elif data == CB_STARTSTOP:
             result = await _handle_startstop_menu(session, state)
+        elif data == CB_STARTSTOP_PANIC:
+            result = await _handle_startstop_panic_menu(session, state)
+        elif data == CB_ANALYST:
+            result = await _handle_analyst(session, state)
         elif data == CB_START_BOT:
             result = await _handle_start_bot(session, state)
         elif data == CB_STOP_BOT:
