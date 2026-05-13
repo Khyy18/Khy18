@@ -16,6 +16,35 @@ _TELEGRAM_CHAT_ID_RAW = os.getenv("TELEGRAM_CHAT_ID", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
+# Режим торговли: true = OKX Demo (виртуальный баланс, x-simulated-trading),
+# false = OKX Mainnet (реальные деньги). Читается из env на старте процесса.
+# Переключение через кнопку "🏦 Демо/Реал" в Telegram делает запись в .env
+# и SIGTERM - systemd перезапустит процесс с новым значением.
+IS_TESTNET = os.getenv("IS_TESTNET", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
+# OKX ключи: демо и реал хранятся раздельно в .env, активная тройка
+# выбирается ниже по значению IS_TESTNET. Код адаптера (exchanges/okx.py)
+# и api_engine обращаются к OKX_API_KEY / _SECRET / _PASSPHRASE напрямую
+# и не знают о существовании двух наборов - вся маршрутизация здесь.
+OKX_API_KEY_DEMO = os.getenv("OKX_API_KEY", "")
+OKX_API_SECRET_DEMO = os.getenv("OKX_API_SECRET", "")
+OKX_PASSPHRASE_DEMO = os.getenv("OKX_PASSPHRASE", "")
+
+OKX_API_KEY_REAL = os.getenv("OKX_API_KEY_REAL", "")
+OKX_API_SECRET_REAL = os.getenv("OKX_API_SECRET_REAL", "")
+OKX_PASSPHRASE_REAL = os.getenv("OKX_PASSPHRASE_REAL", "")
+
+if IS_TESTNET:
+    OKX_API_KEY = OKX_API_KEY_DEMO
+    OKX_API_SECRET = OKX_API_SECRET_DEMO
+    OKX_PASSPHRASE = OKX_PASSPHRASE_DEMO
+else:
+    OKX_API_KEY = OKX_API_KEY_REAL
+    OKX_API_SECRET = OKX_API_SECRET_REAL
+    OKX_PASSPHRASE = OKX_PASSPHRASE_REAL
+
 
 def _safe_int(value: str, default: int = 0) -> int:
     """Безопасное приведение строки к int (если пусто или битое значение,
@@ -36,7 +65,6 @@ TELEGRAM_CHAT_ID = _safe_int(_TELEGRAM_CHAT_ID_RAW, 0)
 # (стратегия RSI-cross, ai_analyst.decide). Новый код v2 опирается на
 # блок "v2 constants" ниже: SYMBOLS/TIMEFRAMES/DONCHIAN/ATR/vol-targeting.
 SYMBOL = "BTCUSDT"
-IS_TESTNET = True
 MAX_DAILY_LOSS = 0.03   # 3% от стартового эквити - суточный стоп
 RISK_PER_TRADE = 0.01   # 1% на сделку
 
@@ -188,7 +216,13 @@ REQUIRED_ENV_VARS = _EXCHANGE_REQUIRED.get(
 def validate_config() -> list[str]:
     """Возвращает список отсутствующих обязательных переменных окружения.
     Вызывается из main() - модуль должен импортироваться и при пустом .env,
-    чтобы работали статические проверки и тесты компиляции."""
+    чтобы работали статические проверки и тесты компиляции.
+
+    Для EXCHANGE=okx реал-ключи (OKX_API_KEY_REAL/_SECRET_REAL/_PASSPHRASE_REAL)
+    считаются опциональными: пользователь может их заполнить потом через
+    кнопку "🔑 КЛЮЧИ API" в Telegram. Но если IS_TESTNET=false и реал-ключи
+    пустые - это явная ошибка конфигурации, падаем с понятным сообщением.
+    """
     missing: list[str] = []
     for name in REQUIRED_ENV_VARS:
         val = os.getenv(name, "")
@@ -197,4 +231,9 @@ def validate_config() -> list[str]:
     # Дополнительно валидируем, что TELEGRAM_CHAT_ID приводится к int и != 0.
     if os.getenv("TELEGRAM_CHAT_ID") and TELEGRAM_CHAT_ID == 0:
         missing.append("TELEGRAM_CHAT_ID (не является целым числом)")
+    # Если режим РЕАЛ, то реал-тройка обязана быть заполнена.
+    if EXCHANGE.lower() == "okx" and not IS_TESTNET and not OKX_API_KEY_REAL:
+        missing.append(
+            "OKX_API_KEY_REAL (IS_TESTNET=false, но OKX_API_KEY_REAL не заполнен)"
+        )
     return missing
