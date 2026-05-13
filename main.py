@@ -801,6 +801,86 @@ async def _check_closed_exchange_position(
     except Exception as exc:  # noqa: BLE001
         print(f"[LOOP] {symbol}: ошибка push-уведомления о закрытии: {exc}")
 
+    # FEAT-004 / B2: авто-блок по N подряд LOSS на символе и авто-разблок
+    # на первом WIN. Блок ставится только если активного auto-блока ещё нет
+    # (manual-блоки авто-механика не трогает - они снимаются только из UI).
+    try:
+        if outcome == "LOSS":
+            streak = memory.get_consecutive_losses(symbol)
+            threshold = int(getattr(config, "AUTO_BLOCK_LOSS_STREAK", 3) or 3)
+            if streak >= threshold:
+                # Проверяем, нет ли уже активного auto-блока.
+                existing = [
+                    b for b in memory.list_active_blocks()
+                    if b.get("symbol") == symbol and b.get("type") == "auto"
+                ]
+                if not existing:
+                    duration_hours = int(
+                        getattr(config, "AUTO_BLOCK_DURATION_HOURS", 24) or 24
+                    )
+                    until_dt = _utc_now() + timedelta(hours=duration_hours)
+                    until_iso = _iso(until_dt)
+                    block_reason = f"{streak} LOSS подряд"
+                    memory.add_symbol_block(
+                        symbol, "auto", until_iso, block_reason
+                    )
+                    print(
+                        f"[LOOP] {symbol}: авто-блок включён "
+                        f"(streak={streak}, до {until_iso})"
+                    )
+                    try:
+                        body_ab = [
+                            _label_kill("Пара", str(symbol)),
+                            _label_kill(
+                                "Серия LOSS",
+                                f"{streak} (порог {threshold})",
+                            ),
+                            _label_kill(
+                                "Длительность",
+                                f"{duration_hours}ч",
+                            ),
+                            _label_kill("До", until_iso),
+                            _subhr_line(),
+                            "Сделки на этой паре приостановлены.",
+                            "Снять можно в 📊 СТАТУС → 🚫 Запреты.",
+                        ]
+                        await telegram_bot.send_message(
+                            session,
+                            _card("Авто-блок включён", "🟡", body_ab),
+                            reply_markup=telegram_bot.set_keyboard(),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            f"[LOOP] {symbol}: ошибка push авто-блока: {exc}"
+                        )
+        elif outcome == "WIN":
+            blocked, info = memory.is_symbol_blocked(symbol)
+            if blocked and info and info.get("type") == "auto":
+                removed = memory.remove_symbol_block(symbol, type="auto")
+                if removed:
+                    print(
+                        f"[LOOP] {symbol}: авто-блок снят на WIN "
+                        f"(удалено записей: {removed})"
+                    )
+                    try:
+                        body_un = [
+                            _label_kill("Пара", str(symbol)),
+                            _label_kill("Причина", "первый WIN после блока"),
+                            _subhr_line(),
+                            "Сделки на этой паре снова разрешены.",
+                        ]
+                        await telegram_bot.send_message(
+                            session,
+                            _card("Авто-блок снят", "🟢", body_un),
+                            reply_markup=telegram_bot.set_keyboard(),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            f"[LOOP] {symbol}: ошибка push авто-снятия: {exc}"
+                        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка авто-блока/снятия: {exc}")
+
     sym_state["open_trade"] = None
 
 
@@ -869,6 +949,58 @@ async def _process_symbol(
         return
     if sym_state.get("open_trade"):
         return
+
+    # Запретный список (FEAT-004 / B2). Проверяем ДО любых тяжёлых вычислений
+    # стратегии и AI-Gate: на заблокированном символе сделок не открываем.
+    # Блок может быть manual (из Telegram) или auto (после N подряд LOSS).
+    # Истёкшие блоки уже отфильтрованы в memory.is_symbol_blocked.
+    try:
+        blocked, block_info = memory.is_symbol_blocked(symbol)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LOOP] {symbol}: ошибка is_symbol_blocked: {exc}")
+        blocked, block_info = False, None
+    if blocked and block_info:
+        block_type = str(block_info.get("type") or "manual")
+        filter_tag = (
+            "manual_block" if block_type == "manual" else "auto_block_loss_streak"
+        )
+        until_iso = block_info.get("until_iso")
+        reason = str(block_info.get("reason") or "").strip()
+        detail_parts: list[str] = []
+        if reason:
+            detail_parts.append(reason)
+        if until_iso:
+            detail_parts.append(f"до {until_iso}")
+        else:
+            detail_parts.append("без срока")
+        detail = "; ".join(detail_parts) or block_type
+        try:
+            memory.record_rejected_check(
+                symbol,
+                filter_tag,
+                detail,
+                {
+                    "type": block_type,
+                    "until": until_iso,
+                    "reason": reason,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LOOP] {symbol}: ошибка record_rejected_check (block): {exc}")
+        state["global"]["rejection_ring"].append(
+            {
+                "ts": _iso(now),
+                "symbol": symbol,
+                "filter": filter_tag,
+                "detail": detail,
+                "indicators": {
+                    "type": block_type,
+                    "until": until_iso,
+                },
+            }
+        )
+        return
+
     if sym_state.get("last_signal_bar_ts") == last_bar_ts:
         return
     # Продвигаем безусловно, чтобы не оценивать один бар повторно
