@@ -368,6 +368,84 @@ def _progress_bar_10(used: Any, limit: Any) -> str:
     return ("▰" * filled) + ("▱" * (10 - filled))
 
 
+# --- Sparkline свечей (15m·30) для карточки позиции -------------------------
+
+# In-memory кэш close-цен на пару: symbol -> (epoch_seconds, list[float]).
+# Снижает частоту обращений к OKX при повторных открытиях экрана позиций.
+_CANDLE_SPARK_CACHE: dict[str, tuple[float, list[float]]] = {}
+_CANDLE_SPARK_TTL_SEC = 60
+
+
+def _sparkline_8(values: list[float]) -> str:
+    """Sparkline через символы блоков ▁▂▃▄▅▆▇█.
+
+    Контракт:
+      - пустой/невалидный вход → пустая строка;
+      - hi == lo → строка из '▄' длины len(values);
+      - иначе нормализуем (v - lo) / (hi - lo) * 7, округляем в [0, 7].
+    Длина результата = длине values.
+    """
+    if not values:
+        return ""
+    nums: list[float] = []
+    for v in values:
+        try:
+            nums.append(float(v))
+        except (TypeError, ValueError):
+            return ""
+    if not nums:
+        return ""
+    blocks = "▁▂▃▄▅▆▇█"
+    lo = min(nums)
+    hi = max(nums)
+    if hi == lo:
+        return "▄" * len(nums)
+    span = hi - lo
+    out_chars: list[str] = []
+    for v in nums:
+        idx = int(round((v - lo) / span * 7))
+        if idx < 0:
+            idx = 0
+        elif idx > 7:
+            idx = 7
+        out_chars.append(blocks[idx])
+    return "".join(out_chars)
+
+
+async def _fetch_sparkline_closes(
+    session: aiohttp.ClientSession, symbol: str, limit: int = 30
+) -> list[float]:
+    """Подтянуть последние `limit` close-цен 15m-свечей для пары.
+
+    Использует in-memory кэш с TTL `_CANDLE_SPARK_TTL_SEC`. При любой ошибке
+    (сеть, таймаут, пустой ответ, не-число) возвращает [] и кэш НЕ обновляет.
+    """
+    now_ts = time.time()
+    cached = _CANDLE_SPARK_CACHE.get(symbol)
+    if cached and (now_ts - cached[0]) < _CANDLE_SPARK_TTL_SEC:
+        return list(cached[1])
+    try:
+        klines = await asyncio.wait_for(
+            EXCHANGE.get_klines(session, symbol, "15", limit), timeout=5.0
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] sparkline {symbol}: {exc}")
+        return []
+    if not klines:
+        return []
+    closes: list[float] = []
+    try:
+        for row in klines:
+            closes.append(float(row[4]))
+    except (TypeError, ValueError, IndexError) as exc:
+        print(f"[TG] sparkline {symbol}: {exc}")
+        return []
+    if not closes:
+        return []
+    _CANDLE_SPARK_CACHE[symbol] = (now_ts, list(closes))
+    return closes
+
+
 # --- Вспомогательные ---------------------------------------------------------
 
 def _bot_url(method: str) -> str:
@@ -2731,6 +2809,22 @@ async def _handle_positions(
     # Сортировка по PnL abs по убыванию.
     positions.sort(key=lambda p: p["pnl_abs"], reverse=True)
 
+    # Параллельно тянем sparkline-свечи (15m·30) для каждой пары.
+    # return_exceptions=True гарантирует, что один битый символ не уронит
+    # остальную карточку: в этом случае sparkline остаётся пустым.
+    spark_results = await asyncio.gather(
+        *[_fetch_sparkline_closes(session, p["symbol"], 30) for p in positions],
+        return_exceptions=True,
+    )
+    for p, res in zip(positions, spark_results):
+        if isinstance(res, Exception):
+            print(f"[TG] sparkline {p['symbol']}: {res}")
+            p["sparkline"] = ""
+        elif isinstance(res, list) and res:
+            p["sparkline"] = _sparkline_8(res)
+        else:
+            p["sparkline"] = ""
+
     now = datetime.now(tz=timezone.utc)
     body: list[str] = []
     for idx, p in enumerate(positions):
@@ -2750,6 +2844,8 @@ async def _handle_positions(
             if entry_ts else "-"
         )
         body.append(f"{dot} {p['symbol']}  {_dir_arrow(side_label)}")
+        if p["sparkline"]:
+            body.append(f"  {p['sparkline']}  15m·30")
         body.append(_label("  Вход", _fmt_num(p["entry"], 4)))
         body.append(_label("  Сейчас", _fmt_num(p["cur"], 4)))
         body.append(_label("  PnL", f"{_fmt_pnl(p['pnl_abs'], 2)} USDT"))
