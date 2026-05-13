@@ -1115,6 +1115,8 @@ async def _process_symbol(
     # Push-уведомление в Telegram об открытии позиции.
     # Ошибку отправки логгируем, но цикл не валим - Telegram может быть
     # временно недоступен, торговля важнее уведомлений.
+    if not getattr(config, "NOTIFY_ON_TRADE_OPEN", True):
+        return
     try:
         hard_stop = float(order["hard_stop"])
         side_label = "LONG" if side == "Buy" else "SHORT"
@@ -1127,16 +1129,46 @@ async def _process_symbol(
             if entry_price > 0
             else 0.0
         )
+        # Целевая цена по R/R 1:2. Реальный выход - через trailing-stop
+        # (chandelier exit), жёсткого TP в стратегии нет. Пометка
+        # "трейлинг" честно сообщает пользователю это.
+        risk_per_unit = abs(entry_price - hard_stop)
+        if side == "Buy":
+            tp_price = entry_price + 2 * risk_per_unit
+            tp_pct = (
+                ((tp_price - entry_price) / entry_price) * 100
+                if entry_price > 0 else 0.0
+            )
+        else:
+            tp_price = entry_price - 2 * risk_per_unit
+            tp_pct = (
+                ((entry_price - tp_price) / entry_price) * 100
+                if entry_price > 0 else 0.0
+            )
+        # Режим рынка - переводим на русский для UI.
+        sym_regime_data = sym_state.get("regime") or {}
+        regime_raw = str(sym_regime_data.get("regime") or "").upper()
+        regime_ru = {
+            "TRENDING": "Тренд",
+            "RANGING": "Боковик",
+            "CRISIS": "Кризис",
+        }.get(regime_raw)
+        # Индикатор счёта (ДЕМО / РЕАЛ) по IS_TESTNET.
+        account_label = "📊 ДЕМО" if config.IS_TESTNET else "💰 РЕАЛ"
         reason = str((order.get("meta") or {}).get("reason") or "")
         notify_text = (
             f"{side_emoji} <b>Открыта {side_label} {symbol}</b>\n"
             f"Вход: {entry_price:.4f}\n"
             f"Размер: {qty} (~${notional:.2f})\n"
             f"Стоп: {hard_stop:.4f} (−{stop_pct:.2f}%)\n"
+            f"Цель R/R 1:2 (трейлинг): {tp_price:.4f} (+{tp_pct:.2f}%)\n"
             f"Риск на сделку: {config.RISK_PER_TRADE * 100:.2f}%"
         )
         if reason:
             notify_text += f"\nПричина: {reason}"
+        if regime_ru:
+            notify_text += f"\nРежим рынка: {regime_ru}"
+        notify_text += f"\nСчёт: {account_label}"
         # Строка про AI-veto gate: показываем какое решение вынес gate и
         # в каком режиме он работает (off/shadow/active).
         if gate_mode == "off":
@@ -1150,7 +1182,7 @@ async def _process_symbol(
             else:
                 notify_text += "\nAI-gate shadow: would approve"
         else:  # active
-            notify_text += f"\nAI-gate: approved (conf={gate_conf})"
+            notify_text += f"\nAI-gate: ✅ одобрено (conf={gate_conf})"
         await telegram_bot.send_message(
             session, notify_text, reply_markup=telegram_bot.set_keyboard()
         )
