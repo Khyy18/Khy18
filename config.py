@@ -163,6 +163,20 @@ POSTMORTEM_HOUR_UTC = 0
 # процесс упал или потерял сеть. 6 часов = 4 сводки в сутки.
 HEARTBEAT_INTERVAL_SEC = 6 * 3600
 
+# Telegram-уведомления. Оба флага читаются из .env; дефолт True, чтобы
+# существующие деплои сразу получали события без ручной правки .env.
+# NOTIFY_ON_TRADE_OPEN — карточка сделки при открытии позиции.
+# NOTIFY_ON_GATE_ERROR_BLOCK — уведомление, когда стратегия хотела
+# открыть сделку, но AI-Gate в active-режиме заблокировал её из-за
+# verdict=error (Groq недоступен, fail-CLOSED). В shadow/off такое
+# уведомление не отправляется — в этих режимах error не блокирует.
+NOTIFY_ON_TRADE_OPEN = os.getenv("NOTIFY_ON_TRADE_OPEN", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+NOTIFY_ON_GATE_ERROR_BLOCK = os.getenv("NOTIFY_ON_GATE_ERROR_BLOCK", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
 # Риск-лимиты портфеля.
 PER_SYMBOL_MAX_POSITIONS = 1        # не больше одной позиции на символ
 GLOBAL_RISK_CAP = 0.04              # суммарный открытый риск не больше 4% эквити
