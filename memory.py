@@ -13,6 +13,9 @@
                       по каждому намерению открыть сделку. Флаг `applied`
                       показывает, было ли решение фактически применено
                       (только в active-режиме для veto/error).
+  - symbol_blocks:    v3 - запретный список (manual + auto) с окончанием
+                      по until_iso (NULL = бессрочно). Manual ставится из
+                      Telegram, auto - после N подряд LOSS на символе.
 
 Инициализация схемы (включая идемпотентную миграцию trades.closed_ts)
 выполняется при импорте модуля (init_db()).
@@ -157,6 +160,24 @@ def init_db() -> None:
                     confidence INTEGER,
                     applied INTEGER NOT NULL DEFAULT 0
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS symbol_blocks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    until_iso TEXT,
+                    reason TEXT,
+                    added_iso TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_symbol_blocks_symbol
+                ON symbol_blocks(symbol)
                 """
             )
             conn.commit()
@@ -692,6 +713,175 @@ def get_rejected_counts(hours: int) -> list[dict[str, Any]]:
     except sqlite3.Error as exc:
         print(f"[MEMORY] Ошибка get_rejected_counts: {exc}")
         return []
+
+
+# --- v3: symbol_blocks (запретный список manual + auto) ------------------
+
+def add_symbol_block(
+    symbol: str,
+    type: str,  # noqa: A002 - совпадает с именем колонки
+    until_iso: Optional[str],
+    reason: Optional[str] = None,
+) -> Optional[int]:
+    """Создать новую запись в запретном списке.
+
+    type: 'manual' | 'auto'.
+    until_iso: ISO-время истечения блока (UTC, например '2099-01-01T00:00:00+00:00').
+        None = бессрочный блок (только до ручного снятия).
+    Возвращает id созданной записи или None при ошибке.
+    """
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO symbol_blocks
+                    (symbol, type, until_iso, reason, added_iso)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(symbol or "-").strip().upper(),
+                    str(type or "manual"),
+                    str(until_iso) if until_iso else None,
+                    str(reason) if reason else None,
+                    _now_iso(),
+                ),
+            )
+            conn.commit()
+            return cur.lastrowid
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Не удалось добавить symbol_block({symbol}): {exc}")
+        return None
+
+
+def remove_symbol_block(
+    symbol: str,
+    type: Optional[str] = None,  # noqa: A002
+) -> int:
+    """Удалить блоки по символу. Если type=None - удаляет любые активные
+    блоки (как manual, так и auto). Возвращает число удалённых записей."""
+    try:
+        sym = str(symbol or "-").strip().upper()
+        with _connect() as conn:
+            if type is None:
+                cur = conn.execute(
+                    "DELETE FROM symbol_blocks WHERE symbol = ?",
+                    (sym,),
+                )
+            else:
+                cur = conn.execute(
+                    "DELETE FROM symbol_blocks WHERE symbol = ? AND type = ?",
+                    (sym, str(type)),
+                )
+            conn.commit()
+            return int(cur.rowcount or 0)
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Не удалось удалить symbol_block({symbol}): {exc}")
+        return 0
+
+
+def list_active_blocks() -> list[dict[str, Any]]:
+    """Все активные (не истёкшие) блоки. Возвращает list[dict] с полями
+    id, symbol, type, until_iso, reason, added_iso. Сортировка - сначала
+    свежие added_iso."""
+    now = _now_iso()
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, symbol, type, until_iso, reason, added_iso
+                FROM symbol_blocks
+                WHERE until_iso IS NULL OR until_iso > ?
+                ORDER BY added_iso DESC, id DESC
+                """,
+                (now,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка list_active_blocks: {exc}")
+        return []
+
+
+def is_symbol_blocked(
+    symbol: str,
+) -> tuple[bool, Optional[dict[str, Any]]]:
+    """Проверка наличия активного блока на символ.
+
+    Сначала ищет manual (приоритет выше — пользователь явно запретил),
+    потом auto. Возвращает (True, row) при первом найденном активном блоке;
+    иначе (False, None). Истёкшие блоки автоматически отфильтровываются.
+    """
+    sym = str(symbol or "-").strip().upper()
+    now = _now_iso()
+    try:
+        with _connect() as conn:
+            # Сначала manual.
+            row = conn.execute(
+                """
+                SELECT id, symbol, type, until_iso, reason, added_iso
+                FROM symbol_blocks
+                WHERE symbol = ? AND type = 'manual'
+                  AND (until_iso IS NULL OR until_iso > ?)
+                ORDER BY added_iso DESC, id DESC
+                LIMIT 1
+                """,
+                (sym, now),
+            ).fetchone()
+            if row:
+                return True, dict(row)
+            # Потом auto.
+            row = conn.execute(
+                """
+                SELECT id, symbol, type, until_iso, reason, added_iso
+                FROM symbol_blocks
+                WHERE symbol = ? AND type = 'auto'
+                  AND (until_iso IS NULL OR until_iso > ?)
+                ORDER BY added_iso DESC, id DESC
+                LIMIT 1
+                """,
+                (sym, now),
+            ).fetchone()
+            if row:
+                return True, dict(row)
+            return False, None
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка is_symbol_blocked({symbol}): {exc}")
+        return False, None
+
+
+def get_consecutive_losses(symbol: str, limit: int = 10) -> int:
+    """Количество подряд идущих LOSS по символу с самой свежей закрытой
+    сделки до первого не-LOSS (WIN или OPEN). Open-сделки игнорируются —
+    учитываем только закрытые (closed_ts IS NOT NULL).
+
+    Сортировка по closed_ts DESC. Лимит ограничивает максимально
+    просматриваемое число записей (по умолчанию 10 — достаточно для
+    AUTO_BLOCK_LOSS_STREAK уровня 2/3/5).
+    """
+    sym = str(symbol or "-").strip().upper()
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT outcome
+                FROM trades
+                WHERE symbol = ?
+                  AND closed_ts IS NOT NULL
+                  AND outcome IN ('WIN', 'LOSS')
+                ORDER BY closed_ts DESC, id DESC
+                LIMIT ?
+                """,
+                (sym, int(limit)),
+            ).fetchall()
+            streak = 0
+            for r in rows:
+                if str(r["outcome"] or "").upper() == "LOSS":
+                    streak += 1
+                else:
+                    break
+            return streak
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_consecutive_losses({symbol}): {exc}")
+        return 0
 
 
 # Инициализация схемы выполняется явно из main.py::main() через

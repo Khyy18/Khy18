@@ -158,6 +158,22 @@ AI_TRADE_GATE_NEWS_LIMIT = 10
 POSTMORTEM_DAY_UTC = 0
 POSTMORTEM_HOUR_UTC = 0
 
+# --- Авто-блок по подряд идущим LOSS на символе ---
+# Когда стратегия N раз подряд получает убыток на одном символе - вероятно,
+# на нём что-то системно идёт не так (пресет не подходит фазе рынка, рост
+# спреда, ликвидность ушла). Автоматически временно исключаем символ из
+# универсума на AUTO_BLOCK_DURATION_HOURS часов. Снять блок раньше можно
+# вручную через Telegram, или он снимается автоматически на первом WIN.
+# Оба значения настраиваются из UI бота с записью в .env.
+try:
+    AUTO_BLOCK_LOSS_STREAK = int(os.getenv("AUTO_BLOCK_LOSS_STREAK", "3"))
+except (TypeError, ValueError):
+    AUTO_BLOCK_LOSS_STREAK = 3
+try:
+    AUTO_BLOCK_DURATION_HOURS = int(os.getenv("AUTO_BLOCK_DURATION_HOURS", "24"))
+except (TypeError, ValueError):
+    AUTO_BLOCK_DURATION_HOURS = 24
+
 # Heartbeat: как часто бот сам присылает в Telegram короткую сводку
 # "я жив" со статусом. Если сообщение не пришло в срок - значит
 # процесс упал или потерял сеть. 6 часов = 4 сводки в сутки.

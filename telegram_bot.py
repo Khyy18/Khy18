@@ -37,7 +37,7 @@ import os
 import signal
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import aiohttp
@@ -79,6 +79,13 @@ CB_AGGR_MENU = "zc:aggr"        # FEAT-003: слайдер агрессивно�
 CB_AGGR_SET_PREFIX = "zc:aggr_set:"      # + key (conservative/medium/aggressive)
 CB_AGGR_CONFIRM_PREFIX = "zc:aggr_ok:"   # + key
 CB_BLOCKS = "zc:blocks"          # FEAT-004: запретный список (manual + auto)
+# FEAT-004: подкоманды меню запретов.
+CB_BLOCKS_ADD = "zc:blk_add"
+CB_BLOCKS_CANCEL = "zc:blk_no"
+CB_BLOCKS_REMOVE_PREFIX = "zc:blk_rm:"     # + "<type>:<symbol>"
+CB_BLOCKS_DURATION_PREFIX = "zc:blk_d:"    # + "<hours_or_inf>"
+CB_BLOCKS_AUTOSETTINGS = "zc:blk_set"
+CB_BLOCKS_AUTOSET_PREFIX = "zc:blk_set_v:"  # + "<field>:<value>" (s=streak, h=hours)
 CB_EXPORT_ENV = "zc:env_export"  # FEAT-005: экспорт настроек .env
 CB_PAIRS = "zc:pairs"            # FEAT-006: статистика по парам
 CB_BT_MENU = "zc:bt"             # FEAT-008: Backtest UI
@@ -127,6 +134,15 @@ CB_KEY_CANCEL = "zc:key_no"
 _key_fsm_state: dict[int, dict[str, Any]] = {}
 
 _KEY_FSM_TIMEOUT_SEC = 300  # 5 минут
+
+# --- FSM для добавления ручного блока (FEAT-004 / B2) ---
+# Структура:
+#   {chat_id: {"step": "await_symbol" | "await_duration",
+#              "symbol": str | None, "started": float}}
+# step == "await_symbol"   -> ждём текстовое сообщение с тикером
+# step == "await_duration" -> ждём callback с длительностью
+_blocks_fsm_state: dict[int, dict[str, Any]] = {}
+_BLOCKS_FSM_TIMEOUT_SEC = 300  # 5 минут
 
 # Rate-limit для уведомлений о fail-CLOSED блокировке (Groq недоступен).
 # symbol → unix timestamp последней отправки уведомления.
@@ -702,13 +718,6 @@ def _stage_placeholder(stage: str) -> str:
     )
 
 
-async def _handle_blocks_stub(
-    session: aiohttp.ClientSession, state: dict[str, Any]
-) -> str:
-    """Заглушка кнопки 🚫 Запреты (FEAT-004 / B2)."""
-    return _stage_placeholder("B2 (запретный список)")
-
-
 async def _handle_export_env_stub(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
@@ -728,6 +737,362 @@ async def _handle_bt_stub(
 ) -> str:
     """Заглушка кнопки 📉 Backtest (FEAT-008 / D)."""
     return _stage_placeholder("D (Backtest UI)")
+
+
+# --- FEAT-004 / B2: запретный список (manual + auto) ----------------------
+# Подменю «🚫 Запреты» открывается из 📊 СТАТУС. Две секции:
+#   - Заблокированы вручную (manual, 🔴) - снимает только пользователь;
+#   - Заблокированы автоматически (auto, 🟡) - снимаются по таймеру или
+#     первым WIN на символе (логика в main._check_closed_exchange_position).
+# Добавление manual-блока через FSM: тикер -> длительность кнопками.
+# Авто-настройки (streak / duration) меняются из подменю «⚙ Настройки
+# авто-блока» через _write_env_var + setattr(config, ...).
+
+# Варианты длительности при ручной блокировке. Кортежи (callback_value, текст_кнопки).
+# Значение `inf` означает бессрочный блок (until_iso=NULL).
+_BLOCKS_DURATIONS: list[tuple[str, str]] = [
+    ("1", "1ч"),
+    ("6", "6ч"),
+    ("24", "24ч"),
+    ("168", "7д"),
+    ("inf", "Бессрочно"),
+]
+
+# Допустимые значения для подменю «Настройки авто-блока».
+_BLOCKS_STREAK_OPTIONS: tuple[int, ...] = (2, 3, 5)
+_BLOCKS_DURATION_OPTIONS: tuple[int, ...] = (6, 24, 72)
+
+# Простая регулярка-проверка тикера (без import re, чтобы не плодить зависимости).
+def _looks_like_symbol(value: str) -> bool:
+    s = (value or "").strip().upper()
+    if not s.endswith("USDT"):
+        return False
+    base = s[: -len("USDT")]
+    if not base:
+        return False
+    return base.isalpha() and base.isascii()
+
+
+def _blocks_fsm_clear(chat_id: int) -> None:
+    _blocks_fsm_state.pop(chat_id, None)
+
+
+def _blocks_fsm_expired(fsm: dict[str, Any]) -> bool:
+    started = float(fsm.get("started") or 0.0)
+    return time.time() - started > _BLOCKS_FSM_TIMEOUT_SEC
+
+
+def _format_block_until(until_iso: Optional[str]) -> str:
+    """Текстовое описание срока блока: '7ч 12м' или 'без срока'."""
+    if not until_iso:
+        return "без срока"
+    dt = _parse_iso(until_iso)
+    if dt is None:
+        return "без срока"
+    return _format_remaining(dt)
+
+
+async def _handle_blocks_menu(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Подменю «🚫 Запреты» — manual + auto секции и доступные действия."""
+    try:
+        blocks = memory.list_active_blocks()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] list_active_blocks: {exc}")
+        blocks = []
+
+    manual_blocks = [b for b in blocks if str(b.get("type")) == "manual"]
+    auto_blocks = [b for b in blocks if str(b.get("type")) == "auto"]
+
+    body: list[str] = []
+    inline_rows: list[list[dict[str, Any]]] = []
+
+    # Manual.
+    body.append("Заблокированы вручную:")
+    if not manual_blocks:
+        body.append("  (пусто)")
+    else:
+        for b in manual_blocks:
+            sym = str(b.get("symbol") or "-")
+            reason = str(b.get("reason") or "").strip()
+            until_iso = b.get("until_iso")
+            remaining = _format_block_until(until_iso)
+            line = f"{_status_dot('bad')} {sym}  ({remaining})"
+            if reason:
+                line += f"  «{reason[:40]}»"
+            body.append(line)
+            inline_rows.append([{
+                "text": f"Снять {sym}",
+                "callback_data": f"{CB_BLOCKS_REMOVE_PREFIX}manual:{sym}",
+            }])
+
+    body.append(_subhr_line())
+
+    # Auto.
+    body.append("Заблокированы автоматически:")
+    if not auto_blocks:
+        body.append("  (пусто)")
+    else:
+        for b in auto_blocks:
+            sym = str(b.get("symbol") or "-")
+            reason = str(b.get("reason") or "").strip()
+            until_iso = b.get("until_iso")
+            remaining = _format_block_until(until_iso)
+            line = f"{_status_dot('warn')} {sym}  ({remaining})"
+            if reason:
+                line += f"  «{reason[:40]}»"
+            body.append(line)
+            inline_rows.append([{
+                "text": f"Снять {sym}",
+                "callback_data": f"{CB_BLOCKS_REMOVE_PREFIX}auto:{sym}",
+            }])
+
+    body.append(_subhr_line())
+
+    # Текущие настройки.
+    try:
+        streak = int(getattr(config, "AUTO_BLOCK_LOSS_STREAK", 3) or 3)
+    except (TypeError, ValueError):
+        streak = 3
+    try:
+        duration_h = int(getattr(config, "AUTO_BLOCK_DURATION_HOURS", 24) or 24)
+    except (TypeError, ValueError):
+        duration_h = 24
+    body.append("Авто-блок:")
+    body.append(_label("  N подряд LOSS", str(streak)))
+    body.append(_label("  Длительность", f"{duration_h}ч"))
+
+    text = _card("Запреты", "🚫", body)
+
+    inline_rows.append([
+        {"text": "➕ Добавить пару", "callback_data": CB_BLOCKS_ADD},
+        {"text": "⚙ Настройки авто-блока",
+         "callback_data": CB_BLOCKS_AUTOSETTINGS},
+    ])
+    inline_rows.append([{"text": "◀ Назад", "callback_data": CB_STATUS}])
+
+    return text, {"inline_keyboard": inline_rows}
+
+
+async def _handle_blocks_add_start(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+) -> tuple[str, dict[str, Any]]:
+    """Шаг 1 FSM: попросить пользователя ввести тикер."""
+    _blocks_fsm_state[chat_id] = {
+        "step": "await_symbol",
+        "symbol": None,
+        "started": time.time(),
+    }
+    body = [
+        "Пришлите тикер пары одним сообщением.",
+        _subhr_line(),
+        "Например: XRPUSDT или BTCUSDT",
+        "(только латиница, заканчивается на USDT).",
+        _subhr_line(),
+        "Время на ввод: 5 минут.",
+    ]
+    text = _card("Добавить запрет", "🚫", body)
+    inline = {
+        "inline_keyboard": [
+            [{"text": "❌ Отмена", "callback_data": CB_BLOCKS_CANCEL}],
+        ]
+    }
+    return text, inline
+
+
+async def _handle_blocks_cancel(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+) -> tuple[str, dict[str, Any]]:
+    """Отмена FSM добавления блока: чистим состояние, возврат в подменю."""
+    _blocks_fsm_clear(chat_id)
+    return await _handle_blocks_menu(session, state)
+
+
+async def _handle_blocks_duration_pick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    chat_id: int,
+    duration_value: str,
+) -> tuple[str, dict[str, Any]]:
+    """Шаг 2 FSM: выбрана длительность, ставим manual-блок."""
+    fsm = _blocks_fsm_state.get(chat_id)
+    if not fsm or fsm.get("step") != "await_duration":
+        return await _handle_blocks_menu(session, state)
+    if _blocks_fsm_expired(fsm):
+        _blocks_fsm_clear(chat_id)
+        return (
+            _card(
+                "Запреты",
+                "🚫",
+                ["Сессия добавления блока истекла (5 минут).",
+                 "Начните заново."],
+            ),
+            {"inline_keyboard": [[
+                {"text": "◀ Назад", "callback_data": CB_BLOCKS},
+            ]]},
+        )
+    symbol = str(fsm.get("symbol") or "").upper()
+    if not symbol:
+        _blocks_fsm_clear(chat_id)
+        return await _handle_blocks_menu(session, state)
+
+    until_iso: Optional[str]
+    if duration_value == "inf":
+        until_iso = None
+    else:
+        try:
+            hours = int(duration_value)
+        except (TypeError, ValueError):
+            hours = 24
+        until_dt = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
+        until_iso = until_dt.isoformat(timespec="seconds")
+
+    try:
+        memory.add_symbol_block(symbol, "manual", until_iso, "ручная блокировка")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] add_symbol_block({symbol}): {exc}")
+        _blocks_fsm_clear(chat_id)
+        return (
+            _card(
+                "Запреты",
+                "🚫",
+                [f"Не удалось добавить блок: {exc}"],
+            ),
+            {"inline_keyboard": [[
+                {"text": "◀ Назад", "callback_data": CB_BLOCKS},
+            ]]},
+        )
+    _blocks_fsm_clear(chat_id)
+    return await _handle_blocks_menu(session, state)
+
+
+async def _handle_blocks_remove(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    target: str,
+) -> tuple[str, dict[str, Any]]:
+    """Снять блок по '<type>:<symbol>' (manual:XRPUSDT, auto:BTCUSDT и т.п.)."""
+    try:
+        block_type, symbol = target.split(":", 1)
+    except ValueError:
+        return await _handle_blocks_menu(session, state)
+    block_type = block_type.strip().lower()
+    symbol = symbol.strip().upper()
+    if block_type not in ("manual", "auto") or not symbol:
+        return await _handle_blocks_menu(session, state)
+    try:
+        memory.remove_symbol_block(symbol, type=block_type)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] remove_symbol_block({symbol}, {block_type}): {exc}")
+    return await _handle_blocks_menu(session, state)
+
+
+async def _handle_blocks_autosettings(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """Подменю «⚙ Настройки авто-блока»."""
+    try:
+        cur_streak = int(getattr(config, "AUTO_BLOCK_LOSS_STREAK", 3) or 3)
+    except (TypeError, ValueError):
+        cur_streak = 3
+    try:
+        cur_hours = int(getattr(config, "AUTO_BLOCK_DURATION_HOURS", 24) or 24)
+    except (TypeError, ValueError):
+        cur_hours = 24
+
+    body: list[str] = [
+        "N подряд LOSS до авто-блока:",
+        _label("  Сейчас", str(cur_streak)),
+        _subhr_line(),
+        "Длительность авто-блока:",
+        _label("  Сейчас", f"{cur_hours}ч"),
+        _subhr_line(),
+        "Изменения сохраняются в .env",
+        "и применяются сразу (без рестарта).",
+    ]
+    text = _card("Настройки авто-блока", "⚙", body)
+
+    streak_row: list[dict[str, Any]] = []
+    for opt in _BLOCKS_STREAK_OPTIONS:
+        label = f"{opt}"
+        if opt == cur_streak:
+            label = f"{label} ◀"
+        streak_row.append({
+            "text": label,
+            "callback_data": f"{CB_BLOCKS_AUTOSET_PREFIX}s:{opt}",
+        })
+    duration_row: list[dict[str, Any]] = []
+    for opt in _BLOCKS_DURATION_OPTIONS:
+        label = f"{opt}ч"
+        if opt == cur_hours:
+            label = f"{label} ◀"
+        duration_row.append({
+            "text": label,
+            "callback_data": f"{CB_BLOCKS_AUTOSET_PREFIX}h:{opt}",
+        })
+    inline = {
+        "inline_keyboard": [
+            [{"text": "Серия LOSS:", "callback_data": CB_BLOCKS_AUTOSETTINGS}],
+            streak_row,
+            [{"text": "Длительность:", "callback_data": CB_BLOCKS_AUTOSETTINGS}],
+            duration_row,
+            [{"text": "◀ К списку запретов", "callback_data": CB_BLOCKS}],
+        ]
+    }
+    return text, inline
+
+
+async def _handle_blocks_autoset(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    payload: str,
+) -> tuple[str, dict[str, Any]]:
+    """Применить выбранное значение авто-настройки. payload = '<field>:<value>'."""
+    try:
+        field, value = payload.split(":", 1)
+    except ValueError:
+        return await _handle_blocks_autosettings(session, state)
+    field = field.strip().lower()
+    try:
+        value_int = int(value)
+    except (TypeError, ValueError):
+        return await _handle_blocks_autosettings(session, state)
+
+    if field == "s":
+        if value_int not in _BLOCKS_STREAK_OPTIONS:
+            return await _handle_blocks_autosettings(session, state)
+        env_name = "AUTO_BLOCK_LOSS_STREAK"
+        attr_name = "AUTO_BLOCK_LOSS_STREAK"
+    elif field == "h":
+        if value_int not in _BLOCKS_DURATION_OPTIONS:
+            return await _handle_blocks_autosettings(session, state)
+        env_name = "AUTO_BLOCK_DURATION_HOURS"
+        attr_name = "AUTO_BLOCK_DURATION_HOURS"
+    else:
+        return await _handle_blocks_autosettings(session, state)
+
+    if not _write_env_var(env_name, str(value_int)):
+        return (
+            _card(
+                "Настройки авто-блока",
+                "⚙",
+                [f"Не удалось записать {env_name} в .env"],
+            ),
+            {"inline_keyboard": [[
+                {"text": "◀ Назад", "callback_data": CB_BLOCKS_AUTOSETTINGS},
+            ]]},
+        )
+    setattr(config, attr_name, int(value_int))
+    return await _handle_blocks_autosettings(session, state)
+
+
+# --- Конец FEAT-004 -------------------------------------------------------
 
 
 # --- FEAT-003 / B1: слайдер агрессивности торговли -------------------------
@@ -2445,7 +2810,28 @@ async def _process_callback(
                 session, state, preset_key
             )
         elif data == CB_BLOCKS:
-            result = await _handle_blocks_stub(session, state)
+            result = await _handle_blocks_menu(session, state)
+        elif data == CB_BLOCKS_ADD:
+            result = await _handle_blocks_add_start(
+                session, state, chat_id_int
+            )
+        elif data == CB_BLOCKS_CANCEL:
+            result = await _handle_blocks_cancel(
+                session, state, chat_id_int
+            )
+        elif data.startswith(CB_BLOCKS_REMOVE_PREFIX):
+            target = data[len(CB_BLOCKS_REMOVE_PREFIX):]
+            result = await _handle_blocks_remove(session, state, target)
+        elif data.startswith(CB_BLOCKS_DURATION_PREFIX):
+            duration_value = data[len(CB_BLOCKS_DURATION_PREFIX):]
+            result = await _handle_blocks_duration_pick(
+                session, state, chat_id_int, duration_value
+            )
+        elif data == CB_BLOCKS_AUTOSETTINGS:
+            result = await _handle_blocks_autosettings(session, state)
+        elif data.startswith(CB_BLOCKS_AUTOSET_PREFIX):
+            payload = data[len(CB_BLOCKS_AUTOSET_PREFIX):]
+            result = await _handle_blocks_autoset(session, state, payload)
         elif data == CB_EXPORT_ENV:
             result = await _handle_export_env_stub(session, state)
         elif data == CB_PAIRS:
@@ -2500,6 +2886,78 @@ async def _process_message(
     except (TypeError, ValueError):
         chat_id_int = config.TELEGRAM_CHAT_ID
     message_id = msg.get("message_id")
+
+    # FSM (FEAT-004 / B2): если мы в шаге await_symbol для добавления
+    # блока — перехватываем сообщение как тикер.
+    blocks_fsm = _blocks_fsm_state.get(chat_id_int)
+    if blocks_fsm and blocks_fsm.get("step") == "await_symbol":
+        if _blocks_fsm_expired(blocks_fsm):
+            _blocks_fsm_clear(chat_id_int)
+            await send_message(
+                session,
+                _card(
+                    "Запреты",
+                    "🚫",
+                    ["Сессия добавления блока истекла (5 минут).",
+                     "Начните заново."],
+                ),
+                reply_markup=set_keyboard(),
+            )
+            return
+        candidate = (text or "").strip().upper()
+        if not _looks_like_symbol(candidate):
+            await send_message(
+                session,
+                _card(
+                    "Добавить запрет",
+                    "🚫",
+                    [
+                        f"Не похоже на тикер: «{text[:32]}»",
+                        _subhr_line(),
+                        "Формат: латиница + USDT в конце.",
+                        "Например: XRPUSDT, BTCUSDT, SOLUSDT.",
+                        _subhr_line(),
+                        "Повторите ввод или нажмите «Отмена».",
+                    ],
+                ),
+                reply_markup={
+                    "inline_keyboard": [[
+                        {"text": "❌ Отмена",
+                         "callback_data": CB_BLOCKS_CANCEL},
+                    ]]
+                },
+            )
+            return
+        # Тикер принят — переходим к шагу выбора длительности.
+        blocks_fsm["symbol"] = candidate
+        blocks_fsm["step"] = "await_duration"
+        blocks_fsm["started"] = time.time()
+        body = [
+            _label("Пара", candidate),
+            _subhr_line(),
+            "Выберите длительность блока:",
+        ]
+        duration_buttons: list[list[dict[str, Any]]] = []
+        row: list[dict[str, Any]] = []
+        for value, label in _BLOCKS_DURATIONS:
+            row.append({
+                "text": label,
+                "callback_data": f"{CB_BLOCKS_DURATION_PREFIX}{value}",
+            })
+            if len(row) == 3:
+                duration_buttons.append(row)
+                row = []
+        if row:
+            duration_buttons.append(row)
+        duration_buttons.append([{
+            "text": "❌ Отмена", "callback_data": CB_BLOCKS_CANCEL,
+        }])
+        await send_message(
+            session,
+            _card("Добавить запрет", "🚫", body),
+            reply_markup={"inline_keyboard": duration_buttons},
+        )
+        return
 
     # FSM: если мы ждём значение ключа - перехватываем.
     fsm = _key_fsm_state.get(chat_id_int)
