@@ -886,6 +886,67 @@ async def _check_closed_exchange_position(
 
 # --- Основная логика по символу -----------------------------------------
 
+def _build_gate_historical_context(symbol: str) -> str:
+    """Сборка короткой статистической сводки по символу за 30 дней
+    для подмешивания в prompt AI-Gate.
+
+    Если по символу < 3 закрытых сделок — возвращаем стандартное
+    сообщение «Нет статистически значимой истории для этой пары.».
+    Иначе — многострочный блок: количество сделок и винрейт, средний
+    R/R по факту (0.0 пока — см. memory.get_symbol_stats_30d), последние
+    3 сделки с PnL и направлением, топ-причины убытков.
+    """
+    try:
+        stats = memory.get_symbol_stats_30d(symbol)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI-GATE] {symbol}: ошибка get_symbol_stats_30d: {exc}")
+        return "Нет статистически значимой истории для этой пары."
+
+    count = int(stats.get("count") or 0)
+    if count < 3:
+        return "Нет статистически значимой истории для этой пары."
+
+    wins = int(stats.get("wins") or 0)
+    losses = int(stats.get("losses") or 0)
+    winrate = float(stats.get("winrate") or 0.0)
+    avg_rr = float(stats.get("avg_rr_realized") or 0.0)
+
+    try:
+        recent = memory.get_last_trades(symbol, 3)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI-GATE] {symbol}: ошибка get_last_trades: {exc}")
+        recent = []
+    try:
+        top_loss = memory.get_top_loss_reasons(symbol, 30, 3)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[AI-GATE] {symbol}: ошибка get_top_loss_reasons: {exc}")
+        top_loss = []
+
+    lines: list[str] = [
+        f"- Сделок: {count}, винрейт {winrate:.0f}% "
+        f"({wins} win / {losses} loss)",
+        f"- Средний R/R по факту: {avg_rr:.1f}",
+    ]
+    if recent:
+        parts: list[str] = []
+        for r in recent:
+            outcome = str(r.get("outcome") or "").upper()
+            try:
+                pnl = float(r.get("pnl") or 0.0)
+            except (TypeError, ValueError):
+                pnl = 0.0
+            sign = "+" if pnl >= 0 else "-"
+            parts.append(f"{outcome} {sign}{abs(pnl):.1f}")
+        lines.append("- Последние 3: " + ", ".join(parts))
+    if top_loss:
+        parts = [
+            f"{str(r.get('filter') or '-')} ({int(r.get('count') or 0)})"
+            for r in top_loss
+        ]
+        lines.append("- Топ причин убытков: " + ", ".join(parts))
+    return "\n".join(lines)
+
+
 async def _process_symbol(
     session: aiohttp.ClientSession,
     state: dict[str, Any],
@@ -1168,6 +1229,7 @@ async def _process_symbol(
             regime_confidence=int(sym_regime.get("confidence", 0) or 0),
             blackout=bool(state["global"].get("blackout", {}).get("blackout")),
             news_headlines=list(headlines),
+            historical_context=_build_gate_historical_context(symbol),
         )
         gate_verdict = str(gate_result.get("verdict", "error") or "error").lower()
         gate_reason = str(gate_result.get("reason", "") or "")
