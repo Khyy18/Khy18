@@ -124,6 +124,11 @@ CB_START_BOT = "zc:bot_start"
 CB_STOP_BOT = "zc:bot_stop"
 CB_BACK_MAIN = "zc:back_main"
 
+# Префикс для подсказок-объяснений по тапу (FEAT-C).
+# Полный callback-id формируется как CB_EXPLAIN_PREFIX + <ключ EXPLAIN>,
+# например "zc:explain:fail_closed". Длина с самым длинным ключом меньше 64 байт.
+CB_EXPLAIN_PREFIX = "zc:explain:"
+
 CB_PANIC_CONFIRM = "zc:panic_ok"
 CB_PANIC_CANCEL = "zc:panic_no"
 
@@ -172,6 +177,70 @@ _ANALYST_EXAMPLES: list[tuple[str, str]] = [
     (CB_ANALYST_EX3, "Когда AI-Gate ошибался?"),
     (CB_ANALYST_EX4, "Стоит ли мне перейти на РЕАЛ?"),
 ]
+
+# --- Подсказки-объяснения по тапу (FEAT-C) ---
+# Ключ -> короткое пояснение термина в 1-3 предложения, на русском, без HTML.
+# Используется обработчиком _handle_explain (callback CB_EXPLAIN_PREFIX+<key>).
+# В значениях ЗАПРЕЩЁН символ U+2014 (em-dash) - использовать обычный дефис
+# или двоеточие, чтобы тексты не съезжали в моноширинной отрисовке Telegram.
+EXPLAIN: dict[str, str] = {
+    "sharpe": (
+        "Sharpe - отношение средней доходности к её колебаниям. "
+        ">1 - стабильно; <0 - стратегия теряет."
+    ),
+    "pf": (
+        "Profit factor (PF) - сумма выигрышей делённая на сумму проигрышей. "
+        "PF=1 - в нуле; PF>1 - стратегия в плюсе."
+    ),
+    "fail_closed": (
+        "fail-CLOSED - если AI-Gate ответил с ошибкой, сделка НЕ открывается. "
+        "Это страховка: лучше пропустить сетап, чем войти вслепую."
+    ),
+    "ai_gate": (
+        "AI-Gate - vetolayer на базе LLM. Перед сделкой шлёт контекст модели "
+        "и получает approve, veto или error."
+    ),
+    "max_dd": (
+        "Max DD - максимальная просадка от пика капитала. "
+        "15% значит, что в худшей точке счёт проседал на 15% от хая."
+    ),
+    "gate_verdict": (
+        "gate.verdict - итог AI-Gate: approve (одобрено), veto (заблокировано), "
+        "error (модель не ответила)."
+    ),
+    "shadow_active": (
+        "shadow vs active: shadow только логирует, не влияет на торговлю; "
+        "active реально блокирует сделки по veto."
+    ),
+    "winrate": (
+        "Винрейт - доля прибыльных закрытых сделок. "
+        "60% значит, что 60 из 100 закрытий ушли в плюс."
+    ),
+    "risk_per_trade": (
+        "Риск/сделка - какую долю депозита можно потерять на одной сделке, "
+        "если сработает стоп."
+    ),
+    "global_risk_cap": (
+        "Сумм. риск - потолок одновременного открытого риска по всему "
+        "портфелю. По умолчанию 4% от депозита."
+    ),
+    "kill_switch": (
+        "Kill-switch - автоматическая остановка торговли при достижении "
+        "лимита убытка (день, неделя или просадка)."
+    ),
+    "dry_run": (
+        "DRY_RUN - режим обкатки: бот считает сигналы и логирует их, "
+        "но НЕ шлёт ордера на биржу."
+    ),
+    "auto_block": (
+        "Авто-блок - после N подряд LOSS на паре бот временно исключает её "
+        "из торговли. Снимается на первом WIN или по таймеру."
+    ),
+    "sparkline": (
+        "Sparkline - мини-чарт из последних свечей через символы блоков "
+        "от низкого к высокому. Каждый символ - одна свеча close."
+    ),
+}
 
 # Rate-limit для уведомлений о fail-CLOSED блокировке (Groq недоступен).
 # symbol → unix timestamp последней отправки уведомления.
@@ -1713,6 +1782,14 @@ def _bt_render_menu(chat_id: int) -> tuple[str, dict[str, Any]]:
         "inline_keyboard": [
             period_row,
             [{"text": "▶ Запустить", "callback_data": CB_BT_RUN}],
+            [
+                {"text": "❓ Sharpe",
+                 "callback_data": CB_EXPLAIN_PREFIX + "sharpe"},
+                {"text": "❓ PF",
+                 "callback_data": CB_EXPLAIN_PREFIX + "pf"},
+                {"text": "❓ Max DD",
+                 "callback_data": CB_EXPLAIN_PREFIX + "max_dd"},
+            ],
             [{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}],
         ]
     }
@@ -2857,6 +2934,14 @@ async def _handle_status(
         inline.append(
             [{"text": "🆘 Снять kill-switch", "callback_data": CB_KILL_CLEAR}]
         )
+    inline.append([
+        {"text": "❓ Винрейт",
+         "callback_data": CB_EXPLAIN_PREFIX + "winrate"},
+        {"text": "❓ Сум. риск",
+         "callback_data": CB_EXPLAIN_PREFIX + "global_risk_cap"},
+        {"text": "❓ Kill",
+         "callback_data": CB_EXPLAIN_PREFIX + "kill_switch"},
+    ])
     inline.append([{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}])
 
     return text, {"inline_keyboard": inline}
@@ -3093,6 +3178,14 @@ async def _handle_aigate(
     inline.append([
         {"text": "📜 Последние 10",
          "callback_data": CB_AIGATE_RECENT},
+    ])
+    inline.append([
+        {"text": "❓ AI-Gate",
+         "callback_data": CB_EXPLAIN_PREFIX + "ai_gate"},
+        {"text": "❓ verdict",
+         "callback_data": CB_EXPLAIN_PREFIX + "gate_verdict"},
+        {"text": "❓ fail-CLOSED",
+         "callback_data": CB_EXPLAIN_PREFIX + "fail_closed"},
     ])
     inline.append([{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}])
 
@@ -4251,6 +4344,29 @@ async def _handle_groq_quota(
     return _card("Квота Groq", "🤖", body), inline
 
 
+# --- Обработчик подсказок-объяснений (FEAT-C) ------------------------------
+
+async def _handle_explain(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    key: str,
+) -> tuple[str, dict[str, Any]]:
+    """Карточка-подсказка по ключу EXPLAIN.
+
+    Кнопка возврата всегда ведёт в главное меню (CB_BACK_MAIN), без
+    запоминания исходного экрана: проще и надёжнее, не нужно хранить
+    message_id и склейку «откуда вызвали».
+    """
+    text_body = EXPLAIN.get(str(key or ""), "Объяснение не найдено.")
+    text = _card("Подсказка", "❓", [text_body])
+    inline = {
+        "inline_keyboard": [
+            [{"text": "◀ Назад", "callback_data": CB_BACK_MAIN}],
+        ]
+    }
+    return text, inline
+
+
 # --- Диспетчер callback-ов -------------------------------------------------
 
 async def _process_callback(
@@ -4443,6 +4559,9 @@ async def _process_callback(
             )
         elif data == CB_KEY_CANCEL:
             result = await _handle_key_cancel(session, state, chat_id_int)
+        elif data.startswith(CB_EXPLAIN_PREFIX):
+            key = data[len(CB_EXPLAIN_PREFIX):]
+            result = await _handle_explain(session, state, key)
         else:
             result = "Неизвестная команда."
     except Exception as exc:  # noqa: BLE001
