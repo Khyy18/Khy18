@@ -9,6 +9,10 @@
                       (Donchian, режим, blackout и т.п.).
   - equity_curve:     снимки эквити, HWM и текущей просадки - ряд для
                       расчёта MAX_WEEKLY_LOSS / MAX_DRAWDOWN и графиков.
+  - ai_gate_log:      v3 - журнал решений AI-veto gate (approve/veto/error)
+                      по каждому намерению открыть сделку. Флаг `applied`
+                      показывает, было ли решение фактически применено
+                      (только в active-режиме для veto/error).
 
 Инициализация схемы (включая идемпотентную миграцию trades.closed_ts)
 выполняется при импорте модуля (init_db()).
@@ -119,6 +123,21 @@ def init_db() -> None:
                     equity REAL NOT NULL,
                     hwm REAL NOT NULL,
                     drawdown REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_gate_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    strategy TEXT,
+                    verdict TEXT NOT NULL,
+                    reason TEXT,
+                    confidence INTEGER,
+                    applied INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -499,6 +518,162 @@ def get_week_pnl() -> float:
     except sqlite3.Error as exc:
         print(f"[MEMORY] Ошибка расчёта недельного PnL: {exc}")
         return 0.0
+
+
+# --- v3: AI-veto gate log и аггрегации ---
+
+def record_ai_gate(
+    symbol: str,
+    side: str,
+    strategy: Optional[str],
+    verdict: str,
+    reason: Optional[str],
+    confidence: Optional[int],
+    applied: bool,
+) -> None:
+    """Записать решение AI-veto gate для конкретного намерения открыть сделку.
+
+    applied=True означает, что решение было фактически применено к торговле
+    (актуально только для active-режима при verdict in (veto, error)).
+    В shadow-режиме applied всегда False - решение только логируется.
+    """
+    try:
+        conf_int = int(confidence) if confidence is not None else 0
+    except (TypeError, ValueError):
+        conf_int = 0
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_gate_log
+                    (ts, symbol, side, strategy, verdict, reason,
+                     confidence, applied)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _now_iso(),
+                    str(symbol or "-"),
+                    str(side or "-"),
+                    str(strategy or "") or None,
+                    str(verdict or "-"),
+                    str(reason or "") or None,
+                    conf_int,
+                    1 if applied else 0,
+                ),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Не удалось записать решение AI-gate: {exc}")
+
+
+def get_ai_gate_stats(hours: int) -> dict[str, int]:
+    """Аггрегированная статистика по ai_gate_log за последние `hours` часов.
+
+    Возвращает dict с ключами: approve, veto, error, total, applied.
+    """
+    out = {"approve": 0, "veto": 0, "error": 0, "total": 0, "applied": 0}
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT verdict, COUNT(*) AS cnt,
+                       SUM(CASE WHEN applied=1 THEN 1 ELSE 0 END) AS applied_cnt
+                FROM ai_gate_log
+                WHERE datetime(ts) >= datetime('now', ?)
+                GROUP BY verdict
+                """,
+                (f"-{int(hours)} hours",),
+            ).fetchall()
+            for r in rows:
+                verdict = str(r["verdict"] or "").lower()
+                cnt = int(r["cnt"] or 0)
+                applied_cnt = int(r["applied_cnt"] or 0)
+                if verdict in out:
+                    out[verdict] = cnt
+                out["total"] += cnt
+                out["applied"] += applied_cnt
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_ai_gate_stats: {exc}")
+    return out
+
+
+def get_ai_gate_top_veto_reasons(
+    hours: int, limit: int = 5
+) -> list[dict[str, Any]]:
+    """Топ причин veto/error за последние `hours` часов, по убыванию count.
+
+    Возвращает список [{"reason": str, "count": int}, ...] длиной до `limit`.
+    """
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT COALESCE(reason, '(без причины)') AS reason,
+                       COUNT(*) AS cnt
+                FROM ai_gate_log
+                WHERE verdict IN ('veto', 'error')
+                  AND datetime(ts) >= datetime('now', ?)
+                GROUP BY reason
+                ORDER BY cnt DESC
+                LIMIT ?
+                """,
+                (f"-{int(hours)} hours", int(limit)),
+            ).fetchall()
+            return [{"reason": str(r["reason"]), "count": int(r["cnt"] or 0)}
+                    for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_ai_gate_top_veto_reasons: {exc}")
+        return []
+
+
+def get_ai_gate_recent(limit: int = 20) -> list[dict[str, Any]]:
+    """Последние `limit` решений gate в порядке от новых к старым."""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, ts, symbol, side, strategy, verdict, reason,
+                       confidence, applied
+                FROM ai_gate_log
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                data = dict(r)
+                data["applied"] = bool(data.get("applied"))
+                out.append(data)
+            return out
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_ai_gate_recent: {exc}")
+        return []
+
+
+def get_rejected_counts(hours: int) -> list[dict[str, Any]]:
+    """Группировка rejected_checks по полю filter за последние `hours` часов.
+
+    Возвращает список [{"filter": str, "count": int}, ...],
+    отсортированный по убыванию count.
+    """
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT filter, COUNT(*) AS cnt
+                FROM rejected_checks
+                WHERE datetime(ts) >= datetime('now', ?)
+                GROUP BY filter
+                ORDER BY cnt DESC
+                """,
+                (f"-{int(hours)} hours",),
+            ).fetchall()
+            return [{"filter": str(r["filter"]), "count": int(r["cnt"] or 0)}
+                    for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] Ошибка get_rejected_counts: {exc}")
+        return []
 
 
 # Инициализация схемы выполняется явно из main.py::main() через
