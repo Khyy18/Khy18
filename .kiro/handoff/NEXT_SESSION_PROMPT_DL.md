@@ -39,6 +39,77 @@
 - **Существующие токены/ключи** в `.env` (TELEGRAM_TOKEN, OKX_API_KEY, GROQ_API_KEY).
 - **`AI_TRADE_GATE_MODE=active`** — оставить как есть (это AI-Gate новостной слой, отдельно от DL ensemble).
 
+### КРИТИЧНО: API-ключи и Groq в боте — оставить как есть
+
+Пользователь явно потребовал в сессии 2026-05-13: **все API-ключи и интеграции Groq в Telegram-боте должны остаться в полном объёме**. Это не косметика, это hard requirement.
+
+Конкретно:
+
+**`.env` переменные (ВСЕ оставить, ничего не удалять, ничего не переименовывать):**
+- `TELEGRAM_TOKEN` — токен Telegram-бота (общий с v1, не ротировать).
+- `TELEGRAM_CHAT_ID` — единственный авторизованный chat_id.
+- `OKX_API_KEY`, `OKX_API_SECRET`, `OKX_API_PASSPHRASE` — реал OKX (mainnet, IS_TESTNET=false).
+- `OKX_DEMO_API_KEY`, `OKX_DEMO_API_SECRET`, `OKX_DEMO_API_PASSPHRASE` — демо OKX (testnet, IS_TESTNET=true). Эти используются для DL ensemble разработки.
+- `GROQ_API_KEY` — ключ Groq для всех ИИ-вызовов.
+- `IS_TESTNET` — переключатель между демо и реалом. Для разработки DL ensemble = `true`.
+- `DRY_RUN` — флаг сухого прогона.
+- Всё, что есть в `.env.example` — оставить.
+
+**Карточка `🔑 КЛЮЧИ API` в Telegram (`_handle_keys_menu`, `telegram_bot.py:4148`):**
+- НЕ удалять кнопку из главного меню (она 4-я в правом столбце).
+- НЕ упрощать список ключей — все 8 управляемых ключей остаются:
+  - 🔵 OKX Demo Key / Secret / Passphrase
+  - 🔴 OKX Real Key / Secret / Passphrase
+  - 🟣 Telegram Token
+  - 🟢 Groq API Key
+- НЕ убирать кнопку «📤 Экспорт .env» с маскированием секретов.
+- FSM замены ключей через сообщение + подтверждение — оставить полностью (`_key_fsm_state`, `CB_KEY_PREFIX`, `CB_KEY_CONFIRM_PREFIX`).
+- Атомарная запись через `_write_env_var` с `tmp + os.replace` — оставить как есть.
+- Маскирование секретов в экспорте `.env` через `_mask_env_line` и `_SECRET_NAME_RE` — оставить.
+
+**Все Groq-интеграции в боте — оставить и расширить:**
+
+В коде уже есть и работают:
+- `ai_trade_gate.py` — AI-Gate veto перед сделкой (используется новым ботом тоже, как доп. слой защиты).
+- `ai_groq.py` — общий клиент Groq с парсингом x-ratelimit заголовков.
+- `ai_regime.py` — классификатор режима рынка (TRENDING/RANGING/CRISIS).
+- `ai_macro_sentinel.py` — макро-blackout перед FOMC/CPI.
+- `ai_analyst.py` — FSM-чат с аналитиком в Telegram.
+- `ai_postmortem.py` — еженедельный отчёт.
+
+Карточка `🤖 GROQ` в подменю СТАТУС (`_handle_groq_quota`, `telegram_bot.py:737`):
+- Прогресс-бары квоты RPM/RPD/TPM/TPD — оставить.
+- Парсинг snapshot из x-ratelimit-* заголовков — оставить.
+- Кнопка «🔄 Обновить» — оставить.
+
+Карточка `🛡 AI-GATE`:
+- 24ч / 7д статистика approve/veto/error — оставить.
+- Топ причин блокировки — оставить.
+- Переключение режимов off/shadow/active — оставить (но `active` не менять без команды пользователя).
+
+Карточка `🤖 АНАЛИТИК`:
+- 4 примера вопросов — оставить (можно добавить 5-й про ML).
+- FSM свободного вопроса — оставить.
+
+**Что меняется по Groq в DL ensemble:**
+
+Только модели (см. раздел "Groq лимиты пользователя" ниже):
+- AI-Gate, Macro-sentinel, Regime classifier — переключить на `llama-3.1-8b-instant`.
+- AI-Analyst, Postmortem — оставить на `llama-3.3-70b-versatile`.
+
+Это правка одного-двух полей `"model"` в payload. Не переписывать клиент, не менять архитектуру вызовов.
+
+**Что добавляется к Groq в DL ensemble (новое):**
+
+Опционально на Фазе 5 — отдельная LLM-функция «объяснить ML-решение» в Telegram через `ai_analyst.py`. Вопрос вида «Почему LSTM открыл LONG на BTC?» → Groq получает features + предсказание + контекст и формирует объяснение на русском. Использует тот же `GROQ_API_KEY`, отдельного ключа не нужно.
+
+**Что НЕ делать:**
+
+- Не удалять ни одну из 5 ИИ-интеграций.
+- Не предлагать пользователю «упростить» бот, убрав Groq.
+- Не переходить на другие LLM-провайдеры (OpenAI/Anthropic/локальный llama.cpp) без явного запроса пользователя.
+- Не добавлять новые Groq-вызовы для ML-сигналов (LSTM/LightGBM/PPO работают локально, без Groq).
+
 ### Что МОЖНО переиспользовать
 
 **80% Telegram UI** (`telegram_bot.py`):
