@@ -723,14 +723,17 @@ async def _check_closed_exchange_position(
         side_label = "LONG" if side == "Buy" else "SHORT"
         pnl_pct = ((pnl / (entry * qty)) * 100) if entry > 0 and qty > 0 else 0.0
         outcome_emoji = "✅" if outcome == "WIN" else "❌"
+        outcome_ru = "ПРИБЫЛЬ" if outcome == "WIN" else "УБЫТОК"
+        dir_arrow = "↗️" if side == "Buy" else "↘️"
         duration = _format_duration(trade.get("entry_ts_iso"), _utc_now())
         notify_text = (
-            f"{outcome_emoji} <b>Закрыта {symbol} {side_label}</b>\n"
-            f"Вход: {entry:.4f} → Выход: {exit_price:.4f}\n"
-            f"PnL: {pnl:+.4f} USDT ({pnl_pct:+.2f}%)\n"
-            f"Исход: {outcome}\n"
-            f"Длительность: {duration}\n"
-            f"Суточный PnL: {g['daily_pnl']:+.4f} USDT"
+            f"{outcome_emoji} <b>ЗАКРЫТА СДЕЛКА</b> — {outcome_ru}\n\n"
+            f"🪙 Пара: <b>{symbol}</b>\n"
+            f"{dir_arrow} Сторона: <b>{side_label}</b>\n"
+            f"🎯 Вход: {entry:.4f} → 🏁 Выход: {exit_price:.4f}\n"
+            f"💰 PnL: {pnl:+.4f} USDT ({pnl_pct:+.2f}%)\n"
+            f"⏱ Длительность: {duration}\n"
+            f"📊 Суточный PnL: {g['daily_pnl']:+.4f} USDT"
         )
         await telegram_bot.send_message(
             session, notify_text, reply_markup=telegram_bot.set_keyboard()
@@ -1156,33 +1159,42 @@ async def _process_symbol(
         # Индикатор счёта (ДЕМО / РЕАЛ) по IS_TESTNET.
         account_label = "📊 ДЕМО" if config.IS_TESTNET else "💰 РЕАЛ"
         reason = str((order.get("meta") or {}).get("reason") or "")
+        # Стрелка направления в шапке: для LONG ↗️, для SHORT ↘️.
+        dir_arrow = "↗️" if side == "Buy" else "↘️"
         notify_text = (
-            f"{side_emoji} <b>Открыта {side_label} {symbol}</b>\n"
-            f"Вход: {entry_price:.4f}\n"
-            f"Размер: {qty} (~${notional:.2f})\n"
-            f"Стоп: {hard_stop:.4f} (−{stop_pct:.2f}%)\n"
-            f"Цель R/R 1:2 (трейлинг): {tp_price:.4f} (+{tp_pct:.2f}%)\n"
-            f"Риск на сделку: {config.RISK_PER_TRADE * 100:.2f}%"
+            f"📈 <b>ОТКРЫТА СДЕЛКА</b> {side_emoji}\n\n"
+            f"🪙 Пара: <b>{symbol}</b>\n"
+            f"{dir_arrow} Сторона: <b>{side_label}</b>\n"
+            f"📦 Размер: {qty} (~${notional:.2f})\n"
+            f"🎯 Цена входа: {entry_price:.4f}\n"
+            f"🛑 Стоп-лосс: {hard_stop:.4f} (−{stop_pct:.2f}%)\n"
+            f"🎁 Цель R/R 1:2 (трейлинг): {tp_price:.4f} (+{tp_pct:.2f}%)\n"
+            f"⚖️ Риск на сделку: {config.RISK_PER_TRADE * 100:.2f}%"
         )
         if reason:
-            notify_text += f"\nПричина: {reason}"
+            notify_text += f"\n💡 Причина: {reason}"
         if regime_ru:
-            notify_text += f"\nРежим рынка: {regime_ru}"
-        notify_text += f"\nСчёт: {account_label}"
+            regime_emoji = {
+                "Тренд": "🟢",
+                "Боковик": "🔴",
+                "Кризис": "⚪",
+            }.get(regime_ru, "🎯")
+            notify_text += f"\n{regime_emoji} Режим рынка: {regime_ru}"
+        notify_text += f"\n🏦 Счёт: {account_label}"
         # Строка про AI-veto gate: показываем какое решение вынес gate и
         # в каком режиме он работает (off/shadow/active).
         if gate_mode == "off":
-            notify_text += "\nAI-gate: off"
+            notify_text += "\n🧠 AI-GATE: ⚪ выключен"
         elif gate_mode == "shadow":
             short_reason = (gate_reason[:80] + "…") if len(gate_reason) > 80 else gate_reason
             if gate_verdict == "veto":
-                notify_text += f"\nAI-gate shadow: would veto ({short_reason})"
+                notify_text += f"\n🧠 AI-GATE (👁 наблюдение): 🚫 would veto ({short_reason})"
             elif gate_verdict == "error":
-                notify_text += f"\nAI-gate shadow: error - fail-CLOSED would block ({short_reason})"
+                notify_text += f"\n🧠 AI-GATE (👁 наблюдение): ⚠️ error — fail-CLOSED would block ({short_reason})"
             else:
-                notify_text += "\nAI-gate shadow: would approve"
+                notify_text += "\n🧠 AI-GATE (👁 наблюдение): ✅ would approve"
         else:  # active
-            notify_text += f"\nAI-gate: ✅ одобрено (conf={gate_conf})"
+            notify_text += f"\n🧠 AI-GATE: ✅ одобрено (уверенность {gate_conf})"
         await telegram_bot.send_message(
             session, notify_text, reply_markup=telegram_bot.set_keyboard()
         )
