@@ -409,3 +409,55 @@ class BingXAdapter(ExchangeAdapter):
             }
         except (TypeError, ValueError):
             return None
+
+
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты с BingX Perpetual Swap.
+
+        Endpoint: GET /openApi/swap/v2/user/income
+            ?symbol={bx_sym}&incomeType=FUNDING_FEE&startTime={ms}
+
+        Возвращает list[{time, symbol, income, ...}], где income — funding
+        USDT со знаком, time — миллисекунды. Похоже на Binance.
+
+        При любой ошибке возвращаем [] — fallback в executor сработает на
+        аналитическую оценку.
+        """
+        params: dict[str, Any] = {
+            "symbol": _sym(symbol),
+            "incomeType": "FUNDING_FEE",
+            "limit": str(max(1, min(1000, int(limit)))),
+        }
+        if since_ms is not None and since_ms > 0:
+            params["startTime"] = str(int(since_ms))
+        resp = await self._get(
+            session, "/openApi/swap/v2/user/income", params, signed=True,
+        )
+        if not isinstance(resp, dict) or resp.get("code") != 0:
+            if isinstance(resp, dict):
+                print(f"[BINGX] get_funding_history({symbol}): {resp.get('msg') or resp}")
+            return []
+        data = resp.get("data") or []
+        if not isinstance(data, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in data:
+            try:
+                ts = int(item.get("time") or 0)
+                funding = float(item.get("income") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "symbol": symbol,
+                "ts": ts,
+                "funding": funding,
+            })
+        return out

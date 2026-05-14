@@ -90,6 +90,22 @@ class BybitAdapter(ExchangeAdapter):
         reduce_only: bool = False,
         post_only_timeout_sec: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
+        # Maker-only mode: только для open-сделок (reduce_only=False).
+        # Для close используем стандартный fallback - закрытие должно уйти
+        # быстро, иначе margin guard / time-stop сработают.
+        if (
+            getattr(config, "ARB_MAKER_ONLY_ENABLED", False)
+            and not reduce_only
+        ):
+            return await api_engine.place_maker_only_with_repeg(
+                session,
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                reduce_only=reduce_only,
+            )
         # FIX: передаём post_only_timeout_sec в api_engine, чтобы
         # каждый вызов мог переопределить глобальный POST_ONLY_TIMEOUT_SEC.
         return await api_engine.place_order_with_fallback(

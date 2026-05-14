@@ -448,3 +448,56 @@ class HTXAdapter(ExchangeAdapter):
             }
         except (TypeError, ValueError):
             return None
+
+
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты с HTX Linear Swap.
+
+        Endpoint: POST /linear-swap-api/v3/swap_financial_record_exact
+            body: {contract_code, mar_acct=USDT, type=31}  (type=31 = funding fee).
+
+        HTX отдаёт в data.financial_record список с полями {ts, amount,
+        contract_code}. amount — funding USDT (со знаком). При любой ошибке
+        парсинга возвращаем [] — fallback в executor сработает на
+        аналитическую оценку.
+        """
+        body: dict[str, Any] = {
+            "contract_code": _sym(symbol),
+            "mar_acct": "USDT",
+            "type": "31",
+            "page_size": max(1, min(50, int(limit))),
+        }
+        if since_ms is not None and since_ms > 0:
+            body["start_time"] = int(since_ms)
+        resp = await self._post(
+            session, "/linear-swap-api/v3/swap_financial_record_exact", body,
+        )
+        if not isinstance(resp, dict) or resp.get("status") != "ok":
+            if isinstance(resp, dict):
+                print(f"[HTX] get_funding_history({symbol}): {resp.get('err_msg') or resp}")
+            return []
+        data = resp.get("data") or {}
+        items = data.get("financial_record") or data.get("records") or []
+        if not isinstance(items, list):
+            items = []
+        out: list[dict[str, Any]] = []
+        for item in items:
+            try:
+                ts = int(item.get("ts") or item.get("create_time") or 0)
+                funding = float(item.get("amount") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "symbol": symbol,
+                "ts": ts,
+                "funding": funding,
+            })
+        return out

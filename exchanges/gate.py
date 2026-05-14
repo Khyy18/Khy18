@@ -482,3 +482,55 @@ class GateAdapter(ExchangeAdapter):
             "mark_price": mark,
             "interval_hours": interval_hours,
         }
+
+
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты с Gate.io.
+
+        Endpoint: GET /api/v4/futures/usdt/account_book?type=fund&contract={contract}
+        Параметр `from` — UNIX-секунды (не ms!). Возвращает список словарей
+        {time, change, contract}, где change — funding USDT со знаком,
+        time — секунды (умножаем на 1000).
+
+        При любой ошибке возвращаем [] — fallback в executor сработает на
+        аналитическую оценку.
+        """
+        contract = _sym_to_contract(symbol)
+        params: dict[str, Any] = {
+            "type": "fund",
+            "contract": contract,
+            "limit": max(1, min(1000, int(limit))),
+        }
+        if since_ms is not None and since_ms > 0:
+            params["from"] = int(since_ms / 1000)
+        resp = await self._get(
+            session,
+            f"/api/v4/futures/{_SETTLE}/account_book",
+            params,
+            signed=True,
+        )
+        if not isinstance(resp, list):
+            if isinstance(resp, dict):
+                print(f"[GATE] get_funding_history({symbol}): {resp.get('message') or resp}")
+            return []
+        out: list[dict[str, Any]] = []
+        for item in resp:
+            try:
+                ts_sec = int(item.get("time") or 0)
+                funding = float(item.get("change") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts_sec <= 0:
+                continue
+            out.append({
+                "symbol": symbol,
+                "ts": ts_sec * 1000,
+                "funding": funding,
+            })
+        return out

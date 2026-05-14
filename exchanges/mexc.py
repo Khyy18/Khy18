@@ -424,3 +424,60 @@ class MEXCAdapter(ExchangeAdapter):
             }
         except (TypeError, ValueError):
             return None
+
+
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты с MEXC Contract API.
+
+        Endpoint: GET /api/v1/private/funding/records
+            ?symbol={mx_sym}&page_size={limit}&start_time={ms}
+
+        Параметры эндпоинта могут варьироваться у MEXC (документация не
+        всегда соответствует поведению). При любой ошибке/неудаче парсинга
+        возвращаем [] — fallback в executor сработает на аналитическую
+        оценку (это нормальный путь, бот не теряет работоспособность).
+        """
+        mx_sym = _sym(symbol)
+        params: dict[str, Any] = {
+            "symbol": mx_sym,
+            "page_size": max(1, min(100, int(limit))),
+            "page_num": 1,
+        }
+        if since_ms is not None and since_ms > 0:
+            params["start_time"] = int(since_ms)
+        resp = await self._get(
+            session, "/api/v1/private/funding/records", params, signed=True,
+        )
+        if not isinstance(resp, dict) or not resp.get("success"):
+            if isinstance(resp, dict):
+                print(f"[MEXC] get_funding_history({symbol}): {resp.get('message') or resp}")
+            return []
+        # MEXC обычно отдаёт {data: {resultList: [...]}} или {data: [...]}.
+        data = resp.get("data") or {}
+        if isinstance(data, dict):
+            items = data.get("resultList") or data.get("records") or []
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = []
+        out: list[dict[str, Any]] = []
+        for item in items:
+            try:
+                ts = int(item.get("settleTime") or item.get("time") or item.get("createTime") or 0)
+                funding = float(item.get("funding") or item.get("amount") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "symbol": symbol,
+                "ts": ts,
+                "funding": funding,
+            })
+        return out

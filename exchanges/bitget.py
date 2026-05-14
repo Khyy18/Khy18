@@ -472,3 +472,54 @@ class BitgetAdapter(ExchangeAdapter):
             }
         except (TypeError, ValueError):
             return None
+
+
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты с Bitget.
+
+        Endpoint: GET /api/v2/mix/account/bills
+            ?productType=USDT-FUTURES&businessType=contract_settle_fee
+            &symbol={symbol}&startTime={ms}
+        Возвращает {data: {bills: [{cTime, symbol, amount}]}}, где amount —
+        funding USDT со знаком, cTime — миллисекунды.
+
+        При любой ошибке возвращаем [] — fallback в executor сработает на
+        аналитическую оценку.
+        """
+        params: dict[str, Any] = {
+            "productType": _PRODUCT,
+            "businessType": "contract_settle_fee",
+            "symbol": symbol,
+            "limit": str(max(1, min(100, int(limit)))),
+        }
+        if since_ms is not None and since_ms > 0:
+            params["startTime"] = str(int(since_ms))
+        resp = await self._get(
+            session, "/api/v2/mix/account/bills", params, signed=True,
+        )
+        if not isinstance(resp, dict) or resp.get("code") != "00000":
+            if isinstance(resp, dict):
+                print(f"[BITGET] get_funding_history({symbol}): {resp.get('msg') or resp}")
+            return []
+        bills = (resp.get("data") or {}).get("bills") or []
+        out: list[dict[str, Any]] = []
+        for item in bills:
+            try:
+                ts = int(item.get("cTime") or 0)
+                funding = float(item.get("amount") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "symbol": item.get("symbol") or symbol,
+                "ts": ts,
+                "funding": funding,
+            })
+        return out

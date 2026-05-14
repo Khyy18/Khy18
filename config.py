@@ -209,6 +209,24 @@ DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080") or "8080")
 # --- Legacy константы (используются api_engine.py для bybit) ----------
 # PostOnly: сколько ждать filla limit-ордера перед фолбэком в Market IOC.
 POST_ONLY_TIMEOUT_SEC = 30
+
+# --- Maker-only mode --------------------------------------------------
+# Maker-only mode: вместо фолбэка в Market IOC после 30с, бот пересчитывает
+# лимитную цену каждые ARB_MAKER_PEG_INTERVAL_SEC и держит ордер
+# PostOnly до ARB_MAKER_ONLY_TIMEOUT_SEC. Если за timeout не filled —
+# пропускаем сделку (никаких taker-ордеров). Maker-комиссия в среднем
+# 2× ниже taker, поэтому такое поведение даёт ~5% APR прибавку при
+# holding 7 дней. Минус: иногда упускаем сделку (~10-15% случаев).
+# Включается через ARB_MAKER_ONLY_ENABLED=1 в .env.
+# ВАЖНО: применяется ТОЛЬКО к открывающим ордерам. Закрытие
+# (reduce_only=True) всегда идёт через стандартный fallback (PostOnly→IOC),
+# чтобы margin guard / time-stop успели сработать без зависания.
+ARB_MAKER_ONLY_ENABLED = os.getenv("ARB_MAKER_ONLY_ENABLED", "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+ARB_MAKER_ONLY_TIMEOUT_SEC = float(os.getenv("ARB_MAKER_ONLY_TIMEOUT_SEC", "120") or 120)
+ARB_MAKER_PEG_INTERVAL_SEC = float(os.getenv("ARB_MAKER_PEG_INTERVAL_SEC", "5") or 5)
+ARB_MAKER_REPEG_THRESHOLD_TICKS = int(os.getenv("ARB_MAKER_REPEG_THRESHOLD_TICKS", "5") or 5)
 # Backward-совместимость для UI (telegram_bot читает MAX_DRAWDOWN). Эта
 # величина в funding-арб-боте не используется как killswitch — оставлена
 # только чтобы UI не падал при отрисовке текста подсказки.
