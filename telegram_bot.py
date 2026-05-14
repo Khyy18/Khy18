@@ -4122,13 +4122,14 @@ _KEY_UI_NAMES: list[tuple[str, str, str]] = [
     ("OKX Real Key", "OKX_API_KEY_REAL", "🟥"),
     ("OKX Real Secret", "OKX_API_SECRET_REAL", "🟥"),
     ("OKX Real Passphrase", "OKX_PASSPHRASE_REAL", "🟥"),
-    # LLM-провайдеры (через LLMRouter)
+    # LLM-провайдеры (через LLMRouter). Только те, где free-tier
+    # реально работает на Май 2026: Groq / Cerebras / Gemini / OpenRouter.
+    # Together (free отменён, минимум $5) и HuggingFace Inference (квоты
+    # порезаны до неюзабельного уровня) — убраны.
     ("Groq API Key", "GROQ_API_KEY", "🤖"),
     ("Cerebras API Key", "CEREBRAS_API_KEY", "🤖"),
     ("Google AI Key (Gemini)", "GOOGLE_AI_KEY", "🤖"),
     ("OpenRouter API Key", "OPENROUTER_API_KEY", "🤖"),
-    ("HuggingFace API Key", "HF_API_KEY", "🤖"),
-    ("Together AI Key", "TOGETHER_API_KEY", "🤖"),
     # Новостные источники
     ("NewsAPI Key", "NEWS_API_KEY", "📰"),
     ("CryptoPanic API Key", "CRYPTOPANIC_API_KEY", "📰"),
@@ -4147,8 +4148,6 @@ _OPTIONAL_ENV_KEYS: frozenset[str] = frozenset({
     "CEREBRAS_API_KEY",
     "GOOGLE_AI_KEY",
     "OPENROUTER_API_KEY",
-    "HF_API_KEY",
-    "TOGETHER_API_KEY",
     "CRYPTOPANIC_API_KEY",
     "GLASSNODE_API_KEY",
     "OKX_API_KEY_REAL",
@@ -4160,7 +4159,7 @@ _OPTIONAL_ENV_KEYS: frozenset[str] = frozenset({
 def _validate_key_value(env_name: str, value: str) -> tuple[bool, str]:
     """Минимальная проверка длины. True если прошло.
 
-    Опциональные ключи (Cerebras / Google AI / OpenRouter / HF / Together /
+    Опциональные ключи (Cerebras / Google AI / OpenRouter /
     CryptoPanic / Glassnode / OKX Real *) - можно очищать пустой строкой,
     тогда соответствующий провайдер просто не используется.
     """
@@ -4179,7 +4178,7 @@ def _validate_key_value(env_name: str, value: str) -> tuple[bool, str]:
         if n < 6:
             return False, f"длина {n}, ожидается >= 6"
     elif env_name in ("GROQ_API_KEY", "CEREBRAS_API_KEY", "GOOGLE_AI_KEY",
-                      "OPENROUTER_API_KEY", "HF_API_KEY", "TOGETHER_API_KEY"):
+                      "OPENROUTER_API_KEY"):
         if n < 20:
             return False, f"длина {n}, ожидается >= 20"
     elif env_name in ("NEWS_API_KEY", "CRYPTOPANIC_API_KEY",
@@ -4214,8 +4213,8 @@ async def _handle_keys_menu(
         "    (~20 секунд)",
         _subhr_line(),
         "Опциональные ключи (Cerebras / Gemini /",
-        "OpenRouter / HF / Together / CryptoPanic /",
-        "Glassnode / OKX Real *) можно очистить",
+        "OpenRouter / CryptoPanic / Glassnode /",
+        "OKX Real *) можно очистить",
         "пустым сообщением - провайдер выключится.",
     ]
     text = _card("Ключи API", "🔑", body)
@@ -4388,20 +4387,20 @@ _AI_LAYERS: list[dict[str, str]] = [
      "model": "Llama-3.1-8B", "primary": "CEREBRAS_API_KEY",
      "fallback": "GROQ_API_KEY", "sched": "1 час", "kind": "llm"},
     {"name": "Macro-sentinel", "emoji": "🌐",
-     "model": "Gemini-2.0-Flash", "primary": "GOOGLE_AI_KEY",
+     "model": "Gemini-2.5-Flash", "primary": "GOOGLE_AI_KEY",
      "fallback": "GROQ_API_KEY", "sched": "1 час", "kind": "llm"},
     {"name": "Daily Critic", "emoji": "🔬",
      "model": "DeepSeek-V3", "primary": "OPENROUTER_API_KEY",
      "fallback": "GROQ_API_KEY", "sched": "раз в сутки", "kind": "llm"},
     {"name": "AI-Analyst", "emoji": "🤖",
      "model": "Llama-3.3-70B", "primary": "GROQ_API_KEY",
-     "fallback": "TOGETHER_API_KEY", "sched": "по тапу", "kind": "llm"},
+     "fallback": "GOOGLE_AI_KEY", "sched": "по тапу", "kind": "llm"},
     {"name": "Postmortem", "emoji": "📋",
      "model": "DeepSeek-R1", "primary": "OPENROUTER_API_KEY",
      "fallback": "GROQ_API_KEY", "sched": "раз в неделю", "kind": "llm"},
     {"name": "ML Explainer", "emoji": "💡",
      "model": "Qwen-72B", "primary": "GROQ_API_KEY",
-     "fallback": "HF_API_KEY", "sched": "по тапу", "kind": "llm"},
+     "fallback": "GOOGLE_AI_KEY", "sched": "по тапу", "kind": "llm"},
 ]
 
 
@@ -4418,14 +4417,17 @@ def _provider_status_dot(env_name: str) -> str:
 
 
 def _llm_provider_lines() -> list[str]:
-    """Список строк со статусом LLM-провайдеров для блока LLMRouter."""
+    """Список строк со статусом LLM-провайдеров для блока LLMRouter.
+
+    Только реально работающие на Май 2026 free-tier провайдеры:
+    Groq / Cerebras / Gemini / OpenRouter. Together (free отменён) и
+    HuggingFace Inference (квоты порезаны) убраны.
+    """
     providers = [
         ("Groq",       "GROQ_API_KEY",       "primary  "),
-        ("Cerebras",   "CEREBRAS_API_KEY",   "backup   "),
+        ("Cerebras",   "CEREBRAS_API_KEY",   "regime   "),
         ("Gemini",     "GOOGLE_AI_KEY",      "macro    "),
         ("OpenRouter", "OPENROUTER_API_KEY", "critic   "),
-        ("HF",         "HF_API_KEY",         "embed    "),
-        ("Together",   "TOGETHER_API_KEY",   "analyst  "),
     ]
     out: list[str] = []
     for label, env, role in providers:
@@ -4434,23 +4436,101 @@ def _llm_provider_lines() -> list[str]:
     return out
 
 
+# ── Хелпер: рендер одного блока квот в едином стиле для любого провайдера.
+def _quota_block_lines(snap: dict[str, Any], emoji: str) -> list[str]:
+    """Универсальный рендер блока квоты по снапшоту из ai_quotas.
+
+    Снапшот формат: {"provider": str, "updated_epoch": float,
+                     "rpd_limit"/"rpd_used"/"tpd_*"/"rpm_*",
+                     "rpd_reset"/"rpm_reset", "note"}.
+
+    На пустой снапшот (updated_epoch == 0.0) показывает понятный плейсхолдер
+    вместо нулевых баров — пользователь сразу видит что клиент ещё не
+    разогрет, а не что лимит израсходован.
+    """
+    name = snap.get("provider", "?")
+    out: list[str] = [f"{emoji} {name} API — квота:"]
+
+    if snap.get("updated_epoch", 0.0) == 0.0:
+        # Снапшот ещё не получен — но если знаем потолок (Gemini), покажем.
+        if snap.get("rpd_limit", 0) > 0:
+            out.append(
+                f"  Сегодня:    ▱▱▱▱▱▱▱▱▱▱  0 / "
+                f"{_fmt_num(snap['rpd_limit'], 0)}  (0.0%)"
+            )
+        if snap.get("rpm_limit", 0) > 0:
+            out.append(
+                f"  Минута:     ▱▱▱▱▱▱▱▱▱▱  0 / "
+                f"{_fmt_num(snap['rpm_limit'], 0)}  (0.0%)"
+            )
+        out.append("  Снапшот ещё не получен.")
+        if snap.get("note"):
+            out.append(f"  · {snap['note']}")
+        return out
+
+    # Снапшот заполнен.
+    age_sec = int(max(0, time.time() - snap["updated_epoch"]))
+    if age_sec < 60:
+        age_str = f"{age_sec}с назад"
+    elif age_sec < 3600:
+        age_str = f"{age_sec // 60}м назад"
+    else:
+        age_str = f"{age_sec // 3600}ч {(age_sec % 3600) // 60}м назад"
+
+    def _pct(used: int, lim: int) -> str:
+        if lim <= 0:
+            return "0.0%"
+        return f"{_fmt_num((used / lim) * 100.0, 1)}%"
+
+    if snap.get("rpd_limit", 0) > 0:
+        out.append("  Сегодня:")
+        out.append(
+            f"    Запросы {_progress_bar_10(snap['rpd_used'], snap['rpd_limit'])}  "
+            f"{_fmt_num(snap['rpd_used'], 0)} / {_fmt_num(snap['rpd_limit'], 0)}  "
+            f"({_pct(snap['rpd_used'], snap['rpd_limit'])})"
+        )
+    if snap.get("tpd_limit", 0) > 0:
+        out.append(
+            f"    Токены  {_progress_bar_10(snap['tpd_used'], snap['tpd_limit'])}  "
+            f"{_fmt_num(snap['tpd_used'], 0)} / {_fmt_num(snap['tpd_limit'], 0)}  "
+            f"({_pct(snap['tpd_used'], snap['tpd_limit'])})"
+        )
+    if snap.get("rpm_limit", 0) > 0:
+        out.append("  Текущая минута:")
+        out.append(
+            f"    Запросы {_progress_bar_10(snap['rpm_used'], snap['rpm_limit'])}  "
+            f"{_fmt_num(snap['rpm_used'], 0)} / {_fmt_num(snap['rpm_limit'], 0)}  "
+            f"({_pct(snap['rpm_used'], snap['rpm_limit'])})"
+        )
+
+    reset_lines: list[str] = []
+    if snap.get("rpd_reset"):
+        reset_lines.append(f"    Сутки   {snap['rpd_reset']}")
+    if snap.get("rpm_reset"):
+        reset_lines.append(f"    Минута  {snap['rpm_reset']}")
+    if reset_lines:
+        out.append("  Сброс через:")
+        out.extend(reset_lines)
+
+    out.append(f"  Снапшот {age_str}")
+    if snap.get("note"):
+        out.append(f"  · {snap['note']}")
+    return out
+
+
 async def _handle_ai_panel(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
-    """Единая ИИ-панель: квота Groq (как было) + полный статус ИИ-слоёв.
+    """Единая ИИ-панель: квоты 4 провайдеров + статус ИИ-слоёв.
 
-    Сохраняет весь функционал старой кнопки 🤖 GROQ:
-      - пассивный снапшот ai_groq.get_quota_snapshot() без сетевых вызовов
-      - прогресс-бары RPD/TPD/RPM
-      - тайминги сброса
-      - кнопка 🔄 Обновить (CB_AI_REFRESH, алиас CB_GROQ_REFRESH)
-
-    Дополнительно показывает:
-      - LLMRouter: статус 6 LLM-провайдеров (есть ли ключ)
-      - ИИ-слои Multi-Strategy: кто, что, как часто, на каком ключе
+    Структура карточки:
+      Блок 1-4: квоты Groq / Cerebras / OpenRouter / Gemini (ai_quotas.py)
+                — прогресс-бары RPD/TPD/RPM, тайминги сброса, note.
+      Блок 5:   LLMRouter — точечный статус 4 провайдеров (есть ли ключ)
+      Блок 6:   Локальные ИИ-слои (CPU, без сети)
+      Блок 7:   LLM-слои Multi-Strategy с primary→fallback индикаторами
     """
-    import ai_groq
-    snap = ai_groq.get_quota_snapshot()
+    import ai_quotas
 
     inline = {
         "inline_keyboard": [
@@ -4461,66 +4541,22 @@ async def _handle_ai_panel(
 
     body: list[str] = []
 
-    # ── Блок 1: квота Groq (как было в _handle_groq_quota) ──
-    body.append("🤖 Groq API — квота:")
-    if snap.get("updated_epoch", 0.0) == 0.0:
-        body.append("  Снапшот ещё не получен.")
-        body.append("  Дождитесь первого вызова Groq")
-        body.append("  (macro / regime / AI-Gate).")
-    else:
-        age_sec = int(max(0, time.time() - snap["updated_epoch"]))
-        if age_sec < 60:
-            age_str = f"{age_sec}с назад"
-        elif age_sec < 3600:
-            age_str = f"{age_sec // 60}м назад"
-        else:
-            age_str = f"{age_sec // 3600}ч {(age_sec % 3600) // 60}м назад"
+    # ── Блоки 1-4: квоты по каждому провайдеру ──
+    # Эмодзи в порядке: Groq / Cerebras / OpenRouter / Gemini
+    quota_emojis = ["🤖", "⚡", "🛤", "🌐"]
+    snapshots = ai_quotas.get_all_snapshots()
+    for idx, snap in enumerate(snapshots):
+        if idx > 0:
+            body.append(_subhr_line())
+        body.extend(_quota_block_lines(snap, quota_emojis[idx]))
 
-        rpd_used = max(0, snap["rpd_limit"] - snap["rpd_remaining"])
-        tpd_used = max(0, snap["tpd_limit"] - snap["tpd_remaining"])
-        rpm_used = max(0, snap["rpm_limit"] - snap["rpm_remaining"])
-
-        def _pct(used: int, lim: int) -> str:
-            if lim <= 0:
-                return f"{_fmt_num(0.0, 1)}%"
-            return f"{_fmt_num((used / lim) * 100.0, 1)}%"
-
-        body.append("  Сегодня:")
-        body.append(
-            f"    Запросы {_progress_bar_10(rpd_used, snap['rpd_limit'])}  "
-            f"{_fmt_num(rpd_used, 0)} / {_fmt_num(snap['rpd_limit'], 0)}  "
-            f"({_pct(rpd_used, snap['rpd_limit'])})"
-        )
-        body.append(
-            f"    Токены  {_progress_bar_10(tpd_used, snap['tpd_limit'])}  "
-            f"{_fmt_num(tpd_used, 0)} / {_fmt_num(snap['tpd_limit'], 0)}  "
-            f"({_pct(tpd_used, snap['tpd_limit'])})"
-        )
-        body.append("  Текущая минута:")
-        body.append(
-            f"    Запросы {_progress_bar_10(rpm_used, snap['rpm_limit'])}  "
-            f"{_fmt_num(rpm_used, 0)} / {_fmt_num(snap['rpm_limit'], 0)}  "
-            f"({_pct(rpm_used, snap['rpm_limit'])})"
-        )
-        reset_lines: list[str] = []
-        if snap.get("rpd_reset"):
-            reset_lines.append(f"    Запросы (сутки)  {snap['rpd_reset']}")
-        if snap.get("tpd_reset"):
-            reset_lines.append(f"    Токены (сутки)   {snap['tpd_reset']}")
-        if snap.get("rpm_reset"):
-            reset_lines.append(f"    Минутный лимит   {snap['rpm_reset']}")
-        if reset_lines:
-            body.append("  Сброс через:")
-            body.extend(reset_lines)
-        body.append(f"  Снапшот {age_str}")
-
-    # ── Блок 2: LLMRouter — статус провайдеров ──
+    # ── Блок 5: LLMRouter — статус провайдеров ──
     body.append(_subhr_line())
     body.append("🛰 LLMRouter — провайдеры:")
     body.extend(_llm_provider_lines())
     body.append("  · 🟢 ключ задан · ⚪ ключ пуст")
 
-    # ── Блок 3: ИИ-слои Multi-Strategy ──
+    # ── Блок 6: локальные ИИ-слои ──
     body.append(_subhr_line())
     body.append("Локальные слои (CPU, без сети):")
     for layer in _AI_LAYERS:
@@ -4531,6 +4567,7 @@ async def _handle_ai_panel(
             f"{layer['sched']}"
         )
 
+    # ── Блок 7: LLM-слои Multi-Strategy ──
     body.append(_subhr_line())
     body.append("LLM-слои (через LLMRouter):")
     for layer in _AI_LAYERS:
@@ -4538,19 +4575,10 @@ async def _handle_ai_panel(
             continue
         primary_dot = _provider_status_dot(layer["primary"]) or "⚪"
         fallback_dot = _provider_status_dot(layer["fallback"]) or "⚪"
-        # Имя слоя + модель
         body.append(
             f"  {layer['emoji']} {layer['name']:<18} "
             f"{primary_dot}→{fallback_dot}  {layer['sched']}"
         )
-
-    # ── Блок 4: ориентир потребления ──
-    body.append(_subhr_line())
-    body.append("Ориентир. потребление Groq:")
-    body.append("  · macro-sentinel: ~1/час")
-    body.append("  · ai_regime:      ~14/час")
-    body.append("  · ai_trade_gate:  0-5/час")
-    body.append("  Итого ≈ 360-480 в сутки")
 
     return _card("ИИ-слои", "🛰", body), inline
 

@@ -69,7 +69,11 @@ def _parse_int_safe(value: Any) -> int:
 
 
 def _update_quota_snapshot(headers: Any) -> None:
-    """Обновить _last_quota_snapshot из заголовков Groq-ответа.
+    """Обновить снапшоты квоты Groq из заголовков ответа.
+
+    Заполняет:
+      - локальный _last_quota_snapshot (legacy для обратной совместимости)
+      - центральный реестр ai_quotas (через update_groq_from_headers)
 
     Groq возвращает rate-limit заголовки (OpenAI-совместимый формат):
       x-ratelimit-limit-requests / x-ratelimit-remaining-requests      (суточный RPD)
@@ -106,6 +110,13 @@ def _update_quota_snapshot(headers: Any) -> None:
     _last_quota_snapshot["rpm_reset"] = str(
         headers.get("x-ratelimit-reset-requests-per-minute", "")
     )
+
+    # Зеркалим в централизованный реестр квот для UI Telegram-бота.
+    try:
+        import ai_quotas
+        ai_quotas.update_groq_from_headers(headers)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[GROQ] не удалось обновить ai_quotas: {exc}")
 
 
 def get_quota_snapshot() -> dict[str, Any]:

@@ -128,14 +128,16 @@ Offline (раз в день/неделю):
 
 | Слот | Primary | Fallback | Частота | Задача |
 |---|---|---|---|---|
-| `ai_gate` | Groq Llama-8B | Cerebras Llama-8B | при keyword hit | veto на red-flag |
-| `regime` | Cerebras Llama-8B | Groq Llama-8B | каждый час | TRENDING/RANGING/CRISIS |
-| `macro` | Google Gemini-2.0-Flash | Groq Llama-8B | каждый час | FOMC/CPI blackout |
-| `critic` | OpenRouter DeepSeek-V3 | Groq Llama-70B | раз в сутки (offline) | разбор сделок дня |
-| `analyst` | Groq Llama-3.3-70B | Together Llama-70B | по тапу в Telegram | разговор |
-| `postmortem` | OpenRouter DeepSeek-R1 | Groq Llama-70B | раз в неделю | weekly report |
-| `explainer` | Groq Qwen-72B | HF Qwen-72B | по тапу | пояснение решений |
-| `embeddings` | HF bge-small | локально MiniLM (если успеем) | по необходимости | для dedup и similarity |
+| `ai_gate` | Groq Llama-8B | Cerebras gpt-oss-120b | при keyword hit | veto на red-flag |
+| `regime` | Cerebras gpt-oss-120b | Groq Llama-8B | каждый час | TRENDING/RANGING/CRISIS |
+| `macro` | Google Gemini-2.5-Flash | Groq Llama-8B | каждый час | FOMC/CPI blackout |
+| `critic` | OpenRouter DeepSeek-V3 (free) | Groq Llama-70B | раз в сутки (offline) | разбор сделок дня |
+| `analyst` | Groq Llama-3.3-70B | Gemini-2.5-Flash | по тапу в Telegram | разговор |
+| `postmortem` | OpenRouter DeepSeek-R1 (free) | Groq Llama-70B | раз в неделю | weekly report |
+| `explainer` | Groq Qwen-72B | Gemini-2.5-Flash | по тапу | пояснение решений |
+| `embeddings` | локально `sentence-transformers` (BAAI/bge-small-en-v1.5) | — | по необходимости | для dedup и similarity |
+
+> **Ревизия Май 2026:** убраны Together AI (free tier полностью отменён, минимум $5 prepaid) и HuggingFace Inference (free квоты порезаны до неюзабельного уровня). Embeddings переведены на локальный `sentence-transformers` (CPU). Analyst и Explainer fallback'и переведены на Gemini (1500 RPD free).
 
 ### Группа C: что НЕ добавлять (даже бесплатно)
 
@@ -182,20 +184,21 @@ class LLMRouter:
 
     SLOT_ROUTING = {
         "ai_gate":    [("groq", "llama-3.1-8b-instant"),
-                       ("cerebras", "llama-3.1-8b")],
-        "regime":     [("cerebras", "llama-3.1-8b"),
+                       ("cerebras", "gpt-oss-120b")],
+        "regime":     [("cerebras", "gpt-oss-120b"),
                        ("groq", "llama-3.1-8b-instant")],
-        "macro":      [("google", "gemini-2.0-flash"),
+        "macro":      [("google", "gemini-2.5-flash"),
                        ("groq", "llama-3.1-8b-instant")],
-        "critic":     [("openrouter", "deepseek-v3"),
+        "critic":     [("openrouter", "deepseek/deepseek-chat-v3:free"),
                        ("groq", "llama-3.3-70b-versatile")],
         "analyst":    [("groq", "llama-3.3-70b-versatile"),
-                       ("together", "llama-3.3-70b")],
-        "postmortem": [("openrouter", "deepseek-r1"),
+                       ("google", "gemini-2.5-flash")],
+        "postmortem": [("openrouter", "deepseek/deepseek-r1:free"),
                        ("groq", "llama-3.3-70b-versatile")],
         "explainer":  [("groq", "qwen-2.5-72b-instruct"),
-                       ("hf", "Qwen/Qwen2.5-72B-Instruct")],
-        "embeddings": [("hf", "BAAI/bge-small-en-v1.5")],
+                       ("google", "gemini-2.5-flash")],
+        # Embeddings — локально sentence-transformers, без сети.
+        # "embeddings" слот не маршрутизируется через LLMRouter.
     }
 
     def call(self, slot: str, prompt: str, **kwargs) -> dict:
