@@ -19,7 +19,7 @@ from backtester.config import (
     HIGHER_TFS,
     PRIMARY_TF,
 )
-from backtester.data_loader import load_range
+from backtester.data_loader import load_funding_csv, load_range
 from backtester.engine import BacktestEngine
 from backtester.metrics import compute_metrics, dump_json, format_metrics_table
 from backtester.portfolio import Portfolio
@@ -117,6 +117,17 @@ def main(argv: List[str] | None = None) -> int:
 
     bt_config = BacktesterConfig(initial_equity=args.initial_equity)
     portfolio = Portfolio(args.initial_equity, bt_config)
+    # Подгружаем реальную funding-историю, если CSV есть в cache_dir.
+    # Без файла Portfolio.accrue_funding откатывается на консервативный
+    # |rate|*n_events режим - бэктест не падает, просто менее точен.
+    funding_history: dict = {}
+    for sym in symbols:
+        events = load_funding_csv(sym, args.cache_dir)
+        if events:
+            funding_history[sym] = events
+    if funding_history:
+        portfolio.set_funding_history(funding_history)
+        print(f"[RUN] Honest funding: загружена история для {list(funding_history)}")
     engine = BacktestEngine(
         portfolio=portfolio,
         strategy_module=strategy_mod,

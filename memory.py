@@ -507,3 +507,69 @@ def get_week_pnl() -> float:
 #   2) не создавать побочных эффектов при тестовом/утилитарном импорте.
 # Потребители (telegram_bot, backtester и т.п.) к БД обращаются уже после
 # старта main(), поэтому порядок инициализации сохраняется.
+
+
+
+# --- KV-store -----------------------------------------------------------
+
+# Простой ключ-значение store на SQLite. Используется для:
+#   - перерывного сохранения состояния circuit-breaker LLM-провайдеров,
+#     чтобы после рестарта бот не лез сразу в провайдер, который только
+#     что упал и сидит в OPEN;
+#   - хранения rolling-беты (BTC=1.0, ETH=...) которая пересчитывается
+#     раз в сутки и переживает рестарт.
+# Значения хранятся как JSON-строки. None при ошибке.
+
+def _ensure_kv_table() -> None:
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS kv_store (
+                    k TEXT PRIMARY KEY,
+                    v TEXT NOT NULL,
+                    updated_ts TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] kv_store: ошибка создания таблицы: {exc}")
+
+
+def kv_set(key: str, value: Any) -> None:
+    """Записать произвольное JSON-сериализуемое значение в kv_store."""
+    _ensure_kv_table()
+    try:
+        payload = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError) as exc:
+        print(f"[MEMORY] kv_set({key!r}): не сериализуется в JSON: {exc}")
+        return
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO kv_store (k, v, updated_ts) VALUES (?, ?, ?)
+                ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_ts=excluded.updated_ts
+                """,
+                (str(key), payload, _now_iso()),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[MEMORY] kv_set({key!r}): {exc}")
+
+
+def kv_get(key: str, default: Any = None) -> Any:
+    """Прочитать значение из kv_store. На любой ошибке возвращает default."""
+    _ensure_kv_table()
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT v FROM kv_store WHERE k = ?", (str(key),)
+            ).fetchone()
+            if not row:
+                return default
+            return json.loads(row["v"])
+    except (sqlite3.Error, json.JSONDecodeError) as exc:
+        print(f"[MEMORY] kv_get({key!r}): {exc}")
+        return default

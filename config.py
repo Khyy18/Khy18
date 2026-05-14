@@ -126,6 +126,12 @@ NET_BETA_CAP = 2.0
 # блокируются до ручного снятия.
 GRACEFUL_DEGRADATION_THRESHOLD = 5
 
+# Auto-recovery: если бот в degraded, раз в RECOVERY_PROBE_INTERVAL_SEC
+# пробуем дёрнуть EXCHANGE.get_server_time. На успехе - bot_running=True
+# и degraded=False, без ручного вмешательства. 5 минут - компромисс
+# между "быстро возобновить торговлю" и "не долбить упавшую биржу".
+RECOVERY_PROBE_INTERVAL_SEC = 5 * 60
+
 # PostOnly-лимитный вход: сколько ждать filла прежде чем свалиться в market IOC.
 POST_ONLY_TIMEOUT_SEC = 30
 

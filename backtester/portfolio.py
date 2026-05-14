@@ -112,13 +112,18 @@ class Portfolio:
         """Списать funding fee на всех открытых позициях, если прошёл интервал.
 
         Возвращает суммарный списанный funding (в USDT) за этот вызов.
-        В honest-режиме списываем абсолютное значение независимо от стороны:
-          fee_per_event = |qty * mark_price * funding_rate|
 
-        Это завышает косты для шортов в "long-favored" фазах и занижает в
-        "short-favored", но в среднем дёт консервативную оценку. Без funding
-        стратегии с длинным holding выглядят значительно прибыльнее, чем
-        они есть на самом деле.
+        Два режима:
+          - **Honest** (если установлен self.funding_history_by_symbol через
+            set_funding_history): применяем РЕАЛЬНУЮ ставку Bybit/OKX со
+            знаком: long платит при rate>0 и получает при rate<0, short
+            наоборот. Это точная симуляция без conservatism bias.
+          - **Conservative** (если истории нет): списываем абсолютное
+            значение rate=0.01%/8ч независимо от стороны. Завышает косты
+            для шортов в "long-favored" фазах и занижает в "short-favored",
+            но в среднем дёт консервативную оценку. Без funding стратегии
+            с длинным holding выглядят значительно прибыльнее, чем они
+            есть на самом деле.
         """
         if not getattr(self.config, "apply_funding", False):
             return 0.0
@@ -127,6 +132,9 @@ class Portfolio:
         if rate <= 0 or interval <= 0:
             return 0.0
         ts_int = int(ts)
+        # Если есть реальная история - используем её. set_funding_history
+        # вызывается из run.py CLI при загрузке funding_<SYMBOL>.csv.
+        history = getattr(self, "funding_history_by_symbol", None)
         total_fee = 0.0
         for sym, pos in self.positions.items():
             anchor = pos.last_funding_ts or pos.entry_ts
@@ -135,14 +143,42 @@ class Portfolio:
                 continue
             n_events = elapsed_ms // interval
             mark_price = float(marks.get(sym, pos.entry_price))
-            fee = abs(pos.qty * mark_price) * rate * n_events
-            self.cash -= fee
-            self.funding_fees_total += fee
-            total_fee += fee
+            if history and sym in history and history[sym]:
+                # Honest: применяем реальные rate'ы со знаком.
+                # Берём все funding-events внутри окна (anchor, ts].
+                fee = 0.0
+                events = history[sym]
+                # Двоичный поиск по ts можно, но n_events обычно <= 3 -
+                # линейно достаточно быстро.
+                for ev_ts, ev_rate in events:
+                    if int(anchor) < ev_ts <= ts_int:
+                        # long(side='Buy') платит при ev_rate>0 (теряет деньги),
+                        # short получает -> для short знак инвертируется.
+                        sign = 1.0 if pos.side == "Buy" else -1.0
+                        fee += pos.qty * mark_price * float(ev_rate) * sign
+                self.cash -= fee
+                # Может быть отрицательным (short с long-funding -> получаем).
+                self.funding_fees_total += fee
+                total_fee += fee
+            else:
+                # Conservative: |rate| в обе стороны.
+                fee = abs(pos.qty * mark_price) * rate * n_events
+                self.cash -= fee
+                self.funding_fees_total += fee
+                total_fee += fee
             # Сдвигаем якорь точно на n_events интервалов, чтобы не копить
             # дрейф из-за того что бары приходят не ровно в funding-моменты.
             pos.last_funding_ts = int(anchor) + n_events * interval
         return total_fee
+
+    def set_funding_history(self, history: Dict[str, list]) -> None:
+        """Прокинуть реальную funding-историю (symbol -> list[(ts_ms, rate)]).
+
+        Если установлено - accrue_funding переключается в honest-режим:
+        применяет реальные ставки со знаком. Если не установлено -
+        используется conservative |rate|*n_events.
+        """
+        self.funding_history_by_symbol = dict(history or {})
 
     def close_position(
         self,

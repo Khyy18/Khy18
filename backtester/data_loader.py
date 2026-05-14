@@ -174,3 +174,48 @@ def load_range(
     filtered = [c for c in collected if ts_from <= c["ts"] < ts_to_exclusive]
     filtered.sort(key=lambda c: c["ts"])
     return filtered
+
+
+
+def load_funding_csv(symbol: str, cache_dir: str) -> list[tuple[int, float]]:
+    """Загрузить реальную историю funding-rates из CSV (если есть).
+
+    Формат CSV (любой источник - Binance, Bybit Public Data, скрипт):
+        ts_ms,rate
+        1704067200000,0.0001
+        1704096000000,-0.00005
+        ...
+
+    Файл ожидается в `<cache_dir>/funding_<SYMBOL>.csv`.
+    Если файла нет - возвращаем пустой список и бэктест откатывается к
+    "консервативному" режиму (absolute funding 0.01%/8ч в обе стороны,
+    apply_funding=True в config). Если файл есть - engine применяет
+    реальный rate со знаком (long платит при положительном, получает
+    при отрицательном; для short - наоборот).
+
+    Возвращает отсортированный по ts список (ts_ms, rate). Дубликаты
+    оставляем как есть - на бирже funding-event иногда фиксируется в той
+    же миллисекунде, что и предыдущий retry.
+    """
+    path = os.path.join(cache_dir, f"funding_{symbol}.csv")
+    if not os.path.exists(path):
+        return []
+    out: list[tuple[int, float]] = []
+    try:
+        with open(path, "r", newline="") as fh:
+            reader = csv.reader(fh)
+            for row in reader:
+                if not row or row[0].lower().startswith(("ts", "time", "#")):
+                    continue
+                try:
+                    ts_ms = int(row[0])
+                    rate = float(row[1])
+                except (IndexError, ValueError):
+                    continue
+                out.append((ts_ms, rate))
+    except OSError as exc:
+        print(f"[DATA] Не удалось открыть funding CSV {path}: {exc}")
+        return []
+    out.sort(key=lambda x: x[0])
+    print(f"[DATA] Funding history {symbol}: {len(out)} событий из {path}")
+    return out

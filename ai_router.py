@@ -12,6 +12,9 @@ Circuit-breaker:
     переводится в HALF_OPEN: один пробный запрос, при успехе - CLOSED.
   - HTTP 429 (rate limit) НЕ считается ошибкой провайдера: переходим к
     следующему провайдеру в цепочке без увеличения счётчика.
+  - Состояние breaker'ов персистится в memory.kv_store, чтобы после
+    рестарта мы не лезли сразу в недавно упавший провайдер. Запись идёт
+    при каждой ошибке/восстановлении, чтение - при первом get_router().
 
 Публичный API:
   call_llm_json(session, prompt, **kwargs)  -> Optional[dict]
@@ -36,6 +39,9 @@ import config
 
 CIRCUIT_BREAKER_THRESHOLD = 3      # подряд ошибок -> open
 CIRCUIT_BREAKER_RESET_SEC = 120    # через сколько секунд пробуем half-open
+
+# Ключ в memory.kv_store, под которым хранится состояние всех провайдеров.
+_KV_KEY = "ai_router_breakers_v1"
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 _BARE_JSON_RE = re.compile(r"(\{[\s\S]*\})")
@@ -107,6 +113,7 @@ class _Provider:
             print(f"[ROUTER] {self.name}: восстановлен, breaker -> CLOSED")
         self._consecutive_errors = 0
         self._opened_at_epoch = 0.0
+        _persist_state()
 
     def _record_error(self) -> None:
         self._consecutive_errors += 1
@@ -116,6 +123,7 @@ class _Provider:
                 f"[ROUTER] {self.name}: {self._consecutive_errors} ошибок подряд, "
                 f"breaker -> OPEN на {CIRCUIT_BREAKER_RESET_SEC}с"
             )
+        _persist_state()
 
     async def call(
         self,
@@ -425,10 +433,77 @@ class LLMRouter:
 _ROUTER: Optional[LLMRouter] = None
 
 
+def _persist_state() -> None:
+    """Сохранить snapshot всех breaker'ов в memory.kv_store.
+
+    Хранится время выхода из OPEN (когда мы можем попробовать снова),
+    а не «возраст» — иначе при долгом downtime после рестарта мы бы
+    всё равно сразу провели probe, потеряв смысл сохранения. После
+    рестарта load_state читает remaining time и восстанавливает счётчик
+    ошибок только если ещё не пора probe-вызову.
+    """
+    if _ROUTER is None:
+        return
+    try:
+        import memory  # ленивый импорт, чтобы избежать цикла
+
+        snapshot = {}
+        for p in _ROUTER.providers:
+            snapshot[p.name] = {
+                "errors": p._consecutive_errors,
+                # абсолютное epoch-время, когда breaker сможет перейти в HALF_OPEN
+                "open_until_epoch": (
+                    p._opened_at_epoch + CIRCUIT_BREAKER_RESET_SEC
+                    if p._opened_at_epoch > 0
+                    else 0.0
+                ),
+            }
+        memory.kv_set(_KV_KEY, snapshot)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ROUTER] persist: {exc}")
+
+
+def _load_state(router: "LLMRouter") -> None:
+    """Восстановить breaker'ы из memory.kv_store.
+
+    Если open_until_epoch уже в прошлом — обнуляем счётчик, иначе
+    выставляем _opened_at_epoch так, чтобы оставшееся время совпало
+    с тем что было до рестарта.
+    """
+    try:
+        import memory  # ленивый импорт
+
+        snap = memory.kv_get(_KV_KEY, default={}) or {}
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ROUTER] load_state: {exc}")
+        return
+    now = time.time()
+    for p in router.providers:
+        info = snap.get(p.name)
+        if not isinstance(info, dict):
+            continue
+        open_until = float(info.get("open_until_epoch") or 0.0)
+        errors = int(info.get("errors") or 0)
+        if open_until > now and errors >= CIRCUIT_BREAKER_THRESHOLD:
+            # Breaker всё ещё OPEN. Восстанавливаем _opened_at_epoch так,
+            # чтобы state property вернул "OPEN" пока не истечёт таймер.
+            p._consecutive_errors = errors
+            p._opened_at_epoch = open_until - CIRCUIT_BREAKER_RESET_SEC
+            print(
+                f"[ROUTER] {p.name}: восстановлен OPEN после рестарта, "
+                f"осталось {open_until - now:.0f}с"
+            )
+        else:
+            # Старое OPEN уже истекло либо счётчик не критичный — старт с CLOSED.
+            p._consecutive_errors = 0
+            p._opened_at_epoch = 0.0
+
+
 def get_router() -> LLMRouter:
     global _ROUTER
     if _ROUTER is None:
         _ROUTER = LLMRouter()
+        _load_state(_ROUTER)
     return _ROUTER
 
 

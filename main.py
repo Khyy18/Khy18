@@ -34,6 +34,7 @@ import ai_macro_sentinel
 import ai_postmortem
 import ai_regime
 import api_engine  # noqa: F401  # legacy shim, поддерживается для совместимости
+import beta_estimator
 import config
 import memory
 import news_engine
@@ -378,6 +379,40 @@ async def _regime_tick(
             f"conf={result.get('confidence')} reason={result.get('reason')}"
         )
 
+    # Сохраняем дневные closes этого символа в state для пересчёта rolling-беты.
+    # Беты пересчитываем отдельной функцией _maybe_recompute_betas раз в
+    # сутки, не на каждом regime_tick. Здесь только обновляем "сырьё".
+    sym_state["last_daily_closes"] = closes_d
+
+
+async def _maybe_recompute_betas(state: dict[str, Any]) -> None:
+    """Раз в сутки пересчитываем rolling-беты по последним дневным закрытиям.
+
+    Берём state["symbols"][sym]["last_daily_closes"] - там лежит то, что
+    последний _regime_tick загрузил из биржи (срок жизни AI_REGIME_TTL_SEC,
+    т.е. 1 час). Если у какого-то символа их ещё нет (regime_tick не
+    запускался) - используем дефолтные беты для этого символа.
+    """
+    if not beta_estimator.is_stale():
+        return
+    daily_closes_by_symbol: dict[str, list[float]] = {}
+    for sym, sym_st in state["symbols"].items():
+        closes = sym_st.get("last_daily_closes") or []
+        if closes and len(closes) >= beta_estimator.MIN_BARS_FOR_BETA:
+            daily_closes_by_symbol[sym] = [float(c) for c in closes]
+    if not daily_closes_by_symbol or "BTCUSDT" not in daily_closes_by_symbol:
+        # Без BTC как референса считать нечего. Подождём следующего regime_tick.
+        return
+    try:
+        betas = beta_estimator.compute_betas(daily_closes_by_symbol)
+        beta_estimator.save_cached(betas)
+        print(
+            "[BETA] Пересчёт rolling-беты: "
+            + ", ".join(f"{s}={v:.2f}" for s, v in betas.items())
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[BETA] Ошибка пересчёта: {exc}")
+
 
 # --- Reconcile / Net beta / Daily PnL push / Graceful degradation --------
 
@@ -453,6 +488,23 @@ async def _reconcile_open_positions(
             "current_stop": stop or entry,
             "reconciled": True,
         }
+        # Создаём запись в memory с outcome='OPEN', чтобы при последующем
+        # закрытии _check_closed_exchange_position смог обновить её через
+        # update_trade_outcome. Без этого reconciled-сделка не попадает в
+        # итоговую статистику — get_stats игнорирует OPEN.
+        try:
+            trade_id = memory.record_trade(
+                symbol=symbol,
+                side=("LONG" if side == "Buy" else "SHORT"),
+                entry=entry,
+                qty=size,
+                atr_val=0.0,
+                ai_reason="reconciled-after-restart",
+                outcome="OPEN",
+            )
+            sym_state["open_trade"]["id"] = trade_id
+        except Exception as exc:  # noqa: BLE001
+            print(f"[RECONCILE] {symbol}: не удалось записать в memory: {exc}")
         restored += 1
         print(
             f"[RECONCILE] {symbol}: восстановлена позиция side={side} "
@@ -467,13 +519,25 @@ async def _reconcile_open_positions(
 
 # Веса волатильности (бета относительно BTC) - используются как
 # приближённое "сколько долларов риска эквивалентно одному доллару BTC".
-# Реальная бета по 30-дневным дневным доходностям колеблется, но эти
-# значения - консервативная средне-долгосрочная оценка для крипты.
-_BETA_TO_BTC: dict[str, float] = {
-    "BTCUSDT": 1.0,
-    "ETHUSDT": 1.2,
-    "SOLUSDT": 1.6,
-}
+# Это всего лишь дефолты и fallback на случай, когда rolling-беты ещё
+# не насчитаны (первый запуск или нет дневных данных). Реальные
+# актуальные значения тянутся из beta_estimator.load_cached() при
+# каждой проверке correlation guard - они пересчитываются раз в сутки
+# в _regime_tick после получения дневных свечей по всем символам.
+_BETA_TO_BTC: dict[str, float] = dict(beta_estimator.DEFAULT_BETAS)
+
+
+def _get_betas() -> dict[str, float]:
+    """Текущие беты для correlation guard.
+
+    Сначала пробуем тёплый кэш в memory.kv_store; если он пустой или
+    проигрался импорт - возвращаем _BETA_TO_BTC. Этот хелпер вызывается
+    в hot-path _process_symbol на каждом сигнале - там всё локально.
+    """
+    try:
+        return beta_estimator.load_cached()
+    except Exception:  # noqa: BLE001
+        return dict(_BETA_TO_BTC)
 
 
 def _net_beta_exposure(state: dict[str, Any]) -> float:
@@ -492,6 +556,7 @@ def _net_beta_exposure(state: dict[str, Any]) -> float:
     equity_start = float(state["global"].get("equity_start") or 0.0)
     if equity_start <= 0:
         return 0.0
+    betas = _get_betas()
     total = 0.0
     for symbol, sym_state in state["symbols"].items():
         trade = sym_state.get("open_trade")
@@ -500,7 +565,7 @@ def _net_beta_exposure(state: dict[str, Any]) -> float:
         side = str(trade.get("side") or "")
         qty = float(trade.get("qty") or 0.0)
         entry = float(trade.get("entry_price") or 0.0)
-        beta = float(_BETA_TO_BTC.get(symbol, 1.0))
+        beta = float(betas.get(symbol, 1.0))
         sign = 1.0 if side == "Buy" else -1.0 if side == "Sell" else 0.0
         if qty <= 0 or entry <= 0 or sign == 0.0:
             continue
@@ -562,6 +627,13 @@ async def _daily_pnl_tick(
 
     arrow = "▲" if daily_pnl > 0 else "▼" if daily_pnl < 0 else "•"
     pct = (daily_pnl / equity_start * 100) if equity_start > 0 else 0.0
+    if trades_today > 0:
+        winrate = (wins / trades_today * 100) if trades_today else 0.0
+        trades_line = f"Сделок за день: {trades_today} (winrate {winrate:.0f}%)"
+    else:
+        # Не показываем "0% winrate" - это шум. Может ввести в заблуждение
+        # ("стратегия проигрывает 100% времени"), хотя сделок просто не было.
+        trades_line = "Сделок за день: нет"
     text = (
         "🌅 <b>Итоги дня</b>\n"
         f"Дата (UTC): {(now - timedelta(days=1)).strftime('%Y-%m-%d')}\n"
@@ -569,7 +641,7 @@ async def _daily_pnl_tick(
         f"Недельный PnL: {weekly_pnl:+.4f} USDT\n"
         f"Кумулятивный PnL: {cumulative_pnl:+.4f} USDT\n"
         f"Эквити (proxy): {proxy_equity:.2f} USDT\n"
-        f"Сделок за день: {trades_today} (winrate {(wins / trades_today * 100) if trades_today else 0:.0f}%)"
+        f"{trades_line}"
     )
 
     try:
@@ -581,6 +653,61 @@ async def _daily_pnl_tick(
         print(f"[DAILY] Ошибка отправки сводки: {exc}")
 
     g["last_daily_push_date"] = today_str
+
+
+async def _try_recover_from_degradation(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+) -> None:
+    """Если бот в graceful-degradation, периодически пробуем health-check.
+
+    Логика: раз в `RECOVERY_PROBE_INTERVAL_SEC` дёргаем
+    EXCHANGE.get_server_time как самый дешёвый авторизованный вызов. Если
+    он вернул не-None - биржа отвечает, восстанавливаем bot_running=True
+    и сбрасываем degraded. Если по-прежнему не отвечает - оставляем в
+    паузе.
+
+    Без этой функции пользователю надо вручную нажимать ▶️ после каждого
+    транзиентного сбоя (в облаке такие сбои случаются регулярно).
+    """
+    g = state["global"]
+    if not g.get("degraded"):
+        return
+    interval = float(
+        getattr(config, "RECOVERY_PROBE_INTERVAL_SEC", 5 * 60)
+    )
+    last_epoch = float(g.get("last_recovery_probe_epoch") or 0.0)
+    if (time.time() - last_epoch) < interval:
+        return
+    g["last_recovery_probe_epoch"] = time.time()
+
+    try:
+        server_time = await EXCHANGE.get_server_time(session)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[RECOVERY] probe не прошёл: {exc}")
+        return
+    if server_time is None:
+        # Биржа всё ещё не отвечает - остаёмся в паузе.
+        return
+
+    # Биржа жива - снимаем паузу.
+    print("[RECOVERY] Биржа отвечает, снимаем degraded и возобновляем торговлю")
+    g["bot_running"] = True
+    g["degraded"] = False
+    last_reason = str(g.get("degraded_reason") or "")
+    g["degraded_reason"] = ""
+    try:
+        await telegram_bot.send_message(
+            session,
+            (
+                "✅ <b>Auto-recovery</b>\n"
+                "Биржа снова отвечает, торговля возобновлена автоматически.\n"
+                f"Причина паузы: <code>{last_reason[:200]}</code>"
+            ),
+            reply_markup=telegram_bot.set_keyboard(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[RECOVERY] не удалось отправить уведомление: {exc}")
 
 
 async def _heartbeat_tick(
@@ -1064,8 +1191,9 @@ async def _process_symbol(
     # "три одинаково настроенные long на BTC/ETH/SOL по 1% риска" - они
     # коррелированы, в кризис идут в одну сторону и фактический риск >> 3%.
     beta_cap = float(getattr(config, "NET_BETA_CAP", 2.0))
+    betas = _get_betas()
     side_sign = 1.0 if str(order["side"]) == "Buy" else -1.0
-    proposed_beta = float(_BETA_TO_BTC.get(symbol, 1.0))
+    proposed_beta = float(betas.get(symbol, 1.0))
     proposed_notional = (
         float(order["limit_price"]) * float(order["qty"]) * proposed_beta * side_sign
     )
@@ -1078,7 +1206,7 @@ async def _process_symbol(
         sd = str(tr.get("side") or "")
         qty_t = float(tr.get("qty") or 0.0)
         ent = float(tr.get("entry_price") or 0.0)
-        b = float(_BETA_TO_BTC.get(s, 1.0))
+        b = float(betas.get(s, 1.0))
         sg = 1.0 if sd == "Buy" else -1.0 if sd == "Sell" else 0.0
         if qty_t > 0 and ent > 0 and sg != 0.0:
             current_signed += sg * qty_t * ent * b
@@ -1229,7 +1357,9 @@ async def trading_loop(
                 except Exception as exc:  # noqa: BLE001
                     print(f"[LOOP] {symbol}: ошибка тика: {exc}")
 
+            await _maybe_recompute_betas(state)
             await _apply_kill_switches(session, state, now)
+            await _try_recover_from_degradation(session, state)
             await _heartbeat_tick(session, state, now)
             await _weekly_postmortem_tick(session, state, now)
 
@@ -1319,6 +1449,7 @@ def _build_state() -> dict[str, Any]:
             "last_daily_push_date": None,
             "degraded": False,
             "degraded_reason": "",
+            "last_recovery_probe_epoch": 0.0,
             "rejection_ring": collections.deque(maxlen=50),
         },
         "instruments": {},
