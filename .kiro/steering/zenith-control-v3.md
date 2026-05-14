@@ -32,7 +32,7 @@
 - AI-Gate перестаёт быть единственным фильтром — он один из слоёв ансамбля. Главный ИИ — LightGBM Meta-Learner.
 - Вызов AI-Gate происходит **только при срабатывании keyword pre-filter** (red-flag слова в новостях) или при запросе от Macro-sentinel.
 - При success — verdict кешируется в SQLite на 15 минут (ключ = hash от свежих заголовков + macro state).
-- При 5xx/timeout/quota от primary-провайдера → автопереключение через `LLMRouter` на backup-провайдер (Cerebras → OpenRouter → HF). См. handoff раздел "LLM Budget & Multi-Provider Routing".
+- При 5xx/timeout/quota от primary-провайдера → автопереключение через `LLMRouter` на backup-провайдер (Cerebras → OpenRouter → Gemini). См. handoff раздел "LLM Budget & Multi-Provider Routing".
 - Если **все** провайдеры недоступны 3+ раза подряд → fallback в shadow на 1 час, новые сделки проходят без news-проверки. Это безопасно: Meta-Learner и Risk Manager продолжают работать.
 - Push при degradation (раз в час, не на каждый вызов).
 
@@ -77,13 +77,13 @@
 
 ## LLM-провайдеры и API-ключи (Multi-Strategy)
 
-- Один Groq-ключ — единая точка отказа. Production-конфиг использует **5 LLM-провайдеров** через `LLMRouter`:
+- Один Groq-ключ — единая точка отказа. Production-конфиг использует **4 LLM-провайдера** через `LLMRouter` (раскладка обновлена в Май 2026 после ревизии free-tier; HF и Together убраны как нерабочие):
   - **Groq** (primary): AI-Gate, Analyst, ML Explainer.
   - **Cerebras** (drop-in замена Groq): Regime classifier primary, AI-Gate backup.
-  - **Google AI Studio** (Gemini-2.0-Flash): Macro-sentinel (long-context для FOMC).
-  - **OpenRouter** (DeepSeek-V3, Nemotron): Daily Offline Critic, Postmortem.
-  - **Hugging Face Inference**: embeddings (news dedup), backup для Explainer.
+  - **Google AI Studio** (Gemini-2.5-Flash, 1500 RPD): Macro-sentinel (long-context для FOMC), fallback для Analyst и Explainer.
+  - **OpenRouter** (DeepSeek-V3, DeepSeek-R1; 50 free / 1000 paid RPD): Daily Offline Critic, Postmortem.
 - Все ключи опциональны и бесплатны (free tier). Без них — fallback на Groq, при его падении система деградирует к equal-weights.
+- Embeddings (news dedup, similarity) — **локально через `sentence-transformers`** (модель `BAAI/bge-small-en-v1.5`, ~120MB), без сети и без HF-ключа.
 - Канонический термин: **Meta-Learner** (LightGBM-модель) и **Ensemble Coordinator** (правила + Meta-Learner вместе). Использовать ТОЛЬКО эти два термина в коде, тегах логов (`[META]`, `[ENSEMBLE]`), UI и документации. Никаких "Meta-filter", "meta-обучаемый ИИ-фильтр" и т.п.
 - Канонические теги логов: `[META]` (Meta-Learner), `[ENSEMBLE]` (Coordinator), `[STRAT_TF/MR/VB/XAM/FA]` (sub-стратегии), `[GATE]`, `[ANOMALY]`, `[REGIME]`, `[MACRO]`, `[CRITIC]`, `[ROUTER]`.
 
