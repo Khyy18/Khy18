@@ -38,6 +38,7 @@ import arb_storage
 import arbitrage_engine
 import config
 import dashboard
+import funding_history
 import key_manager
 import memory
 import telegram_bot
@@ -208,8 +209,21 @@ async def _apply_arb_kill_switches(
         g["kill_detail"] = ""
         ks_before = "NONE"
 
-    daily_loss_limit = float(getattr(config, "ARB_DAILY_LOSS_USDT", 0) or 0)
-    weekly_loss_limit = float(getattr(config, "ARB_WEEKLY_LOSS_USDT", 0) or 0)
+    daily_loss_usdt = float(getattr(config, "ARB_DAILY_LOSS_USDT", 0) or 0)
+    weekly_loss_usdt = float(getattr(config, "ARB_WEEKLY_LOSS_USDT", 0) or 0)
+    daily_loss_pct = float(getattr(config, "ARB_DAILY_LOSS_PCT", 0) or 0)
+    weekly_loss_pct = float(getattr(config, "ARB_WEEKLY_LOSS_PCT", 0) or 0)
+
+    # Эффективный лимит = max(USDT, equity*pct). Так бот корректно
+    # масштабируется при росте/падении капитала.
+    equity_proxy = float(g.get("equity_start") or 0.0)
+    if equity_proxy <= 0:
+        # Стартовый баланс ещё не получен — fallback на USDT-only.
+        daily_loss_limit = daily_loss_usdt
+        weekly_loss_limit = weekly_loss_usdt
+    else:
+        daily_loss_limit = max(daily_loss_usdt, equity_proxy * daily_loss_pct)
+        weekly_loss_limit = max(weekly_loss_usdt, equity_proxy * weekly_loss_pct)
 
     daily_pnl = float(g.get("arb_daily_pnl", 0.0) or 0.0)
     weekly_pnl = float(g.get("arb_weekly_pnl", 0.0) or 0.0)
@@ -276,6 +290,14 @@ async def _funding_scan_tick(
 
     g["funding_snapshot"] = snapshots
     g["last_funding_scan_epoch"] = time.time()
+
+    # Записываем срез в funding_history для anti-spike фильтра.
+    try:
+        n = funding_history.record_snapshots(snapshots)
+        if n > 0:
+            print(f"[FUND-HIST] Записано {n} snapshots")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[FUND-HIST] record fail: {exc}")
 
     # Алерты по высокому |net_apr|.
     alert_threshold = float(getattr(config, "FUNDING_ALERT_APR", 0.30))
@@ -407,6 +429,93 @@ async def _arb_executor_tick(
             break
 
 
+# --- Tick: anomaly detection ------------------------------------------
+
+async def _anomaly_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Раз в 10 минут проверяем подозрительные паттерны и шлём warn в Telegram.
+
+    Срабатывает если:
+      - executor включён, но >24ч не было ни одного открытия;
+      - circuit breaker какой-то биржи сидит в OPEN > 30 минут;
+      - всех бирж в скане 0 (катастрофа).
+
+    Анти-спам: каждый тип алерта посылается не чаще раз в 4 часа.
+    """
+    g = state["global"]
+    last_check = float(g.get("last_anomaly_check_epoch") or 0.0)
+    interval = 600.0  # 10 минут
+    if (time.time() - last_check) < interval:
+        return
+    g["last_anomaly_check_epoch"] = time.time()
+
+    seen: dict[str, float] = g.get("anomaly_alert_seen") or {}
+    cooldown = 4 * 3600.0
+
+    def _send_once(key: str) -> bool:
+        last = float(seen.get(key) or 0.0)
+        if (time.time() - last) < cooldown:
+            return False
+        seen[key] = time.time()
+        return True
+
+    # 1. Executor on, но 24ч без открытий.
+    if getattr(config, "ARB_EXECUTOR_ENABLED", False):
+        try:
+            recent = arb_storage.get_recent_closed(limit=50) or []
+            active = arb_storage.get_all_active() or []
+            last_open_ts = 0.0
+            for r in recent + active:
+                ts_str = r.get("opened_ts") or ""
+                if ts_str:
+                    try:
+                        ts = datetime.fromisoformat(str(ts_str))
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
+                        last_open_ts = max(last_open_ts, ts.timestamp())
+                    except Exception:  # noqa: BLE001
+                        pass
+            if last_open_ts > 0:
+                age_h = (time.time() - last_open_ts) / 3600.0
+                if age_h > 24.0 and _send_once("no_opens_24h"):
+                    await _notify(session, (
+                        "⚠️ <b>Аномалия:</b> executor включён, "
+                        f"но {age_h:.0f}ч без открытий.\n"
+                        "Пороги ARB_OPEN_MIN_NET_APR слишком высокие или рынок без edge."
+                    ))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ANOMALY] no-opens check fail: {exc}")
+
+    # 2. Circuit breaker долго в OPEN.
+    try:
+        import circuit_breaker as cb_mod
+        snap = cb_mod.get_breaker().status_snapshot()
+        for ex_name, st in snap.items():
+            if st.get("state") == "OPEN":
+                remaining = int(st.get("cooldown_remaining_sec") or 0)
+                if _send_once(f"breaker_open_{ex_name}"):
+                    await _notify(session, (
+                        f"⚠️ <b>Биржа {ex_name} недоступна</b>\n"
+                        f"Circuit breaker OPEN, cooldown ~{remaining // 60}мин.\n"
+                        f"Last error: <code>{st.get('last_failure_msg', '')[:100]}</code>"
+                    ))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ANOMALY] breaker check fail: {exc}")
+
+    # 3. Все адаптеры пусты.
+    active = _get_active_adapters(state)
+    if not active and _send_once("no_adapters"):
+        await _notify(session, (
+            "🚨 <b>Критично:</b> ни одной биржи в скане. "
+            "Проверьте FUNDING_SCAN_EXCHANGES и disabled_exchanges."
+        ))
+
+    g["anomaly_alert_seen"] = seen
+
+
 # --- Tick: heartbeat --------------------------------------------------
 
 async def _heartbeat_tick(
@@ -469,6 +578,7 @@ async def trading_loop(
 
             await _funding_scan_tick(session, state, now)
             await _arb_executor_tick(session, state, now)
+            await _anomaly_tick(session, state, now)
             await _heartbeat_tick(session, state, now)
         except Exception as exc:  # noqa: BLE001
             print(f"[LOOP] Верхнеуровневая ошибка: {exc}")
@@ -529,6 +639,7 @@ async def main() -> None:
 
     memory.init_db()
     arb_storage.init_arb_db()
+    funding_history.init_db()
     state = _build_state()
 
     async with aiohttp.ClientSession() as session:

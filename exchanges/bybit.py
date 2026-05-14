@@ -172,3 +172,16 @@ class BybitAdapter(ExchangeAdapter):
             "mark_price": mark,
             "interval_hours": 8.0,
         }
+
+
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты по символу с Bybit (delegate в api_engine)."""
+        return await api_engine.get_funding_history(
+            session, symbol, since_ms=since_ms, limit=limit,
+        )

@@ -54,7 +54,49 @@ def _symbols_state() -> dict[str, Any]:
 
 
 async def handle_health(request: web.Request) -> web.Response:
-    return web.json_response({"status": "ok", "ts": _utc_now_iso()})
+    """Health endpoint для UptimeRobot/BetterStack.
+
+    Возвращает 200 если бот живой и недавно сканировал funding (последний
+    скан < 3 интервалов). Возвращает 503 если:
+      - state не подключён (бот не запустился)
+      - kill_switch активен
+      - последний funding-скан был > 3 * FUNDING_SCAN_INTERVAL_SEC назад
+        (значит trading_loop стоит)
+    """
+    import time
+    g = _g()
+    now_iso = _utc_now_iso()
+    issues: list[str] = []
+
+    if _state_ref is None:
+        return web.json_response(
+            {"status": "starting", "ts": now_iso}, status=503
+        )
+
+    last_scan = float(g.get("last_funding_scan_epoch") or 0.0)
+    if last_scan > 0:
+        try:
+            import config
+            interval = float(getattr(config, "FUNDING_SCAN_INTERVAL_SEC", 300))
+        except Exception:
+            interval = 300.0
+        age = time.time() - last_scan
+        if age > 3 * interval:
+            issues.append(f"funding_scan_stale age={int(age)}s")
+
+    if g.get("degraded"):
+        issues.append(f"degraded:{g.get('degraded_reason', '')[:50]}")
+
+    ks = str(g.get("kill_switch_state") or "NONE")
+    payload = {
+        "status": "ok" if not issues else "degraded",
+        "kill_switch": ks,
+        "issues": issues,
+        "ts": now_iso,
+    }
+    if last_scan > 0:
+        payload["last_scan_age_sec"] = int(time.time() - last_scan)
+    return web.json_response(payload, status=200 if not issues else 503)
 
 
 async def handle_status(request: web.Request) -> web.Response:

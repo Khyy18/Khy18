@@ -383,6 +383,47 @@ async def get_closed_pnl(
     return items
 
 
+async def get_funding_history(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    since_ms: Optional[int] = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Реальные funding-выплаты по символу с Bybit.
+
+    GET /v5/account/transaction-log?type=SETTLEMENT
+    Возвращает список словарей с полями: symbol, ts (ms), funding (USDT).
+    """
+    params: dict[str, Any] = {
+        "category": "linear",
+        "symbol": symbol,
+        "type": "SETTLEMENT",
+        "limit": min(50, max(1, int(limit))),
+    }
+    if since_ms is not None and since_ms > 0:
+        params["startTime"] = int(since_ms)
+    resp = await _request(
+        session, "GET", "/v5/account/transaction-log",
+        params=params, auth=True,
+    )
+    if not resp or resp.get("retCode") != 0:
+        if resp:
+            print(f"[API] Ошибка get_funding_history: {resp.get('retMsg')}")
+        return []
+    rows = (resp.get("result") or {}).get("list") or []
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        try:
+            out.append({
+                "symbol": r.get("symbol"),
+                "ts": int(r.get("transactionTime") or 0),
+                "funding": float(r.get("funding") or r.get("change") or 0.0),
+            })
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 async def cancel_order(
     session: aiohttp.ClientSession,
     symbol: str,

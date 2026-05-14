@@ -42,6 +42,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import circuit_breaker
 import config
 
 
@@ -145,6 +146,12 @@ async def _scan_one(
     holding_days: float,
 ) -> list[FundingSnapshot]:
     """Снять funding по всем symbols одной биржи."""
+    breaker = circuit_breaker.get_breaker()
+    if breaker.is_open(exchange_name):
+        # Биржа в OPEN — пропускаем без вызова. Возвращаем пустой список,
+        # как при пустом адаптере.
+        return []
+
     taker = _taker_fee_for(exchange_name)
     fee_drag = _fee_drag_apr(taker, holding_days)
 
@@ -152,6 +159,7 @@ async def _scan_one(
         try:
             info = await adapter.get_funding_info(session, sym)
         except Exception as exc:  # noqa: BLE001
+            breaker.record_failure(exchange_name, str(exc))
             print(f"[ARB] {exchange_name}/{sym}: ошибка get_funding_info: {exc}")
             return None
         if not info:
@@ -180,7 +188,14 @@ async def _scan_one(
 
     tasks = [_one(s) for s in symbols]
     results = await asyncio.gather(*tasks, return_exceptions=False)
-    return [r for r in results if r is not None]
+    valid = [r for r in results if r is not None]
+
+    # Если хотя бы одна валидная запись пришла — считаем биржу здоровой
+    # и closed-им breaker (чистим возможные остатки счётчика).
+    if valid:
+        breaker.record_success(exchange_name)
+
+    return valid
 
 
 async def scan_funding(

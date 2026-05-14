@@ -132,3 +132,17 @@ class ExchangeAdapter(abc.ABC):
         в funding-сканере".
         """
         return None
+
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты с биржи (для honest PnL accounting).
+
+        Возвращает список dict {symbol, ts (ms), funding (USDT)}.
+        Дефолт — пустой список (биржа не поддерживает).
+        """
+        return []
