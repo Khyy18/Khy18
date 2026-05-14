@@ -34,6 +34,9 @@ import ai_macro_sentinel
 import ai_postmortem
 import ai_regime
 import api_engine  # noqa: F401  # legacy shim, поддерживается для совместимости
+import arb_executor
+import arb_storage
+import arbitrage_engine
 import beta_estimator
 import config
 import memory
@@ -49,6 +52,20 @@ TICK_SECONDS = 60
 # Все дальнейшие вызовы идут через него - переключение Bybit/OKX/etc
 # сводится к смене переменной окружения.
 EXCHANGE = get_adapter(config.EXCHANGE)
+
+
+# Адаптеры всех бирж, которые сканер funding должен опросить. Хедж-сценарий
+# не требует ключей API - get_funding_info ходит в публичные эндпоинты,
+# поэтому даже неаутентифицированный адаптер работает. Создаём по разу
+# на старте процесса и переиспользуем во всех тиках.
+_FUNDING_ADAPTERS: dict[str, Any] = {}
+for _ex_name in getattr(config, "FUNDING_SCAN_EXCHANGES", ()):
+    try:
+        _FUNDING_ADAPTERS[_ex_name] = get_adapter(_ex_name)
+    except Exception as _exc:  # noqa: BLE001
+        # Если адаптер не зарегистрирован - просто пропускаем, чтобы
+        # конфиг с лишним именем не валил процесс.
+        print(f"[ARB] Адаптер {_ex_name} недоступен, пропуск: {_exc}")
 
 
 # --- Время / ISO помощники -------------------------------------------------
@@ -786,6 +803,190 @@ async def _heartbeat_tick(
     g["last_heartbeat_epoch"] = time.time()
 
 
+async def _funding_scan_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Фаза 1 funding-арбитража: периодически снимает срез funding по всем
+    биржам из FUNDING_SCAN_EXCHANGES и шлёт в Telegram алерты, когда
+    обнаруживается запись с |net_apr| >= FUNDING_ALERT_APR.
+
+    Снимок сохраняется в state["global"]["funding_snapshot"] - его читает
+    Telegram-команда /arb (без повторного похода в сеть).
+
+    Анти-спам: для каждой пары (биржа, символ) после отправки алерта
+    запоминается момент - повторный алерт по той же паре уйдёт не раньше
+    FUNDING_ALERT_COOLDOWN_SEC.
+
+    Все сетевые ошибки внутри ловятся - один битый адаптер не валит цикл.
+    """
+    g = state["global"]
+    last_epoch = float(g.get("last_funding_scan_epoch") or 0.0)
+    interval = float(getattr(config, "FUNDING_SCAN_INTERVAL_SEC", 300))
+    if (time.time() - last_epoch) < interval:
+        return
+    if not _FUNDING_ADAPTERS:
+        # Сканер физически не настроен (FUNDING_SCAN_EXCHANGES пуст или
+        # все имена недоступны) - молча выходим.
+        g["last_funding_scan_epoch"] = time.time()
+        return
+
+    try:
+        snapshots = await arbitrage_engine.scan_funding(
+            session, _FUNDING_ADAPTERS
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB] Ошибка scan_funding: {exc}")
+        g["last_funding_scan_epoch"] = time.time()
+        return
+
+    g["funding_snapshot"] = snapshots
+    g["last_funding_scan_epoch"] = time.time()
+
+    # Алерты: ищем записи с |net_apr| выше порога и шлём по одной (не
+    # одним сообщением со всем списком - так пользователю проще видеть
+    # конкретно, что новое).
+    alert_threshold = float(getattr(config, "FUNDING_ALERT_APR", 0.30))
+    cooldown = float(getattr(config, "FUNDING_ALERT_COOLDOWN_SEC", 6 * 3600))
+    seen: dict[str, float] = g.get("funding_alert_seen") or {}
+
+    interesting = arbitrage_engine.top_by_apr(
+        snapshots, limit=20, min_abs_apr=alert_threshold
+    )
+
+    sent = 0
+    for snap in interesting:
+        key = f"{snap.exchange}:{snap.symbol}"
+        last_alert = float(seen.get(key) or 0.0)
+        if (time.time() - last_alert) < cooldown:
+            continue
+
+        side_label = {
+            "SHORT_PERP": "SHORT perp ↘ (получаем funding)",
+            "LONG_PERP": "LONG perp ↗ (получаем funding)",
+            "FLAT": "нейтрально",
+        }.get(snap.side_recommendation, "?")
+
+        text = (
+            "📡 <b>Funding-алерт</b>\n"
+            f"Биржа: <b>{snap.exchange}</b>  |  Символ: <b>{snap.symbol}</b>\n"
+            f"Funding (за {snap.interval_hours:.0f}ч): "
+            f"{arbitrage_engine.format_pct(snap.funding_rate)}\n"
+            f"APR (брутто): {arbitrage_engine.format_apr(snap.apr)}\n"
+            f"APR (после комиссий, holding="
+            f"{int(getattr(config, 'FUNDING_HOLDING_DAYS', 7))}д): "
+            f"<b>{arbitrage_engine.format_apr(snap.net_apr)}</b>\n"
+            f"Сторона: {side_label}\n"
+            f"Mark price: {snap.mark_price:.4f}"
+        )
+        try:
+            await telegram_bot.send_message(
+                session, text, reply_markup=telegram_bot.set_keyboard()
+            )
+            seen[key] = time.time()
+            sent += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ARB] Ошибка отправки алерта {key}: {exc}")
+
+    g["funding_alert_seen"] = seen
+    if sent:
+        print(f"[ARB] Funding-алертов отправлено: {sent}")
+
+
+async def _arb_executor_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Executor funding-арбитража (Фаза 3).
+
+    На каждый тик:
+      1. Если активной позиции нет и executor включён - проверяем кандидата
+         на открытие (cross_exchange_pairs выше порога).
+      2. Если активная есть - обновляем funding_received оценочно и решаем,
+         не пора ли закрыть (edge_decay / timestop / global kill).
+
+    Вся работа с биржей - через адаптеры из _FUNDING_ADAPTERS. Если они
+    пустые - тик молча выходит. Если нет свежего snapshot - тоже выход
+    (executor-у нечего считать без данных).
+    """
+    g = state["global"]
+    last_epoch = float(g.get("last_arb_exec_epoch") or 0.0)
+    interval = float(getattr(config, "ARB_TICK_INTERVAL_SEC", 300))
+    if (time.time() - last_epoch) < interval:
+        return
+    g["last_arb_exec_epoch"] = time.time()
+
+    if not _FUNDING_ADAPTERS:
+        return
+    snapshots = g.get("funding_snapshot")
+    if not snapshots:
+        return
+
+    # Глобальные kill-switches должны останавливать executor превентивно.
+    ks = str(g.get("kill_switch_state") or "NONE")
+    if ks != "NONE":
+        # Если у нас открыта позиция и сработал kill - попробуем закрыть.
+        # _force_close уважает все статусы.
+        active = arb_storage.get_active()
+        if active:
+            await arb_executor._force_close(
+                session,
+                _FUNDING_ADAPTERS,
+                active,
+                f"global_kill_switch={ks}",
+                _arb_notify(session),
+            )
+        return
+
+    # Сначала monitoring (закрытие, если пора).
+    try:
+        closed = await arb_executor.monitor_and_maybe_close(
+            session, _FUNDING_ADAPTERS, snapshots, _arb_notify(session)
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB-EXEC] monitor exception: {exc}")
+        closed = False
+
+    # Учёт funding-выплат (для активной открытой пары).
+    try:
+        await arb_executor.reconcile_funding_payments(
+            session, _FUNDING_ADAPTERS, snapshots
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB-EXEC] reconcile_funding exception: {exc}")
+
+    # Если сейчас закрыли - в этот же тик НЕ открываем новую (даём
+    # данным обновиться в следующем funding_scan_tick).
+    if closed:
+        return
+
+    # Открытие, если активной нет.
+    active = arb_storage.get_active()
+    if active:
+        return
+    try:
+        await arb_executor.evaluate_and_open(
+            session, _FUNDING_ADAPTERS, snapshots, _arb_notify(session)
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB-EXEC] open exception: {exc}")
+
+
+def _arb_notify(session: aiohttp.ClientSession):
+    """Адаптер: возвращает async callable, отправляющую текст в Telegram
+    через telegram_bot.send_message с дефолтной клавиатурой."""
+    async def _notify(text: str) -> None:
+        try:
+            await telegram_bot.send_message(
+                session, text, reply_markup=telegram_bot.set_keyboard()
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ARB-EXEC] notify fail: {exc}")
+    return _notify
+
+
 async def _weekly_postmortem_tick(
     session: aiohttp.ClientSession,
     state: dict[str, Any],
@@ -1361,6 +1562,8 @@ async def trading_loop(
             await _apply_kill_switches(session, state, now)
             await _try_recover_from_degradation(session, state)
             await _heartbeat_tick(session, state, now)
+            await _funding_scan_tick(session, state, now)
+            await _arb_executor_tick(session, state, now)
             await _weekly_postmortem_tick(session, state, now)
 
             # Тик прошёл без верхнеуровневой ошибки - сбрасываем счётчик.
@@ -1451,6 +1654,18 @@ def _build_state() -> dict[str, Any]:
             "degraded_reason": "",
             "last_recovery_probe_epoch": 0.0,
             "rejection_ring": collections.deque(maxlen=50),
+            # Funding-арбитражный сканер (Фаза 1).
+            # funding_snapshot - результат последнего scan_funding в формате
+            #   {exchange_name: [FundingSnapshot, ...]}. None = ещё не
+            #   опрашивали (Telegram /arb должен сделать ad-hoc запрос).
+            # last_funding_scan_epoch - якорь для триггера _funding_scan_tick.
+            # funding_alert_seen - {f"{ex}:{sym}": last_alert_epoch}, для
+            #   cooldown анти-спама.
+            "funding_snapshot": None,
+            "last_funding_scan_epoch": 0.0,
+            "funding_alert_seen": {},
+            # Arb executor (Фаза 3).
+            "last_arb_exec_epoch": 0.0,
         },
         "instruments": {},
     }
@@ -1467,6 +1682,7 @@ async def main() -> None:
         return
 
     memory.init_db()
+    arb_storage.init_arb_db()
     state = _build_state()
 
     async with aiohttp.ClientSession() as session:

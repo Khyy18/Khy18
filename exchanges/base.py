@@ -108,3 +108,24 @@ class ExchangeAdapter(abc.ABC):
         self, qty: float, info: dict[str, float], price: float
     ) -> float:
         """Привести qty к биржевым фильтрам. 0.0 если невалидно."""
+
+    async def get_funding_info(
+        self, session: Any, symbol: str
+    ) -> Optional[dict[str, Any]]:
+        """Информация о funding rate по символу.
+
+        Возвращает dict со схемой:
+            {
+                "symbol": str,            # биржевой символ как у нас (например BTCUSDT)
+                "funding_rate": float,    # текущая ставка за один интервал (доля, не %)
+                "next_funding_ts": int,   # ms, время следующего расчёта
+                "mark_price": float,      # mark/last для оценки маржи
+                "interval_hours": float,  # период между расчётами (8.0 / 4.0 / 1.0)
+            }
+        Возвращает None при ошибке/отсутствии данных.
+
+        НЕ abstractmethod, чтобы старые адаптеры (без поддержки) не падали;
+        реализация по умолчанию - вернуть None, т.е. "биржа не участвует
+        в funding-сканере".
+        """
+        return None

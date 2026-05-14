@@ -35,6 +35,8 @@ import aiohttp
 import ai_analyst
 import ai_postmortem
 import api_engine  # noqa: F401  # legacy shim
+import arb_executor
+import arbitrage_engine
 import config
 import memory
 from exchanges import get_adapter
@@ -42,6 +44,18 @@ from exchanges import get_adapter
 
 # Единый адаптер биржи (выбирается через config.EXCHANGE).
 EXCHANGE = get_adapter(config.EXCHANGE)
+
+
+# Адаптеры для funding-сканера. Те же экземпляры, что в main.py, но в
+# рамках этого модуля собираем свой набор - чтобы /arb можно было
+# вызвать ad-hoc даже до первого _funding_scan_tick (например на
+# свежезапущенном боте).
+_FUNDING_ADAPTERS: dict[str, Any] = {}
+for _ex_name in getattr(config, "FUNDING_SCAN_EXCHANGES", ()):
+    try:
+        _FUNDING_ADAPTERS[_ex_name] = get_adapter(_ex_name)
+    except Exception as _exc:  # noqa: BLE001
+        print(f"[TG] Funding-адаптер {_ex_name} недоступен: {_exc}")
 
 
 # --- Callback data ids (короткие, чтобы влезали в ограничение Telegram 64 байта) ---
@@ -521,6 +535,44 @@ async def _handle_resume_mdd_cancel(
     return "Отменено. MDD kill-switch остаётся активным."
 
 
+async def _handle_arb(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Команда /arb (она же /funding) - снимок funding rate по всем
+    настроенным биржам.
+
+    Сначала пробуем взять кэшированный snapshot из state["global"]
+    (его обновляет _funding_scan_tick раз в FUNDING_SCAN_INTERVAL_SEC).
+    Если кэша ещё нет (старт процесса, тикер не успел отработать) -
+    делаем ad-hoc-скан, чтобы пользователь увидел актуальные цифры.
+
+    Все ошибки сети ловятся внутри scan_funding, наружу всплывают только
+    в виде пустого результата - тогда показываем человеческое сообщение.
+    """
+    g = _g(state)
+    snapshots = g.get("funding_snapshot")
+
+    if not snapshots:
+        if not _FUNDING_ADAPTERS:
+            return (
+                "📡 Сканер не настроен. Задайте config.FUNDING_SCAN_EXCHANGES "
+                "и убедитесь, что адаптеры зарегистрированы."
+            )
+        try:
+            snapshots = await arbitrage_engine.scan_funding(
+                session, _FUNDING_ADAPTERS
+            )
+            g["funding_snapshot"] = snapshots
+        except Exception as exc:  # noqa: BLE001
+            print(f"[TG] /arb: ошибка scan_funding: {exc}")
+            return "Не удалось снять funding по биржам. Сетевая ошибка."
+
+    if not any(snapshots.values()):
+        return "📡 Funding-данных нет (все адаптеры вернули пусто)."
+
+    return arbitrage_engine.format_full_report(snapshots)
+
+
 _HANDLERS = {
     CB_START: _handle_start,
     CB_STOP: _handle_stop,
@@ -581,7 +633,16 @@ async def _process_message(
     if lowered in ("/start", "/menu", "/help"):
         await send_message(
             session,
-            "👋 <b>Zenith-Control Ultimate v2</b>\nВыберите действие кнопкой ниже.",
+            (
+                "👋 <b>Zenith-Control Ultimate v2</b>\n"
+                "Выберите действие кнопкой ниже.\n\n"
+                "Доп. команды:\n"
+                "<code>/arb</code> или <code>/funding</code> — funding rate "
+                "по биржам (read-only сканер)\n"
+                "<code>/arb_status</code> — состояние executor'а funding-арбитража\n"
+                "<code>/status</code> — короткая статистика\n"
+                "<code>/resume_kill_switch</code> — снять MDD"
+            ),
             reply_markup=set_keyboard(),
         )
         return
@@ -602,6 +663,25 @@ async def _process_message(
             reply = result
             keyboard = set_keyboard()
         await send_message(session, reply, reply_markup=keyboard)
+        return
+    if lowered in ("/arb", "/funding"):
+        # Ответ может быть длинным (моноширинная таблица): сначала шлём
+        # отчёт без клавиатуры, потом отдельно меню. Telegram <pre> блок
+        # с клавиатурой иногда подрезается рендером.
+        report = await _handle_arb(session, state)
+        await send_message(session, report)
+        await send_message(
+            session,
+            "Меню ниже.",
+            reply_markup=set_keyboard(),
+        )
+        return
+    if lowered == "/arb_status":
+        await send_message(
+            session,
+            arb_executor.format_status(),
+            reply_markup=set_keyboard(),
+        )
         return
     # Любое другое сообщение - просто показываем меню.
     await send_message(
