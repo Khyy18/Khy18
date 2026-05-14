@@ -459,7 +459,9 @@ async def evaluate_and_open(
     # Проверка балансов: на каждой бирже достаточно ARB_NOTIONAL_USDT/leverage.
     # leverage здесь только для проверки достаточности, ордера ставим без
     # явного leverage - используется default настроенный на бирже.
-    notional_usdt = float(getattr(config, "ARB_NOTIONAL_USDT", 200.0))
+    # notional подбирается по tier'у символа (стабильности funding-истории),
+    # см. _get_tier_notional. Если истории нет — полный ARB_NOTIONAL_USDT.
+    notional_usdt = _get_tier_notional(cand.symbol)
     leverage = max(1.0, float(getattr(config, "ARB_LEVERAGE", 3.0)))
     margin_required = notional_usdt / leverage
     safety = 1.10  # 10% запас на колебания цены и комиссии
@@ -688,6 +690,96 @@ def _estimate_fees(notional_usdt: float, long_ex: str, short_ex: str) -> float:
     short_fee = float(fees.get(short_ex, fees.get("default", 0.0006)))
     # 2 сделки на каждой ноге = 4 taker-fee.
     return notional_usdt * (2 * long_fee + 2 * short_fee)
+
+
+# --- Multi-tier sizing --------------------------------------------------
+
+def _get_tier_notional(symbol: str) -> float:
+    """Подобрать notional для конкретного символа по его funding-истории.
+
+    Логика:
+      1. Берём funding_snapshots за 30 дней по этому символу (все биржи).
+      2. Если данных нет / таблица отсутствует — возвращаем
+         config.ARB_NOTIONAL_USDT (полный размер, безопасный fallback).
+      3. Считаем cv = std_funding_rate / |mean_funding_rate|.
+      4. Маппинг:
+         - cv < 0.30 и n_obs > 200 → tier_a → ARB_NOTIONAL_TIER_A (400)
+         - cv < 0.60                → tier_b → ARB_NOTIONAL_TIER_B (200)
+         - иначе                    → tier_c → ARB_NOTIONAL_TIER_C (100)
+
+    Идея: для стабильных символов (BTC/ETH) можно класть больше капитала,
+    для волатильных funding-серий — меньше. Если истории мало — фолбэк
+    к ARB_NOTIONAL_USDT (читай: пользователь не накопил данных, лучше не
+    раздувать риск тиром, а взять консервативный default).
+
+    Все ошибки SQLite/импорта ловим — возвращаем ARB_NOTIONAL_USDT.
+    Тиковая функция не должна падать из-за БД.
+    """
+    fallback = float(getattr(config, "ARB_NOTIONAL_USDT", 200.0))
+    try:
+        import sqlite3
+        import statistics
+        from datetime import datetime, timedelta, timezone
+        import memory  # для DB_PATH
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TIER] import fail: {exc}, fallback={fallback}")
+        return fallback
+
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=30)).isoformat(
+        timespec="seconds"
+    )
+    try:
+        with sqlite3.connect(memory.DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='funding_snapshots'"
+            ).fetchone()
+            if not row:
+                return fallback
+            rows = conn.execute(
+                "SELECT rate FROM funding_snapshots "
+                "WHERE symbol = ? AND ts >= ?",
+                (symbol, cutoff),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        print(f"[TIER] sqlite fail для {symbol}: {exc}, fallback={fallback}")
+        return fallback
+
+    if not rows:
+        return fallback
+
+    rates = [float(r[0]) for r in rows if r[0] is not None]
+    n_obs = len(rates)
+    if n_obs < 2:
+        return fallback
+
+    mean_rate = sum(rates) / n_obs
+    try:
+        std_rate = statistics.stdev(rates)
+    except statistics.StatisticsError:
+        std_rate = 0.0
+
+    if abs(mean_rate) < 1e-12:
+        # Funding в среднем близок к нулю — символ не интересен,
+        # но fallback к default размеру (не к tier_c, чтобы не путать
+        # пользователя). Историческая логика: cv → inf, что попало бы
+        # в tier_c, но математически это плохой сигнал, лучше default.
+        return fallback
+
+    cv = std_rate / abs(mean_rate)
+
+    tier_a = float(getattr(config, "ARB_NOTIONAL_TIER_A", 400.0))
+    tier_b = float(getattr(config, "ARB_NOTIONAL_TIER_B", 200.0))
+    tier_c = float(getattr(config, "ARB_NOTIONAL_TIER_C", 100.0))
+
+    if cv < 0.30 and n_obs > 200:
+        print(f"[TIER] {symbol}: tier_a (cv={cv:.2f}, n={n_obs}) → {tier_a:.0f}")
+        return tier_a
+    if cv < 0.60:
+        print(f"[TIER] {symbol}: tier_b (cv={cv:.2f}, n={n_obs}) → {tier_b:.0f}")
+        return tier_b
+    print(f"[TIER] {symbol}: tier_c (cv={cv:.2f}, n={n_obs}) → {tier_c:.0f}")
+    return tier_c
 
 
 async def monitor_and_maybe_close(

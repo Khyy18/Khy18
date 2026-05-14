@@ -210,6 +210,29 @@ REBALANCE_THRESHOLD_PCT = float(os.getenv("REBALANCE_THRESHOLD_PCT", "0.30") or 
 REBALANCE_MIN_TRANSFER_USDT = float(os.getenv("REBALANCE_MIN_TRANSFER_USDT", "50") or 50)
 REBALANCE_ALERT_COOLDOWN_SEC = float(os.getenv("REBALANCE_ALERT_COOLDOWN_SEC", "21600") or 21600)
 
+# --- Lending advisor ---
+# Раз в LENDING_CHECK_INTERVAL_SEC бот сверяет, сколько USDT простаивает
+# на каждой бирже (свободный баланс минус margin под активные пары и
+# резерв). Если выше LENDING_IDLE_THRESHOLD_USDT — присылает рекомендацию
+# подписать сумму в Earn-flex биржи. Реальную подписку делает пользователь
+# вручную через UI биржи (на MVP не автоматизируем).
+LENDING_CHECK_INTERVAL_SEC = float(os.getenv("LENDING_CHECK_INTERVAL_SEC", "21600") or 21600)
+LENDING_IDLE_THRESHOLD_USDT = float(os.getenv("LENDING_IDLE_THRESHOLD_USDT", "100") or 100)
+LENDING_RESERVE_PCT = float(os.getenv("LENDING_RESERVE_PCT", "0.30") or 0.30)
+LENDING_MIN_RESERVE_USDT = float(os.getenv("LENDING_MIN_RESERVE_USDT", "50") or 50)
+LENDING_ALERT_COOLDOWN_SEC = float(os.getenv("LENDING_ALERT_COOLDOWN_SEC", "86400") or 86400)
+
+# --- Multi-tier sizing ---
+# Размер позиции зависит от стабильности funding-истории символа:
+#   tier_a: cv < 0.30 + n_obs > 200 (BTC/ETH/SOL после 30 дней истории)
+#   tier_b: cv < 0.60 (большинство мажоров)
+#   tier_c: остальные (новые символы / волатильный funding)
+# При прочих равных бот разместит больше капитала в стабильных парах.
+# Если истории нет — fallback к ARB_NOTIONAL_USDT (полный размер).
+ARB_NOTIONAL_TIER_A = float(os.getenv("ARB_NOTIONAL_TIER_A", "400") or 400)
+ARB_NOTIONAL_TIER_B = float(os.getenv("ARB_NOTIONAL_TIER_B", "200") or 200)
+ARB_NOTIONAL_TIER_C = float(os.getenv("ARB_NOTIONAL_TIER_C", "100") or 100)
+
 # --- Веб-дашборд ------------------------------------------------------
 DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "true").strip().lower() not in (
     "0", "false", "no", "off",

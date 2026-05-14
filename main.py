@@ -40,6 +40,7 @@ import config
 import dashboard
 import funding_history
 import key_manager
+import lending_advisor
 import memory
 import rebalancer
 import telegram_bot
@@ -560,6 +561,47 @@ async def _rebalance_tick(
         print(f"[REBAL] tick exception: {exc}")
 
 
+# --- Tick: lending advisor --------------------------------------------
+
+async def _lending_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Сверка простаивающего USDT на биржах и рекомендация подписать в Earn.
+
+    Работает раз в LENDING_CHECK_INTERVAL_SEC (default 6ч). Реальных
+    подписок не делает — только присылает в Telegram список "сколько
+    USDT подписать в Earn flex на каждой бирже".
+
+    Логика расчёта см. lending_advisor.check_idle_balances():
+      idle = free_usdt - margin_in_use - reserve.
+
+    margin_in_use берётся из активных арб-пар (notional / leverage).
+    Резерв — max(LENDING_RESERVE_PCT * balance, LENDING_MIN_RESERVE_USDT).
+    """
+    g = state["global"]
+    last_epoch = float(g.get("last_lending_check_epoch") or 0.0)
+    interval = float(getattr(config, "LENDING_CHECK_INTERVAL_SEC", 6 * 3600.0))
+    if (time.time() - last_epoch) < interval:
+        return
+    g["last_lending_check_epoch"] = time.time()
+
+    active_adapters = _get_active_adapters(state)
+    if not active_adapters:
+        return
+
+    if "lending_alert_seen" not in g:
+        g["lending_alert_seen"] = {}
+
+    try:
+        await lending_advisor.check_idle_balances(
+            session, active_adapters, _arb_notify(session), g,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[LEND] tick exception: {exc}")
+
+
 # --- Tick: heartbeat --------------------------------------------------
 
 async def _heartbeat_tick(
@@ -624,6 +666,7 @@ async def trading_loop(
             await _arb_executor_tick(session, state, now)
             await _anomaly_tick(session, state, now)
             await _rebalance_tick(session, state, now)
+            await _lending_tick(session, state, now)
             await _heartbeat_tick(session, state, now)
         except Exception as exc:  # noqa: BLE001
             print(f"[LOOP] Верхнеуровневая ошибка: {exc}")
@@ -812,6 +855,9 @@ def _build_state() -> dict[str, Any]:
             # Rebalancer (advisor).
             "last_rebalance_check_epoch": 0.0,
             "rebalance_alert_seen": {},
+            # Lending advisor.
+            "last_lending_check_epoch": 0.0,
+            "lending_alert_seen": {},
             # Disabled exchanges (toggle через TG).
             "disabled_exchanges": set(),
             # Legacy-флаги для совместимости с UI.
