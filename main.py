@@ -33,6 +33,7 @@ import aiohttp
 import ai_macro_sentinel
 import ai_postmortem
 import ai_regime
+import ai_router
 import ai_trade_gate
 import api_engine  # noqa: F401  # legacy shim, поддерживается для совместимости
 import config
@@ -545,6 +546,105 @@ async def _weekly_postmortem_tick(
     print(f"[AI] postmortem отправлен за неделю {cur_week}")
 
 
+async def _daily_pnl_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Раз в сутки в 00:00 UTC отправлять короткую сводку дня в Telegram.
+
+    Срабатывает строго при now.hour == 0. Гарантия «один раз в день»
+    реализована через флаг last_daily_pnl_date в state["global"]: если
+    дата сегодня уже отметилась, выходим без действий.
+
+    Содержит: сегодняшний PnL (он сейчас в g["daily_pnl"], сбрасывается на
+    границе суток до того, как этот тик успеет сработать → берём
+    кумулятивный PnL за вчера ИЗ memory.get_trades_since(1)). Альтернатива:
+    переставить порядок _roll_daily_weekly_anchors и этого тика — но это
+    риск пропустить срез. Поэтому считаем по closed_ts из БД.
+    """
+    if now.hour != 0:
+        return
+    g = state["global"]
+    today_iso = now.date().isoformat()
+    if g.get("last_daily_pnl_date") == today_iso:
+        return
+
+    # PnL за прошедшие 24 часа из БД (не из state, т.к. daily_pnl сбрасывается
+    # ровно в этот же час при анкоринге).
+    closed_24h_pnl = 0.0
+    closed_24h_count = 0
+    wins = 0
+    losses = 0
+    try:
+        trades = memory.get_trades_since(1)
+        for t in trades:
+            if not t.get("closed_ts"):
+                continue
+            try:
+                pnl_v = float(t.get("pnl") or 0.0)
+            except (TypeError, ValueError):
+                pnl_v = 0.0
+            closed_24h_pnl += pnl_v
+            closed_24h_count += 1
+            if pnl_v > 0:
+                wins += 1
+            elif pnl_v < 0:
+                losses += 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"[DAILY-PNL] ошибка чтения сделок: {exc}")
+
+    equity_start = float(g.get("equity_start") or 0.0)
+    cumulative_pnl = float(g.get("cumulative_pnl") or 0.0)
+    proxy_equity = (
+        equity_start + cumulative_pnl if equity_start > 0 else 0.0
+    )
+    pnl_pct = (closed_24h_pnl / equity_start * 100) if equity_start > 0 else 0.0
+    winrate = (
+        (wins / closed_24h_count * 100) if closed_24h_count > 0 else 0.0
+    )
+
+    open_positions = sum(
+        1 for s in state["symbols"].values() if s.get("open_trade")
+    )
+
+    try:
+        current_dd = float(memory.get_current_drawdown() or 0.0) * 100
+    except Exception:  # noqa: BLE001
+        current_dd = 0.0
+
+    body = [
+        _label_kill("Дата", now.strftime("%Y-%m-%d UTC")),
+        _label_kill("PnL за день", f"{_fmt_pnl(closed_24h_pnl, 4)} USDT"),
+        _label_kill("PnL %", f"{_fmt_pnl(pnl_pct, 2)}%"),
+        _label_kill("Сделок", str(closed_24h_count)),
+        _label_kill(
+            "WIN/LOSS",
+            f"{wins} / {losses}  ({_fmt_num(winrate, 0)}%)" if closed_24h_count else "—",
+        ),
+        _subhr_line(),
+        _label_kill("Эквити", f"{_fmt_num(proxy_equity, 2)} USDT"),
+        _label_kill("Cum PnL", f"{_fmt_pnl(cumulative_pnl, 2)} USDT"),
+        _label_kill("Просадка от HWM", f"{_fmt_num(current_dd, 2)}%"),
+        _subhr_line(),
+        _label_kill("Открытых позиций", str(open_positions)),
+    ]
+
+    try:
+        await telegram_bot.send_message(
+            session,
+            _card("ИТОГИ ДНЯ", "📊", body),
+            reply_markup=telegram_bot.set_keyboard(),
+        )
+        print(
+            f"[DAILY-PNL] {today_iso}: pnl={closed_24h_pnl:.4f} "
+            f"trades={closed_24h_count}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[DAILY-PNL] ошибка отправки в Telegram: {exc}")
+    g["last_daily_pnl_date"] = today_iso
+
+
 # --- Торговые помощники ---------------------------------------------------
 
 def _bybit_kline_to_dict(k: list[Any]) -> dict[str, Any]:
@@ -575,6 +675,39 @@ def _sum_open_risk(state: dict[str, Any]) -> float:
             continue
         total += abs(entry - stop) * qty / equity_start
     return total
+
+
+def _net_beta_exposure(state: dict[str, Any], extra: Optional[tuple[str, str]] = None) -> float:
+    """Сумма beta-к-BTC по всем открытым позициям (LONG как +beta, SHORT как -beta).
+
+    Если задан `extra=(symbol, side)`, добавляет в расчёт планируемую сделку —
+    это позволяет вызывать функцию ДО открытия и проверять предельную нагрузку.
+    Возвращает абсолютное значение net-exposure: знак сам по себе нас не
+    интересует, важно ограничить «насколько большая ставка на одно
+    направление рынка лежит на счёте одновременно».
+    """
+    beta_map = getattr(config, "CORRELATION_BETA_TO_BTC", {}) or {}
+    default_beta = float(getattr(config, "CORRELATION_DEFAULT_BETA", 1.0) or 1.0)
+    net = 0.0
+    for sym, sym_state in state.get("symbols", {}).items():
+        trade = sym_state.get("open_trade")
+        if not trade:
+            continue
+        beta = float(beta_map.get(sym, default_beta))
+        side = str(trade.get("side") or "")
+        if side == "Buy":
+            net += beta
+        elif side == "Sell":
+            net -= beta
+    if extra is not None:
+        sym, side = extra
+        beta = float(beta_map.get(sym, default_beta))
+        s = side.upper()
+        if s in ("BUY", "LONG"):
+            net += beta
+        elif s in ("SELL", "SHORT"):
+            net -= beta
+    return abs(net)
 
 
 async def _manage_open_trade(
@@ -1172,6 +1305,49 @@ async def _process_symbol(
         )
         return
 
+    # Корреляционный кап: не разрешаем суммарной abs(net-beta-к-BTC)
+    # после открытия превысить config.CORRELATION_MAX_NET_BETA. Это защита
+    # от 3+ одновременных LONG'ов на скоррелированных альтах, которые по
+    # факту дублируют ставку на BTC и удваивают drawdown в коррекции.
+    max_net_beta = float(getattr(config, "CORRELATION_MAX_NET_BETA", 0.0) or 0.0)
+    if max_net_beta > 0:
+        side_for_beta = "LONG" if side == "Buy" else "SHORT"
+        proj_net_beta = _net_beta_exposure(state, extra=(symbol, side_for_beta))
+        if proj_net_beta > max_net_beta:
+            cur_net_beta = _net_beta_exposure(state)
+            detail = (
+                f"net-beta {proj_net_beta:.2f} > {max_net_beta:.2f} "
+                f"(сейчас {cur_net_beta:.2f})"
+            )
+            print(f"[LOOP] {symbol} {side_for_beta}: correlation guard — {detail}")
+            try:
+                memory.record_rejected_check(
+                    symbol,
+                    "correlation_cap",
+                    detail,
+                    {
+                        "side": side_for_beta,
+                        "current_net_beta": round(cur_net_beta, 3),
+                        "projected_net_beta": round(proj_net_beta, 3),
+                        "limit": max_net_beta,
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LOOP] {symbol}: ошибка record_rejected_check (corr): {exc}")
+            state["global"]["rejection_ring"].append(
+                {
+                    "ts": _iso(now),
+                    "symbol": symbol,
+                    "filter": "correlation_cap",
+                    "detail": detail,
+                    "indicators": {
+                        "current_net_beta": round(cur_net_beta, 3),
+                        "projected_net_beta": round(proj_net_beta, 3),
+                    },
+                }
+            )
+            return
+
     # Биржевые фильтры.
     try:
         info = await EXCHANGE.get_instrument_info(session, symbol)
@@ -1252,6 +1428,62 @@ async def _process_symbol(
             f"conf={gate_conf} reason={gate_reason[:120]}"
         )
 
+        # --- Auto-degraded: учёт подряд идущих error от LLMRouter ---
+        # В active-режиме считаем подряд идущие error. Если их слишком много
+        # (все 3 провайдера лежат подолгу), временно переходим в degraded:
+        # сделки открываются без LLM-проверки, но с push-алертом. На первом
+        # успешном approve/veto — обратно в active.
+        if gate_mode == "active":
+            health = state["global"].setdefault(
+                "gate_health",
+                {
+                    "consecutive_errors": 0,
+                    "degraded": False,
+                    "last_error_reason": "",
+                    "last_state_change_iso": None,
+                },
+            )
+            threshold = int(getattr(config, "GATE_DEGRADE_AFTER_ERRORS", 5) or 0)
+            if gate_verdict == "error":
+                health["consecutive_errors"] = (
+                    int(health.get("consecutive_errors") or 0) + 1
+                )
+                health["last_error_reason"] = gate_reason or "—"
+                if (
+                    threshold > 0
+                    and not health.get("degraded")
+                    and health["consecutive_errors"] >= threshold
+                ):
+                    health["degraded"] = True
+                    health["last_state_change_iso"] = _iso(now)
+                    print(
+                        f"[AI-GATE] auto-degraded ON: {threshold} ошибок подряд, "
+                        f"причина: {health['last_error_reason'][:120]}"
+                    )
+                    try:
+                        await telegram_bot.notify_gate_degraded_on(
+                            session,
+                            consecutive_errors=health["consecutive_errors"],
+                            last_reason=health["last_error_reason"],
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[AI-GATE] ошибка push degraded-on: {exc}")
+            else:
+                # Любой не-error ответ (approve / veto) сбрасывает счётчик.
+                if health.get("degraded"):
+                    # Восстанавливаемся.
+                    health["degraded"] = False
+                    health["last_state_change_iso"] = _iso(now)
+                    try:
+                        provider_name = ai_router.get_last_provider() or "?"
+                        await telegram_bot.notify_gate_degraded_off(
+                            session, provider=provider_name
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[AI-GATE] ошибка push degraded-off: {exc}")
+                health["consecutive_errors"] = 0
+                health["last_error_reason"] = ""
+
         # Записываем решение gate в журнал ai_gate_log. applied=True только
         # если решение фактически применится к торговле: active-режим +
         # verdict veto/error (в shadow applied всегда False, т.к. сделка
@@ -1277,7 +1509,16 @@ async def _process_symbol(
 
     # В active mode veto ИЛИ error блокируют вход (fail-CLOSED);
     # в shadow mode - только логирование.
-    if gate_mode == "active" and gate_verdict in ("veto", "error"):
+    # В degraded (auto) — error НЕ блокирует (мы временно работаем как shadow,
+    # потому что все LLM провайдеры легли); veto всё равно применяется на всякий
+    # случай, если хоть один провайдер успел дать осмысленный отказ.
+    gate_health = state["global"].get("gate_health") or {}
+    is_degraded = bool(gate_health.get("degraded"))
+    block_for_error = (gate_mode == "active") and (not is_degraded)
+    if (
+        (gate_mode == "active" and gate_verdict == "veto")
+        or (block_for_error and gate_verdict == "error")
+    ):
         blocker_filter = "ai_gate_veto" if gate_verdict == "veto" else "ai_gate_error"
         detail = gate_reason or (
             "gate вернул error (fail-CLOSED)"
@@ -1480,6 +1721,98 @@ async def _process_symbol(
         print(f"[LOOP] {symbol}: ошибка push-уведомления об открытии: {exc}")
 
 
+# --- Реконсиляция при старте ---------------------------------------------
+
+async def _reconcile_open_positions(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+) -> None:
+    """Подтянуть открытые позиции с биржи в локальный state["symbols"][s]["open_trade"].
+
+    Зачем: после рестарта сервиса (systemd Restart=always, ребут VPS, упало по
+    OOM) позиции на бирже остаются, а локально open_trade=None. Без
+    реконсиляции стратегия откроет ВТОРУЮ позицию по той же паре. С ней —
+    бот продолжает сопровождать существующую (трейлинг, таймстоп, детект
+    закрытия снаружи) как будто рестарта не было.
+
+    Что мы знаем после реконсиляции:
+      - side, qty, entry_price (avgPrice с биржи)
+      - current_stop = entry_price (грубая оценка, реальный SL уже стоит на
+        бирже как algo-ордер; manage_open_trade подтянет trail к нему)
+      - atr_at_entry = 0.0 (после рестарта неизвестно, трейлинг будет
+        активироваться по текущему ATR при первом достаточном движении)
+      - entry_ts_iso = now (после рестарта точное время входа потеряно,
+        таймстоп начнёт отсчёт от рестарта — это безопаснее, чем закрыть
+        позицию сразу из-за просроченного 48ч-таймера)
+
+    На любую ошибку логируем по-русски и продолжаем (не блокируем старт).
+    """
+    print("[RECONCILE] Проверка открытых позиций на бирже…")
+    restored = 0
+    for symbol in config.SYMBOLS:
+        try:
+            positions = await EXCHANGE.get_positions(session, symbol)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[RECONCILE] {symbol}: ошибка get_positions: {exc}")
+            continue
+        if not positions:
+            continue
+        # Берём первую ненулевую позицию (на OKX/Bybit может быть только одна
+        # net-позиция на символ в hedge-mode off, что и есть наш случай).
+        pos = positions[0]
+        try:
+            qty = float(pos.get("size") or 0.0)
+            entry_price = float(pos.get("avgPrice") or 0.0)
+            side = str(pos.get("side") or "")
+        except (TypeError, ValueError) as exc:
+            print(f"[RECONCILE] {symbol}: битый формат позиции: {exc}")
+            continue
+        if qty <= 0 or entry_price <= 0 or side not in ("Buy", "Sell"):
+            continue
+
+        sym_state = state["symbols"][symbol]
+        sym_state["open_trade"] = {
+            "id": None,                  # связь с trades-таблицей потеряна
+            "side": side,
+            "entry_price": entry_price,
+            "qty": qty,
+            "atr_at_entry": 0.0,
+            "entry_ts_iso": _iso(_utc_now()),
+            "high_since_entry": entry_price,
+            "low_since_entry": entry_price,
+            "current_stop": entry_price,
+        }
+        side_label = "LONG" if side == "Buy" else "SHORT"
+        print(
+            f"[RECONCILE] {symbol}: восстановлена {side_label} qty={qty} "
+            f"entry={entry_price}"
+        )
+        restored += 1
+
+        # Push-уведомление в Telegram, чтобы оператор знал что бот после
+        # рестарта подхватил существующую позицию.
+        try:
+            body = [
+                _label_kill("Пара", str(symbol)),
+                _label_kill("Сторона", telegram_bot._dir_arrow(side_label)),
+                _label_kill("Размер", _fmt_num(qty, 4)),
+                _label_kill("Вход (avg)", _fmt_num(entry_price, 4)),
+                _subhr_line(),
+                "Локальный state восстановлен",
+                "после рестарта. Сопровождение",
+                "продолжается. SL/TP уже стоят",
+                "на бирже как algo-ордера.",
+            ]
+            await telegram_bot.send_message(
+                session,
+                _card("ВОССТАНОВЛЕНА ПОЗИЦИЯ", "🔄", body),
+                reply_markup=telegram_bot.set_keyboard(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[RECONCILE] {symbol}: ошибка push: {exc}")
+    print(f"[RECONCILE] готово, восстановлено позиций: {restored}")
+
+
 # --- Главный цикл ---------------------------------------------------------
 
 async def trading_loop(
@@ -1503,6 +1836,7 @@ async def trading_loop(
 
             await _apply_kill_switches(session, state, now)
             await _heartbeat_tick(session, state, now)
+            await _daily_pnl_tick(session, state, now)
             await _weekly_postmortem_tick(session, state, now)
         except asyncio.CancelledError:
             raise
@@ -1550,7 +1884,18 @@ def _build_state() -> dict[str, Any]:
             "last_macro_check_epoch": 0.0,
             "last_postmortem_iso_week": None,
             "last_heartbeat_epoch": 0.0,
+            "last_daily_pnl_date": None,
             "rejection_ring": collections.deque(maxlen=50),
+            # AI-Gate health. consecutive_errors считает подряд идущие error-вердикты
+            # (LLMRouter не достучался ни до одного провайдера). При превышении
+            # config.GATE_DEGRADE_AFTER_ERRORS бот сам переключается в degraded
+            # (работает как shadow). Первый успешный approve/veto возвращает в active.
+            "gate_health": {
+                "consecutive_errors": 0,
+                "degraded": False,
+                "last_error_reason": "",
+                "last_state_change_iso": None,
+            },
             # Эпоха старта процесса. Используется 📊 СТАТУС-кнопкой в
             # Telegram для расчёта uptime (time.time() - started_epoch).
             "started_epoch": time.time(),
@@ -1608,6 +1953,15 @@ async def main() -> None:
                 print(f"[MAIN] instrument_info_cached({symbol}) сбой: {exc}")
             if info is not None:
                 state["instruments"][symbol] = info
+
+        # Реконсиляция открытых позиций после рестарта. Должна идти ПОСЛЕ
+        # прогрева инструментов (некоторые адаптеры используют кэш ctVal
+        # для get_positions) и ДО старта торгового цикла, иначе цикл успеет
+        # увидеть «нет позиции» и открыть дубль.
+        try:
+            await _reconcile_open_positions(session, state)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[MAIN] Ошибка реконсиляции позиций: {exc}")
 
         print("[MAIN] Telegram-бот запущен в режиме Long Polling")
 

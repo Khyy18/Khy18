@@ -22,6 +22,20 @@ TAKER_FEE: float = 0.00055   # 0.055 %
 MAKER_FEE: float = 0.00020   # 0.020 %
 MARKET_SLIPPAGE_TICKS: int = 1
 
+# Funding rate для perpetual futures: позиция платит/получает funding каждые
+# 8 часов в зависимости от стороны и направления rate. Среднее по BTCUSDT
+# на Bybit V5 за 2024-2026: ~0.01% / 8ч (LONG чаще платит, SHORT чаще получает,
+# но усреднённо около нуля). Для ЧЕСТНОЙ оценки backtest'а считаем абсолютное
+# списание 0.01%/8ч на ЛЮБУЮ сторону — это консервативный pessimistic case.
+# В реальности SHORT иногда получает положительный funding и улучшает PnL,
+# но в backtest мы предпочитаем недооценить P&L, чем переоценить.
+FUNDING_RATE_PER_8H: float = 0.0001   # 0.01 %, абсолютное
+
+# Дополнительный slippage в bps, применяется на ВЫПОЛНЕНИИ market-ордера
+# поверх 1 тика. Реальный slippage на BTCUSDT при $1-5K notional — 1-3 bps,
+# на mid-cap альтах (DOGE/AVAX) — 3-8 bps. Берём 2 bps как разумную середину.
+EXECUTION_SLIPPAGE_BPS: float = 2.0   # 0.02 % сверх 1 тика
+
 # Шаг цены (tickSize) по умолчанию для основных инструментов.
 # Реальные значения берутся из Bybit V5 /v5/market/instruments-info; здесь
 # задано лишь для оффлайнового бэктеста, чтобы не ходить в сеть.
@@ -82,6 +96,8 @@ class BacktesterConfig:
     taker_fee: float = TAKER_FEE
     maker_fee: float = MAKER_FEE
     market_slippage_ticks: int = MARKET_SLIPPAGE_TICKS
+    funding_rate_per_8h: float = FUNDING_RATE_PER_8H
+    execution_slippage_bps: float = EXECUTION_SLIPPAGE_BPS
     risk_per_trade: float = _RISK_PER_TRADE_DEFAULT
     global_risk_cap: float = _GLOBAL_RISK_CAP_DEFAULT
     per_symbol_max_positions: int = 1

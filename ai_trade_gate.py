@@ -53,6 +53,7 @@ from typing import Any, Optional
 import aiohttp
 
 import ai_groq
+import ai_router
 import config
 
 
@@ -197,7 +198,9 @@ async def check_trade(
         return _error(f"ошибка построения промпта: {exc}")
 
     try:
-        parsed = await ai_groq.call_groq_json(
+        # Через LLMRouter: при сбое Groq — failover на Cerebras → Gemini.
+        # Это убирает единую точку отказа AI-Gate'a в active-режиме.
+        parsed = await ai_router.call_json(
             session,
             prompt,
             max_output_tokens=128,
@@ -205,12 +208,14 @@ async def check_trade(
             timeout=timeout,
         )
     except Exception as exc:  # noqa: BLE001
-        print(f"[AI-GATE] ошибка вызова Groq: {exc}")
-        return _error(f"ошибка вызова groq: {exc}")
+        print(f"[AI-GATE] ошибка вызова LLM: {exc}")
+        return _error(f"ошибка вызова llm: {exc}")
 
     if not isinstance(parsed, dict):
-        # call_groq_json сам уже залогировал причину (сеть, таймаут, битый JSON).
-        return _error("groq недоступен")
+        # call_json сам уже залогировал причину (сеть, таймаут, битый JSON
+        # на всех провайдерах). Если все провайдеры легли — возвращаем error,
+        # main.py в active-режиме трактует это как veto (fail-CLOSED).
+        return _error("все llm-провайдеры недоступны")
 
     verdict_raw = str(parsed.get("verdict", "") or "").strip().lower()
     if verdict_raw not in _ALLOWED_VERDICTS:

@@ -16,6 +16,14 @@ _TELEGRAM_CHAT_ID_RAW = os.getenv("TELEGRAM_CHAT_ID", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
+# Дополнительные LLM-провайдеры для failover в LLMRouter (опциональны).
+# Если ключ пустой — провайдер пропускается. Подробности маршрутизации
+# см. ai_router.py.
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+CRYPTOPANIC_API_KEY = os.getenv("CRYPTOPANIC_API_KEY", "")
+
 # Режим торговли: true = OKX Demo (виртуальный баланс, x-simulated-trading),
 # false = OKX Mainnet (реальные деньги). Читается из env на старте процесса.
 # Переключение через кнопку "🏦 Демо/Реал" в Telegram делает запись в .env
@@ -158,6 +166,20 @@ AI_TRADE_GATE_NEWS_LIMIT = 10
 POSTMORTEM_DAY_UTC = 0
 POSTMORTEM_HOUR_UTC = 0
 
+# AI-Gate auto-degraded режим. Когда LLMRouter подряд возвращает error
+# (все провайдеры упали) GATE_DEGRADE_AFTER_ERRORS раз — бот сам переключает
+# active → degraded. В degraded решение gate ЛОГИРУЕТСЯ, но НЕ блокирует
+# сделки (как shadow-режим). На первом успешном approve/veto от LLM —
+# возвращаемся в active. Это не теряет рынок, пока все LLM провайдеры
+# временно лежат.
+# Установить 0, чтобы отключить degraded-режим и оставить чистый fail-CLOSED.
+try:
+    GATE_DEGRADE_AFTER_ERRORS = int(
+        os.getenv("GATE_DEGRADE_AFTER_ERRORS", "5")
+    )
+except (TypeError, ValueError):
+    GATE_DEGRADE_AFTER_ERRORS = 5
+
 # --- Авто-блок по подряд идущим LOSS на символе ---
 # Когда стратегия N раз подряд получает убыток на одном символе - вероятно,
 # на нём что-то системно идёт не так (пресет не подходит фазе рынка, рост
@@ -209,6 +231,36 @@ NOTIFY_ON_GATE_ERROR_BLOCK = os.getenv("NOTIFY_ON_GATE_ERROR_BLOCK", "true").str
 PER_SYMBOL_MAX_POSITIONS = 1        # не больше одной позиции на символ
 GLOBAL_RISK_CAP = 0.04              # суммарный открытый риск не больше 4% эквити
 
+# --- Корреляционный guard ---
+# Криптовалюты сильно скоррелированы с BTC (beta = 0.8-2.0). Открыв одновременно
+# LONG BTC + LONG ETH + LONG SOL, мы по факту имеем одну направленную ставку на
+# рынок с увеличенным leverage. Guard суммирует beta-к-BTC по всем открытым
+# позициям (LONG как +beta, SHORT как -beta) и блокирует новый вход, если
+# абсолютное net-exposure превысит CORRELATION_MAX_NET_BETA.
+#
+# Beta-таблица — статическая, основана на 90-дневных корреляциях с BTC по
+# дневкам (Май 2026). Для пары без записи берётся CORRELATION_DEFAULT_BETA.
+# Это упрощение: настоящая beta плавает, но 1.0 как дефолт хорошо работает
+# для основных альтов и превращает guard в простой счётчик «сколько
+# одновременных направленных ставок».
+CORRELATION_BETA_TO_BTC = {
+    "BTCUSDT":  1.0,
+    "ETHUSDT":  1.1,
+    "SOLUSDT":  1.3,
+    "BNBUSDT":  0.9,
+    "XRPUSDT":  1.0,
+    "DOGEUSDT": 1.6,
+    "AVAXUSDT": 1.4,
+}
+CORRELATION_DEFAULT_BETA = 1.0
+# Максимальное абсолютное значение суммарной beta открытых позиций.
+# 2.0 ≈ две полностью некоррелирующих ставки или три средне-коррелирующих.
+# Поднять при росте капитала и желании держать больше параллельных позиций.
+try:
+    CORRELATION_MAX_NET_BETA = float(os.getenv("CORRELATION_MAX_NET_BETA", "2.0"))
+except (TypeError, ValueError):
+    CORRELATION_MAX_NET_BETA = 2.0
+
 # PostOnly-лимитный вход: сколько ждать filла прежде чем свалиться в market IOC.
 POST_ONLY_TIMEOUT_SEC = 30
 
@@ -229,6 +281,19 @@ BYBIT_RECV_WINDOW = "5000"
 # избытком, fallback-провайдер не требуется.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# --- Cerebras Inference (backup для LLMRouter) ---
+# OpenAI-совместимый /chat/completions endpoint. Drop-in для Groq.
+CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b")
+CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
+
+# --- Gemini (last-resort для LLMRouter) ---
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Аварийный флаг: если "1"/"true", LLMRouter ходит ТОЛЬКО в Groq и не
+# делает failover на Cerebras/Gemini. Включается через env LLM_ROUTER_DISABLED
+# когда нужно срочно изолировать поведение из-за бага в backup-провайдере.
+LLM_ROUTER_DISABLED = os.getenv("LLM_ROUTER_DISABLED", "")
 
 # --- NewsAPI ---
 NEWS_API_URL = "https://newsapi.org/v2/everything"

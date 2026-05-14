@@ -703,7 +703,7 @@ async def notify_trade_blocked_by_gate_error(
     price: float,
     error_reason: str,
 ) -> None:
-    """Push-уведомление о fail-CLOSED блокировке сделки (Groq недоступен).
+    """Push-уведомление о fail-CLOSED блокировке сделки (LLM недоступен).
 
     Отправляется ТОЛЬКО в active-режиме при gate.verdict=error.
     Встроен rate-limit: не более 1 уведомления за 5 минут на одну пару.
@@ -748,6 +748,58 @@ async def notify_trade_blocked_by_gate_error(
         await send_message(session, text, reply_markup=set_keyboard())
     except Exception as exc:  # noqa: BLE001
         print(f"[TG] ошибка notify_trade_blocked_by_gate_error: {exc}")
+
+
+async def notify_gate_degraded_on(
+    session: aiohttp.ClientSession,
+    *,
+    consecutive_errors: int,
+    last_reason: str,
+) -> None:
+    """Push-уведомление о переходе AI-Gate в degraded-режим.
+
+    Срабатывает один раз при превышении порога подряд идущих error-ответов
+    LLMRouter (все провайдеры легли). Бот временно работает как shadow:
+    логирует решения gate, но не блокирует сделки. Это лучше чем стоять
+    кирпичом и пропускать рынок, пока все 3 LLM провайдера лежат.
+    """
+    last_reason_short = (last_reason[:160] + "…") if len(last_reason) > 160 else last_reason
+    body = [
+        _label("Подряд ошибок", str(consecutive_errors)),
+        _label("Последняя", last_reason_short or "—"),
+        _subhr_line(),
+        f"{_status_dot('warn')} Gate переведён в наблюдение.",
+        "Сделки открываются без LLM-проверки",
+        "до восстановления хотя бы одного",
+        "провайдера. Уведомление придёт.",
+        _subhr_line(),
+        "Чтобы остановить торговлю — кнопка",
+        "  ⏸ ПАУЗА в главном меню.",
+    ]
+    text = _card("AI-GATE → DEGRADED (auto)", "🟡", body)
+    try:
+        await send_message(session, text, reply_markup=set_keyboard())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] ошибка notify_gate_degraded_on: {exc}")
+
+
+async def notify_gate_degraded_off(
+    session: aiohttp.ClientSession,
+    *,
+    provider: str,
+) -> None:
+    """Уведомление о выходе из degraded-режима — LLM снова отвечает."""
+    body = [
+        _label("Восстановил", str(provider) or "?"),
+        _subhr_line(),
+        f"{_status_dot('ok')} Gate снова active. Сделки",
+        "проходят полную LLM-проверку.",
+    ]
+    text = _card("AI-GATE → ACTIVE (recovered)", "🟢", body)
+    try:
+        await send_message(session, text, reply_markup=set_keyboard())
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TG] ошибка notify_gate_degraded_off: {exc}")
 
 
 async def delete_message(
