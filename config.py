@@ -200,6 +200,16 @@ BREAKER_COOLDOWN_SEC = float(os.getenv("BREAKER_COOLDOWN_SEC", "600") or 600)
 # --- Heartbeat --------------------------------------------------------
 HEARTBEAT_INTERVAL_SEC = 6 * 3600
 
+# --- Rebalancer ---
+# Раз в REBALANCE_CHECK_INTERVAL_SEC (default 1ч) бот сверяет балансы
+# USDT на всех активных биржах. Если у любой биржи отклонение от среднего
+# больше REBALANCE_THRESHOLD_PCT — присылает в Telegram список
+# рекомендованных переводов (вручную). Реальные withdraw'ы НЕ делаются.
+REBALANCE_CHECK_INTERVAL_SEC = float(os.getenv("REBALANCE_CHECK_INTERVAL_SEC", "3600") or 3600)
+REBALANCE_THRESHOLD_PCT = float(os.getenv("REBALANCE_THRESHOLD_PCT", "0.30") or 0.30)
+REBALANCE_MIN_TRANSFER_USDT = float(os.getenv("REBALANCE_MIN_TRANSFER_USDT", "50") or 50)
+REBALANCE_ALERT_COOLDOWN_SEC = float(os.getenv("REBALANCE_ALERT_COOLDOWN_SEC", "21600") or 21600)
+
 # --- Веб-дашборд ------------------------------------------------------
 DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "true").strip().lower() not in (
     "0", "false", "no", "off",

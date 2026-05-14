@@ -41,6 +41,7 @@ import dashboard
 import funding_history
 import key_manager
 import memory
+import rebalancer
 import telegram_bot
 from exchanges import get_adapter
 
@@ -516,6 +517,49 @@ async def _anomaly_tick(
     g["anomaly_alert_seen"] = seen
 
 
+# --- Tick: rebalancer (advisor) ---------------------------------------
+
+async def _rebalance_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Сверка USDT-балансов между биржами и рекомендация ручных переводов.
+
+    Работает раз в REBALANCE_CHECK_INTERVAL_SEC. Реальные withdraw'ы НЕ
+    делает — только присылает в Telegram список "переведи X с биржи A
+    на биржу B". Это сознательное MVP-решение: автоматический withdraw
+    слишком опасен.
+    """
+    g = state["global"]
+    last_epoch = float(g.get("last_rebalance_check_epoch") or 0.0)
+    interval = float(getattr(config, "REBALANCE_CHECK_INTERVAL_SEC", 3600))
+    if (time.time() - last_epoch) < interval:
+        return
+    g["last_rebalance_check_epoch"] = time.time()
+
+    active_adapters = _get_active_adapters(state)
+    if len(active_adapters) < 2:
+        # Минимум 2 биржи нужно для перевода.
+        return
+
+    # Cooldown-словарь храним прямо в global, чтобы переживал перезапуск
+    # секций кода (но не процесса — это OK, в худшем случае один лишний
+    # алерт после рестарта).
+    if "rebalance_alert_seen" not in g:
+        g["rebalance_alert_seen"] = {}
+
+    # rebalancer.check_and_alert ожидает state как dict с ключом
+    # rebalance_alert_seen на верхнем уровне. Передаём g (то есть
+    # state["global"]) — там и лежит этот ключ.
+    try:
+        await rebalancer.check_and_alert(
+            session, active_adapters, _arb_notify(session), g,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[REBAL] tick exception: {exc}")
+
+
 # --- Tick: heartbeat --------------------------------------------------
 
 async def _heartbeat_tick(
@@ -579,6 +623,7 @@ async def trading_loop(
             await _funding_scan_tick(session, state, now)
             await _arb_executor_tick(session, state, now)
             await _anomaly_tick(session, state, now)
+            await _rebalance_tick(session, state, now)
             await _heartbeat_tick(session, state, now)
         except Exception as exc:  # noqa: BLE001
             print(f"[LOOP] Верхнеуровневая ошибка: {exc}")
@@ -764,6 +809,9 @@ def _build_state() -> dict[str, Any]:
             "last_arb_exec_epoch": 0.0,
             # Heartbeat.
             "last_heartbeat_epoch": 0.0,
+            # Rebalancer (advisor).
+            "last_rebalance_check_epoch": 0.0,
+            "rebalance_alert_seen": {},
             # Disabled exchanges (toggle через TG).
             "disabled_exchanges": set(),
             # Legacy-флаги для совместимости с UI.
