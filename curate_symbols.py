@@ -325,6 +325,26 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=DEFAULT_MIN_OBS,
         help=f"Минимум наблюдений для PASS (default {DEFAULT_MIN_OBS}).",
     )
+    p.add_argument(
+        "--use-ml",
+        action="store_true",
+        help=(
+            "Использовать ML-модель curator_model.json для дополнительной "
+            "фильтрации rule-based PASS-символов."
+        ),
+    )
+    p.add_argument(
+        "--ml-model",
+        type=str,
+        default="curator_model.json",
+        help="Путь к JSON-файлу с обученной моделью (default curator_model.json).",
+    )
+    p.add_argument(
+        "--ml-threshold",
+        type=float,
+        default=0.6,
+        help="Порог P(PASS) для ML-фильтра (default 0.6).",
+    )
     return p.parse_args(argv)
 
 
@@ -354,6 +374,47 @@ def main(argv: Optional[list[str]] = None) -> int:
     pass_symbols = [s.symbol for s in results if s.verdict == "PASS"]
     n_total = len(results)
     n_pass = len(pass_symbols)
+
+    # ML-фильтр поверх rule-based PASS (опционально).
+    if getattr(args, "use_ml", False):
+        try:
+            import ml_curator
+        except ImportError as exc:
+            print(f"[CURATE] ml_curator import fail: {exc}, ML отключён.")
+        else:
+            model = ml_curator.load_model(args.ml_model)
+            if model is None:
+                print(
+                    f"[CURATE] ML-модель {args.ml_model} не найдена, "
+                    "использую только rule-based."
+                )
+            else:
+                print(
+                    f"[CURATE] Применяю ML-фильтр (threshold={args.ml_threshold})."
+                )
+                # Перезагружаем сырые rows (не агрегаты) для каждого PASS.
+                grouped = _load_per_symbol_rows(db_path, args.days)
+                ml_pass: list[str] = []
+                for s in results:
+                    if s.verdict != "PASS":
+                        continue
+                    features = ml_curator.extract_features(grouped.get(s.symbol, []))
+                    if features is None:
+                        # Слишком мало данных для ML — оставляем как есть, но
+                        # прозрачно сообщаем.
+                        print(f"  {s.symbol}: ml_features=None (мало данных)")
+                        ml_pass.append(s.symbol)
+                        continue
+                    prob = ml_curator.predict(features, model)
+                    print(f"  {s.symbol}: ml_prob={prob:.3f}")
+                    if prob >= args.ml_threshold:
+                        ml_pass.append(s.symbol)
+                # Финальные PASS = пересечение rule_pass и ml_pass.
+                for s in results:
+                    if s.verdict == "PASS" and s.symbol not in ml_pass:
+                        s.verdict = f"REJECT: ml_prob<{args.ml_threshold}"
+                pass_symbols = [s.symbol for s in results if s.verdict == "PASS"]
+                n_pass = len(pass_symbols)
 
     print(
         f"[CURATE] Проанализировано {n_total} символов за {args.days} дней. "

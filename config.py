@@ -233,6 +233,21 @@ ARB_NOTIONAL_TIER_A = float(os.getenv("ARB_NOTIONAL_TIER_A", "400") or 400)
 ARB_NOTIONAL_TIER_B = float(os.getenv("ARB_NOTIONAL_TIER_B", "200") or 200)
 ARB_NOTIONAL_TIER_C = float(os.getenv("ARB_NOTIONAL_TIER_C", "100") or 100)
 
+# --- Announcement monitoring ---
+# Раз в ANNOUNCE_CHECK_INTERVAL_SEC бот опрашивает публичные
+# announcement-эндпоинты бирж (Bybit, Binance, OKX), классифицирует
+# заголовки regex-правилами (delisting / maintenance / leverage_reduction
+# / fee_change / other) и шлёт сводный алерт в Telegram. Для критичных
+# (delisting) пары (биржа, символ) добавляются в blacklist на
+# ANNOUNCE_BLACKLIST_HOURS — пока не истечёт, evaluate_and_open будет
+# пропускать кандидатов с этой биржи и этим символом.
+ANNOUNCE_CHECK_INTERVAL_SEC = float(
+    os.getenv("ANNOUNCE_CHECK_INTERVAL_SEC", "3600") or 3600
+)
+ANNOUNCE_BLACKLIST_HOURS = float(
+    os.getenv("ANNOUNCE_BLACKLIST_HOURS", "72") or 72
+)
+
 # --- Веб-дашборд ------------------------------------------------------
 DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "true").strip().lower() not in (
     "0", "false", "no", "off",

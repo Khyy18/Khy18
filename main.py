@@ -602,6 +602,41 @@ async def _lending_tick(
         print(f"[LEND] tick exception: {exc}")
 
 
+# --- Tick: announcements ---------------------------------------------
+
+async def _announcement_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Опросить announcement-эндпоинты бирж и обновить blacklist.
+
+    Работает раз в ANNOUNCE_CHECK_INTERVAL_SEC (default 1ч). Реальной
+    торговли не делает — только классифицирует анонсы и шлёт алерт +
+    обновляет state["global"]["announcement_blacklist"]. Если хоть
+    одна нога будущего кандидата в evaluate_and_open попадёт в этот
+    blacklist, кандидат будет пропущен.
+    """
+    g = state["global"]
+    last = float(g.get("last_announcement_check_epoch") or 0.0)
+    interval = float(getattr(config, "ANNOUNCE_CHECK_INTERVAL_SEC", 3600))
+    if (time.time() - last) < interval:
+        return
+    g["last_announcement_check_epoch"] = time.time()
+
+    active_adapters = _get_active_adapters(state)
+    if not active_adapters:
+        return
+
+    try:
+        import announcement_monitor
+        await announcement_monitor.check_and_alert(
+            session, active_adapters, _arb_notify(session), g,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ANNOUNCE] tick fail: {exc}")
+
+
 # --- Tick: heartbeat --------------------------------------------------
 
 async def _heartbeat_tick(
@@ -667,6 +702,7 @@ async def trading_loop(
             await _anomaly_tick(session, state, now)
             await _rebalance_tick(session, state, now)
             await _lending_tick(session, state, now)
+            await _announcement_tick(session, state, now)
             await _heartbeat_tick(session, state, now)
         except Exception as exc:  # noqa: BLE001
             print(f"[LOOP] Верхнеуровневая ошибка: {exc}")
@@ -858,6 +894,10 @@ def _build_state() -> dict[str, Any]:
             # Lending advisor.
             "last_lending_check_epoch": 0.0,
             "lending_alert_seen": {},
+            # Announcement monitor.
+            "last_announcement_check_epoch": 0.0,
+            "seen_announcements": [],
+            "announcement_blacklist": {},
             # Disabled exchanges (toggle через TG).
             "disabled_exchanges": set(),
             # Legacy-флаги для совместимости с UI.
@@ -880,6 +920,15 @@ async def main() -> None:
     arb_storage.init_arb_db()
     funding_history.init_db()
     state = _build_state()
+
+    # Регистрируем state в singleton'е, чтобы модули типа
+    # announcement_monitor могли читать blacklist из evaluate_and_open
+    # без изменения сигнатур.
+    try:
+        import runtime_state
+        runtime_state.set_state(state)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[MAIN] runtime_state.set_state fail (не критично): {exc}")
 
     async with aiohttp.ClientSession() as session:
         print("[MAIN] Zenith Funding Arbitrage запущен")

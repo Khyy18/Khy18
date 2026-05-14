@@ -418,6 +418,21 @@ async def evaluate_and_open(
         except Exception:  # noqa: BLE001
             pass  # модуль ещё не накопил истории — пропускаем фильтр
 
+        # Blacklist по биржевым announcement'ам (delisting/maintenance).
+        # Если хоть одна нога — на бирже, у которой висит активный blacklist
+        # для этого символа, пропускаем кандидата.
+        try:
+            import runtime_state, announcement_monitor
+            state_global = runtime_state.get_state()
+            if state_global is not None:
+                if (announcement_monitor.is_blacklisted(long_ex_test, c.symbol, state_global)
+                        or announcement_monitor.is_blacklisted(short_ex_test, c.symbol, state_global)):
+                    print(f"[ARB-EXEC] {c.symbol}: blacklist по announcement, пропуск")
+                    continue
+        except Exception:  # noqa: BLE001
+            # любая ошибка импорта/чтения state — graceful, не блокируем вход
+            pass
+
         cand = c
         break
 
