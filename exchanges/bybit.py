@@ -128,3 +128,44 @@ class BybitAdapter(ExchangeAdapter):
         self, qty: float, info: dict[str, float], price: float
     ) -> float:
         return api_engine.validate_and_round_qty(qty, info, price)
+
+    async def get_funding_info(
+        self, session: Any, symbol: str
+    ) -> Optional[dict[str, Any]]:
+        """Funding rate из публичного /v5/market/tickers (linear).
+
+        Bybit отдаёт `fundingRate` (текущее значение), `nextFundingTime` (ms,
+        UTC) и `markPrice` в одном запросе. Интервал у Bybit для большинства
+        перпов 8ч; вычислять его из (next - prev) нельзя, потому что prev в
+        ответе нет. Берём фиксированно 8 - это правильно для всех ликвидных
+        BTC/ETH/SOL/...USDT на Bybit. Если позже обнаружим часовые перпы -
+        зашьём через override-словарь.
+        """
+        params = {"category": "linear", "symbol": symbol}
+        resp = await api_engine._request(
+            session, "GET", "/v5/market/tickers", params=params, auth=False
+        )
+        if not resp or resp.get("retCode") != 0:
+            if resp:
+                print(f"[BYBIT] get_funding_info({symbol}): {resp.get('retMsg')}")
+            return None
+        items = ((resp.get("result") or {}).get("list") or [])
+        if not items:
+            return None
+        item = items[0]
+        try:
+            funding_rate = float(item.get("fundingRate") or 0.0)
+            next_ts = int(item.get("nextFundingTime") or 0)
+            mark = float(item.get("markPrice") or item.get("lastPrice") or 0.0)
+        except (TypeError, ValueError) as exc:
+            print(f"[BYBIT] get_funding_info({symbol}): парс {exc}")
+            return None
+        if mark <= 0:
+            return None
+        return {
+            "symbol": symbol,
+            "funding_rate": funding_rate,
+            "next_funding_ts": next_ts,
+            "mark_price": mark,
+            "interval_hours": 8.0,
+        }

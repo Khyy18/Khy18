@@ -767,3 +767,72 @@ class OKXAdapter(ExchangeAdapter):
         if min_notional > 0 and (q_rounded_base * p) < min_notional:
             return 0.0
         return float(q_rounded_base)
+
+    # --- Funding info ---------------------------------------------------
+
+    async def get_funding_info(
+        self, session: Any, symbol: str
+    ) -> Optional[dict[str, Any]]:
+        """Funding rate из публичных эндпоинтов OKX.
+
+        Делаем два параллельных запроса:
+          - /api/v5/public/funding-rate  -> fundingRate, fundingTime,
+            nextFundingTime;
+          - /api/v5/public/mark-price    -> markPx (для оценки маржи).
+        Интервал между расчётами вычисляем из (nextFundingTime - fundingTime).
+        У OKX часть инструментов имеет 8ч интервал, часть 4ч; полагаться на
+        константу нельзя.
+
+        Возвращаем словарь в той же схеме, что Bybit-адаптер:
+            {symbol, funding_rate, next_funding_ts, mark_price, interval_hours}
+        symbol сохраняется в исходном виде (BTCUSDT), не нормализованный.
+        """
+        norm = _normalize_symbol(symbol)
+        # Параллелим, чтобы один тик сканера не растягивался.
+        fr_task = self._request(
+            session, "GET", "/api/v5/public/funding-rate",
+            params={"instId": norm}, auth=False,
+        )
+        mp_task = self._request(
+            session, "GET", "/api/v5/public/mark-price",
+            params={"instType": "SWAP", "instId": norm}, auth=False,
+        )
+        fr_resp, mp_resp = await asyncio.gather(fr_task, mp_task)
+
+        if not fr_resp or str(fr_resp.get("code")) != "0":
+            if fr_resp:
+                print(f"[OKX] get_funding_info({symbol}): {fr_resp.get('msg')}")
+            return None
+        fr_data = (fr_resp.get("data") or [])
+        if not fr_data:
+            return None
+        fr_item = fr_data[0]
+
+        try:
+            funding_rate = float(fr_item.get("fundingRate") or 0.0)
+            next_ts = int(fr_item.get("nextFundingTime") or 0)
+            cur_ts = int(fr_item.get("fundingTime") or 0)
+        except (TypeError, ValueError) as exc:
+            print(f"[OKX] get_funding_info({symbol}): парс {exc}")
+            return None
+
+        if next_ts > 0 and cur_ts > 0 and next_ts > cur_ts:
+            interval_hours = (next_ts - cur_ts) / 3_600_000.0
+        else:
+            interval_hours = 8.0  # дефолт OKX для большинства SWAP
+
+        mark = 0.0
+        if mp_resp and str(mp_resp.get("code")) == "0":
+            mp_data = mp_resp.get("data") or []
+            if mp_data:
+                mark = _safe_float(mp_data[0].get("markPx"))
+        if mark <= 0:
+            return None
+
+        return {
+            "symbol": symbol,
+            "funding_rate": funding_rate,
+            "next_funding_ts": next_ts,
+            "mark_price": mark,
+            "interval_hours": float(interval_hours),
+        }
