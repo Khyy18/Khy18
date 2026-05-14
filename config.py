@@ -14,6 +14,8 @@ BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 _TELEGRAM_CHAT_ID_RAW = os.getenv("TELEGRAM_CHAT_ID", "")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
 
@@ -109,6 +111,21 @@ HEARTBEAT_INTERVAL_SEC = 6 * 3600
 PER_SYMBOL_MAX_POSITIONS = 1        # не больше одной позиции на символ
 GLOBAL_RISK_CAP = 0.03              # суммарный открытый риск не больше 3% эквити
 
+# Correlation guard: лимит чистой направленной экспозиции в "BTC-эквиваленте".
+# Каждой открытой позиции присваивается знак (long=+1, short=-1) и
+# вес beta_to_btc (BTC=1.0, ETH=1.2, SOL=1.6 - средне-долгосрочные оценки).
+# Если новая позиция выведет |sum(signed_qty * price * beta) / equity| за
+# NET_BETA_CAP = 2.0x equity - сделка отклоняется. Это ловит сценарий
+# "три одинаково-настроенные long на коррелированных альтах": формально
+# каждая в пределах 1% риска, но в кризис они идут вместе.
+NET_BETA_CAP = 2.0
+
+# Graceful degradation: после N подряд верхнеуровневых ошибок в trading_loop
+# (вне пер-символьной защиты) бот сам ставит торговлю на паузу и шлёт алерт
+# в Telegram. Сопровождение открытых позиций продолжается, новые входы
+# блокируются до ручного снятия.
+GRACEFUL_DEGRADATION_THRESHOLD = 5
+
 # PostOnly-лимитный вход: сколько ждать filла прежде чем свалиться в market IOC.
 POST_ONLY_TIMEOUT_SEC = 30
 
@@ -129,6 +146,17 @@ BYBIT_RECV_WINDOW = "5000"
 # избытком, fallback-провайдер не требуется.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+# --- Cerebras (резервный LLM-провайдер; OpenAI-совместимый) ---
+# Бесплатный free-tier 14400 RPD. Используется только если Groq упал
+# (circuit-breaker открыт) или вернул ошибку.
+CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")
+CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
+
+# --- Gemini (последний рубеж) ---
+# Используется только если Groq и Cerebras оба недоступны. Free tier
+# у Gemini Flash - 1500 RPD, поэтому ставим в самый конец цепочки.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # --- NewsAPI ---
 NEWS_API_URL = "https://newsapi.org/v2/everything"

@@ -137,6 +137,9 @@ class BacktestEngine:
 
                 # e) Обновить last_marks и отметить equity.
                 last_marks[sym] = bar_close
+                # Funding-fee начисляется ДО mark(), чтобы equity_curve
+                # сразу отражала просадку от funding.
+                self.portfolio.accrue_funding(ts, last_marks)
                 self.portfolio.mark(ts, last_marks)
                 if self.portfolio.positions:
                     self.portfolio.in_position_bars += 1
@@ -152,6 +155,7 @@ class BacktestEngine:
             "final_equity": float(final_equity),
             "in_position_bars": int(self.portfolio.in_position_bars),
             "num_bars": int(total_bars),
+            "funding_fees_total": float(self.portfolio.funding_fees_total),
         }
 
     # --------- вспомогательные ---------

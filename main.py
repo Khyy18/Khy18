@@ -379,6 +379,210 @@ async def _regime_tick(
         )
 
 
+# --- Reconcile / Net beta / Daily PnL push / Graceful degradation --------
+
+async def _reconcile_open_positions(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+) -> None:
+    """Синхронизировать локальный state с реальными открытыми позициями биржи.
+
+    Сценарий: бот перезапустили (рестарт VPS, обновление контейнера), но на
+    бирже остались открытые позиции из прошлой сессии. Без reconcile цикл
+    решит, что позиций нет, попробует открыть новые - и нарушит риск-лимит,
+    либо оставит чужую позицию без управления (трейл/таймстоп).
+
+    Что делаем:
+      - для каждого символа спрашиваем биржу про позицию;
+      - если есть, заполняем sym_state["open_trade"] из биржевых полей,
+        чтобы _manage_open_trade подхватил трейлинг.
+      - PnL не восстанавливаем (нет источника правды для сегодняшнего якоря),
+        просто стартуем с чистого daily_pnl. Закрытие позиции после рестарта
+        потом начислит PnL через _check_closed_exchange_position.
+
+    Если биржа не отвечает - молча идём дальше, цикл и так запустится.
+    """
+    print("[RECONCILE] Сверка локального state с открытыми позициями биржи...")
+    restored = 0
+    for symbol in config.SYMBOLS:
+        try:
+            positions = await EXCHANGE.get_positions(session, symbol)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[RECONCILE] {symbol}: ошибка get_positions: {exc}")
+            continue
+        if not positions:
+            continue
+
+        pos = positions[0] if isinstance(positions, list) else positions
+        try:
+            size = float(pos.get("size") or pos.get("qty") or 0.0)
+            entry = float(pos.get("avgPrice") or pos.get("entry_price") or 0.0)
+            side_raw = str(pos.get("side") or "")
+            stop_raw = pos.get("stopLoss") or pos.get("stop_loss") or 0.0
+            stop = float(stop_raw or 0.0)
+        except (TypeError, ValueError) as exc:
+            print(f"[RECONCILE] {symbol}: парс позиции: {exc}")
+            continue
+        if size <= 0 or entry <= 0:
+            continue
+
+        # Унифицируем сторону: Bybit -> 'Buy'/'Sell', OKX -> 'long'/'short'.
+        if side_raw.lower() in ("long", "buy"):
+            side = "Buy"
+        elif side_raw.lower() in ("short", "sell"):
+            side = "Sell"
+        else:
+            print(f"[RECONCILE] {symbol}: неизвестная сторона {side_raw!r}, пропуск")
+            continue
+
+        sym_state = state["symbols"][symbol]
+        if sym_state.get("open_trade"):
+            continue  # уже знаем (вряд ли при свежем старте, но на всякий)
+
+        sym_state["open_trade"] = {
+            "id": None,  # биржевая позиция не привязана к нашему trade_id в memory
+            "side": side,
+            "entry_price": entry,
+            "qty": size,
+            # ATR на момент входа неизвестен - подменяем 0 и пересчитаем при
+            # первом тике из ATR по 1h-свечам в _manage_open_trade.
+            "atr_at_entry": 0.0,
+            "entry_ts_iso": _iso(_utc_now()),
+            "high_since_entry": entry,
+            "low_since_entry": entry,
+            "current_stop": stop or entry,
+            "reconciled": True,
+        }
+        restored += 1
+        print(
+            f"[RECONCILE] {symbol}: восстановлена позиция side={side} "
+            f"qty={size} entry={entry} stop={stop}"
+        )
+
+    if restored == 0:
+        print("[RECONCILE] Открытых позиций на бирже не найдено")
+    else:
+        print(f"[RECONCILE] Восстановлено позиций: {restored}")
+
+
+# Веса волатильности (бета относительно BTC) - используются как
+# приближённое "сколько долларов риска эквивалентно одному доллару BTC".
+# Реальная бета по 30-дневным дневным доходностям колеблется, но эти
+# значения - консервативная средне-долгосрочная оценка для крипты.
+_BETA_TO_BTC: dict[str, float] = {
+    "BTCUSDT": 1.0,
+    "ETHUSDT": 1.2,
+    "SOLUSDT": 1.6,
+}
+
+
+def _net_beta_exposure(state: dict[str, Any]) -> float:
+    """Суммарный направленный риск портфеля в "BTC-единицах".
+
+    Каждой открытой позиции присваиваем знак (long=+1, short=-1) и вес
+    beta_to_btc[symbol]. Сумма (signed_qty * entry_price * beta) / equity
+    даёт направленный leverage. CAP = 2.0 означает: суммарная "длинная
+    BTC-эквивалентная" экспозиция не должна превышать 2x equity. Это
+    защищает от наивного "купим 3 коррелированных альта на 1% риска
+    каждый" - в кризис они все падают разом и съедят 9% equity.
+
+    Для шортов знак минус, поэтому LONG BTC + SHORT ETH частично
+    компенсируют друг друга и не блокируются.
+    """
+    equity_start = float(state["global"].get("equity_start") or 0.0)
+    if equity_start <= 0:
+        return 0.0
+    total = 0.0
+    for symbol, sym_state in state["symbols"].items():
+        trade = sym_state.get("open_trade")
+        if not trade:
+            continue
+        side = str(trade.get("side") or "")
+        qty = float(trade.get("qty") or 0.0)
+        entry = float(trade.get("entry_price") or 0.0)
+        beta = float(_BETA_TO_BTC.get(symbol, 1.0))
+        sign = 1.0 if side == "Buy" else -1.0 if side == "Sell" else 0.0
+        if qty <= 0 or entry <= 0 or sign == 0.0:
+            continue
+        total += sign * qty * entry * beta
+    return abs(total) / equity_start
+
+
+async def _daily_pnl_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Раз в сутки в 00:00 UTC шлём в Telegram сводку PnL за прошедший день.
+
+    Идемпотентность: сохраняем дату последнего пуша в global.last_daily_push_date.
+    Внутри _roll_daily_weekly_anchors суточный якорь обнуляется в начале новых
+    суток, поэтому daily_pnl читаем ДО обнуления. Это значит daily_pnl_tick
+    должен запускаться ДО _roll_daily_weekly_anchors на новом дне.
+
+    Алгоритм:
+      - если час != 0 - пропуск;
+      - если последняя дата отправки == сегодняшняя дата (UTC) - пропуск;
+      - иначе формируем отчёт и шлём.
+    """
+    if now.hour != 0:
+        return
+
+    g = state["global"]
+    today_str = now.strftime("%Y-%m-%d")
+    last_pushed = g.get("last_daily_push_date")
+    if last_pushed == today_str:
+        return
+
+    daily_pnl = float(g.get("daily_pnl", 0.0) or 0.0)
+    weekly_pnl = float(g.get("weekly_pnl", 0.0) or 0.0)
+    cumulative_pnl = float(g.get("cumulative_pnl", 0.0) or 0.0)
+    equity_start = float(g.get("equity_start") or 0.0)
+    proxy_equity = equity_start + cumulative_pnl
+
+    # Сделок за сутки - по записям в memory (если доступно).
+    trades_today = 0
+    wins = 0
+    try:
+        recent = memory.get_trades_since(2) or []
+        target_date = (now - timedelta(days=1)).date()
+        for tr in recent:
+            ts_str = tr.get("entry_time") or tr.get("ts") or ""
+            if not ts_str:
+                continue
+            ts = _from_iso(str(ts_str))
+            if ts is None:
+                continue
+            if ts.date() == target_date:
+                trades_today += 1
+                if (tr.get("outcome") or "").upper() == "WIN":
+                    wins += 1
+    except Exception as exc:  # noqa: BLE001
+        print(f"[DAILY] Не удалось посчитать сделки за сутки: {exc}")
+
+    arrow = "▲" if daily_pnl > 0 else "▼" if daily_pnl < 0 else "•"
+    pct = (daily_pnl / equity_start * 100) if equity_start > 0 else 0.0
+    text = (
+        "🌅 <b>Итоги дня</b>\n"
+        f"Дата (UTC): {(now - timedelta(days=1)).strftime('%Y-%m-%d')}\n"
+        f"Суточный PnL: {arrow} {daily_pnl:+.4f} USDT ({pct:+.2f}%)\n"
+        f"Недельный PnL: {weekly_pnl:+.4f} USDT\n"
+        f"Кумулятивный PnL: {cumulative_pnl:+.4f} USDT\n"
+        f"Эквити (proxy): {proxy_equity:.2f} USDT\n"
+        f"Сделок за день: {trades_today} (winrate {(wins / trades_today * 100) if trades_today else 0:.0f}%)"
+    )
+
+    try:
+        await telegram_bot.send_message(
+            session, text, reply_markup=telegram_bot.set_keyboard()
+        )
+        print(f"[DAILY] Сводка за {today_str} отправлена в Telegram")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[DAILY] Ошибка отправки сводки: {exc}")
+
+    g["last_daily_push_date"] = today_str
+
+
 async def _heartbeat_tick(
     session: aiohttp.ClientSession,
     state: dict[str, Any],
@@ -855,6 +1059,46 @@ async def _process_symbol(
         )
         return
 
+    # Correlation guard: считаем суммарную направленную BTC-эквивалентную
+    # экспозицию С УЧЁТОМ предполагаемой новой позиции. Это ловит сценарий
+    # "три одинаково настроенные long на BTC/ETH/SOL по 1% риска" - они
+    # коррелированы, в кризис идут в одну сторону и фактический риск >> 3%.
+    beta_cap = float(getattr(config, "NET_BETA_CAP", 2.0))
+    side_sign = 1.0 if str(order["side"]) == "Buy" else -1.0
+    proposed_beta = float(_BETA_TO_BTC.get(symbol, 1.0))
+    proposed_notional = (
+        float(order["limit_price"]) * float(order["qty"]) * proposed_beta * side_sign
+    )
+    # Текущая чистая (со знаком) экспозиция:
+    current_signed = 0.0
+    for s, sym_st in state["symbols"].items():
+        tr = sym_st.get("open_trade")
+        if not tr:
+            continue
+        sd = str(tr.get("side") or "")
+        qty_t = float(tr.get("qty") or 0.0)
+        ent = float(tr.get("entry_price") or 0.0)
+        b = float(_BETA_TO_BTC.get(s, 1.0))
+        sg = 1.0 if sd == "Buy" else -1.0 if sd == "Sell" else 0.0
+        if qty_t > 0 and ent > 0 and sg != 0.0:
+            current_signed += sg * qty_t * ent * b
+    new_net_exposure = abs(current_signed + proposed_notional) / max(equity_start, 1.0)
+    if new_net_exposure > beta_cap:
+        print(
+            f"[LOOP] {symbol}: net beta cap превышен "
+            f"({new_net_exposure:.2f}x > {beta_cap:.2f}x), пропуск"
+        )
+        try:
+            memory.record_rejected_check(
+                symbol,
+                "net_beta_cap",
+                f"net_exposure={new_net_exposure:.2f}x > cap={beta_cap:.2f}x",
+                {"net_exposure": new_net_exposure, "cap": beta_cap},
+            )
+        except Exception:
+            pass
+        return
+
     # Биржевые фильтры.
     try:
         info = await EXCHANGE.get_instrument_info(session, symbol)
@@ -966,9 +1210,14 @@ async def trading_loop(
     session: aiohttp.ClientSession,
 ) -> None:
     print("[LOOP] Торговый цикл v2 запущен")
+    consecutive_errors = 0
+    error_threshold = int(getattr(config, "GRACEFUL_DEGRADATION_THRESHOLD", 5))
     while True:
         try:
             now = _utc_now()
+            # Daily push идёт ДО ротации якорей: после ротации daily_pnl=0
+            # и сводка станет бессмысленной.
+            await _daily_pnl_tick(session, state, now)
             _roll_daily_weekly_anchors(state, now)
             _reset_kill_switches_if_due(state, now)
             await _hourly_macro_tick(session, state, now)
@@ -983,10 +1232,48 @@ async def trading_loop(
             await _apply_kill_switches(session, state, now)
             await _heartbeat_tick(session, state, now)
             await _weekly_postmortem_tick(session, state, now)
+
+            # Тик прошёл без верхнеуровневой ошибки - сбрасываем счётчик.
+            if consecutive_errors > 0:
+                print(f"[LOOP] Восстановление после {consecutive_errors} ошибок")
+                consecutive_errors = 0
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            print(f"[LOOP] Транзиентная ошибка тика: {exc}")
+            consecutive_errors += 1
+            print(
+                f"[LOOP] Транзиентная ошибка тика "
+                f"({consecutive_errors}/{error_threshold}): {exc}"
+            )
+            # Graceful degradation: после N подряд верхнеуровневых ошибок
+            # ставим бот на паузу, чтобы не наплодить мусора в memory и
+            # не отправить ордер по неполным данным. Снять можно из Telegram.
+            if (
+                consecutive_errors >= error_threshold
+                and state["global"].get("bot_running", True)
+            ):
+                state["global"]["bot_running"] = False
+                state["global"]["degraded"] = True
+                state["global"]["degraded_reason"] = str(exc)[:200]
+                print(
+                    f"[LOOP] GRACEFUL DEGRADATION: {consecutive_errors} ошибок подряд, "
+                    "торговля поставлена на паузу"
+                )
+                try:
+                    await telegram_bot.send_message(
+                        session,
+                        (
+                            "⚠️ <b>Graceful degradation</b>\n"
+                            f"{consecutive_errors} ошибок подряд в trading_loop, "
+                            "торговля поставлена на паузу.\n"
+                            f"Последняя ошибка: <code>{str(exc)[:200]}</code>\n\n"
+                            "Сопровождение открытых позиций продолжается. "
+                            "Снять паузу - кнопка ▶️ в меню."
+                        ),
+                        reply_markup=telegram_bot.set_keyboard(),
+                    )
+                except Exception as nexc:  # noqa: BLE001
+                    print(f"[LOOP] Не удалось отправить алерт degradation: {nexc}")
 
         await asyncio.sleep(TICK_SECONDS)
 
@@ -1029,6 +1316,9 @@ def _build_state() -> dict[str, Any]:
             "last_macro_check_epoch": 0.0,
             "last_postmortem_iso_week": None,
             "last_heartbeat_epoch": 0.0,
+            "last_daily_push_date": None,
+            "degraded": False,
+            "degraded_reason": "",
             "rejection_ring": collections.deque(maxlen=50),
         },
         "instruments": {},
@@ -1084,6 +1374,14 @@ async def main() -> None:
                 print(f"[MAIN] instrument_info_cached({symbol}) сбой: {exc}")
             if info is not None:
                 state["instruments"][symbol] = info
+
+        # Reconcile: подхватить открытые позиции, оставшиеся с прошлой
+        # сессии (рестарт VPS, обновление контейнера). Если biржа лежит -
+        # просто стартуем без восстановления, ничего критичного.
+        try:
+            await _reconcile_open_positions(session, state)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[MAIN] Ошибка reconcile (не критично): {exc}")
 
         print("[MAIN] Telegram-бот запущен в режиме Long Polling")
         await telegram_bot.send_message(

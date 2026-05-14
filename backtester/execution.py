@@ -39,12 +39,14 @@ class ExecutionSimulator:
         tick_size: float,
         ts: int,
     ) -> Optional[dict]:
-        """Market-открытие: taker, 1 тик проскальзывания в «плохую» сторону."""
+        """Market-открытие: taker, 1 тик + N bps проскальзывания в "плохую" сторону."""
         side = order["side"]
         qty = float(order["qty"])
         if qty <= 0:
             return None
-        slip = self.config.market_slippage_ticks * float(tick_size or 0.0)
+        slip_ticks = self.config.market_slippage_ticks * float(tick_size or 0.0)
+        slip_bps = float(ref_price) * float(self.config.market_slippage_bps) / 10000.0
+        slip = slip_ticks + slip_bps
         if side == "Buy":
             fill_price = float(ref_price) + slip
         else:
@@ -146,8 +148,10 @@ class ExecutionSimulator:
         ts: int,
         reason: str,
     ) -> dict:
-        """Market-закрытие: taker, 1 тик проскальзывания в «плохую» сторону."""
-        slip = self.config.market_slippage_ticks * float(tick_size or 0.0)
+        """Market-закрытие: taker, 1 тик + N bps проскальзывания в "плохую" сторону."""
+        slip_ticks = self.config.market_slippage_ticks * float(tick_size or 0.0)
+        slip_bps = float(ref_price) * float(self.config.market_slippage_bps) / 10000.0
+        slip = slip_ticks + slip_bps
         # Для LONG закрываемся Sell-ом (цена хуже = ref-slip). Для SHORT -
         # Buy-ом (цена хуже = ref+slip).
         if position.side == "Buy":

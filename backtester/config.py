@@ -22,6 +22,24 @@ TAKER_FEE: float = 0.00055   # 0.055 %
 MAKER_FEE: float = 0.00020   # 0.020 %
 MARKET_SLIPPAGE_TICKS: int = 1
 
+# Дополнительный slippage для market-ордеров в bps от цены. На liquid-парах
+# Bybit/OKX 1 тик = 0.0001% от цены - это нереалистично мало для market.
+# Реальный edge teryaitsya бывает 1-5 bps в зависимости от размера ордера и
+# мгновенной ликвидности. Берём 2 bps (0.02%) как консервативное среднее
+# для размеров до $1000 на BTC/ETH/SOL.
+MARKET_SLIPPAGE_BPS: float = 2.0
+
+# Funding-фи Bybit/OKX linear-perp: примерно ±0.01% каждые 8 часов
+# (UTC 00:00, 08:00, 16:00). Знак зависит от стороны: long платит при
+# положительном funding, short получает; при отрицательном наоборот.
+# Усреднённое за длинные периоды значение - близко к нулю, но в HONEST-режиме
+# мы списываем абсолютное значение в обе стороны: симулируем "среднюю
+# плату за плечо" 0.01% / 8ч ~= 0.03% в сутки ~= 11% в год. Для шортов
+# это завышенная оценка костов, но именно так backtest становится
+# консервативным и не выдаёт фантомного PnL за счёт удержания позиции.
+FUNDING_RATE_PER_8H: float = 0.0001       # 0.01 % каждые 8 часов
+FUNDING_INTERVAL_MS: int = 8 * 60 * 60 * 1000
+
 # Шаг цены (tickSize) по умолчанию для основных инструментов.
 # Реальные значения берутся из Bybit V5 /v5/market/instruments-info; здесь
 # задано лишь для оффлайнового бэктеста, чтобы не ходить в сеть.
@@ -82,6 +100,10 @@ class BacktesterConfig:
     taker_fee: float = TAKER_FEE
     maker_fee: float = MAKER_FEE
     market_slippage_ticks: int = MARKET_SLIPPAGE_TICKS
+    market_slippage_bps: float = MARKET_SLIPPAGE_BPS
+    funding_rate_per_8h: float = FUNDING_RATE_PER_8H
+    funding_interval_ms: int = FUNDING_INTERVAL_MS
+    apply_funding: bool = True
     risk_per_trade: float = _RISK_PER_TRADE_DEFAULT
     global_risk_cap: float = _GLOBAL_RISK_CAP_DEFAULT
     per_symbol_max_positions: int = 1

@@ -32,6 +32,10 @@ class Position:
     high_since_entry: float
     low_since_entry: float
     meta: dict = field(default_factory=dict)
+    # Метка последнего применённого funding (мс). Используется в
+    # accrue_funding чтобы не списать funding дважды на одной свече и
+    # пропускать пропущенные интервалы при разрывах данных.
+    last_funding_ts: int = 0
 
 
 class Portfolio:
@@ -46,6 +50,10 @@ class Portfolio:
         self.closed_trades: List[dict] = []
         self.hwm: float = float(initial_equity)
         self.in_position_bars: int = 0
+        # Сколько суммарно списано в качестве funding fee за прогон. Полезно
+        # для метрик "честного" PnL и для отчёта, насколько сильно funding
+        # съел edge стратегии.
+        self.funding_fees_total: float = 0.0
 
     # ---------- вспомогательные методы ----------
 
@@ -99,6 +107,42 @@ class Portfolio:
         )
         self.positions[symbol] = pos
         return pos
+
+    def accrue_funding(self, ts: int, marks: Dict[str, float]) -> float:
+        """Списать funding fee на всех открытых позициях, если прошёл интервал.
+
+        Возвращает суммарный списанный funding (в USDT) за этот вызов.
+        В honest-режиме списываем абсолютное значение независимо от стороны:
+          fee_per_event = |qty * mark_price * funding_rate|
+
+        Это завышает косты для шортов в "long-favored" фазах и занижает в
+        "short-favored", но в среднем дёт консервативную оценку. Без funding
+        стратегии с длинным holding выглядят значительно прибыльнее, чем
+        они есть на самом деле.
+        """
+        if not getattr(self.config, "apply_funding", False):
+            return 0.0
+        rate = float(getattr(self.config, "funding_rate_per_8h", 0.0) or 0.0)
+        interval = int(getattr(self.config, "funding_interval_ms", 0) or 0)
+        if rate <= 0 or interval <= 0:
+            return 0.0
+        ts_int = int(ts)
+        total_fee = 0.0
+        for sym, pos in self.positions.items():
+            anchor = pos.last_funding_ts or pos.entry_ts
+            elapsed_ms = ts_int - int(anchor)
+            if elapsed_ms < interval:
+                continue
+            n_events = elapsed_ms // interval
+            mark_price = float(marks.get(sym, pos.entry_price))
+            fee = abs(pos.qty * mark_price) * rate * n_events
+            self.cash -= fee
+            self.funding_fees_total += fee
+            total_fee += fee
+            # Сдвигаем якорь точно на n_events интервалов, чтобы не копить
+            # дрейф из-за того что бары приходят не ровно в funding-моменты.
+            pos.last_funding_ts = int(anchor) + n_events * interval
+        return total_fee
 
     def close_position(
         self,
