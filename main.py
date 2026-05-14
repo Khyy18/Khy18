@@ -34,6 +34,8 @@ import ai_macro_sentinel
 import ai_postmortem
 import ai_regime
 import api_engine  # noqa: F401  # legacy shim, поддерживается для совместимости
+import arb_executor
+import arb_storage
 import arbitrage_engine
 import beta_estimator
 import config
@@ -892,6 +894,99 @@ async def _funding_scan_tick(
         print(f"[ARB] Funding-алертов отправлено: {sent}")
 
 
+async def _arb_executor_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Executor funding-арбитража (Фаза 3).
+
+    На каждый тик:
+      1. Если активной позиции нет и executor включён - проверяем кандидата
+         на открытие (cross_exchange_pairs выше порога).
+      2. Если активная есть - обновляем funding_received оценочно и решаем,
+         не пора ли закрыть (edge_decay / timestop / global kill).
+
+    Вся работа с биржей - через адаптеры из _FUNDING_ADAPTERS. Если они
+    пустые - тик молча выходит. Если нет свежего snapshot - тоже выход
+    (executor-у нечего считать без данных).
+    """
+    g = state["global"]
+    last_epoch = float(g.get("last_arb_exec_epoch") or 0.0)
+    interval = float(getattr(config, "ARB_TICK_INTERVAL_SEC", 300))
+    if (time.time() - last_epoch) < interval:
+        return
+    g["last_arb_exec_epoch"] = time.time()
+
+    if not _FUNDING_ADAPTERS:
+        return
+    snapshots = g.get("funding_snapshot")
+    if not snapshots:
+        return
+
+    # Глобальные kill-switches должны останавливать executor превентивно.
+    ks = str(g.get("kill_switch_state") or "NONE")
+    if ks != "NONE":
+        # Если у нас открыта позиция и сработал kill - попробуем закрыть.
+        # _force_close уважает все статусы.
+        active = arb_storage.get_active()
+        if active:
+            await arb_executor._force_close(
+                session,
+                _FUNDING_ADAPTERS,
+                active,
+                f"global_kill_switch={ks}",
+                _arb_notify(session),
+            )
+        return
+
+    # Сначала monitoring (закрытие, если пора).
+    try:
+        closed = await arb_executor.monitor_and_maybe_close(
+            session, _FUNDING_ADAPTERS, snapshots, _arb_notify(session)
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB-EXEC] monitor exception: {exc}")
+        closed = False
+
+    # Учёт funding-выплат (для активной открытой пары).
+    try:
+        await arb_executor.reconcile_funding_payments(
+            session, _FUNDING_ADAPTERS, snapshots
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB-EXEC] reconcile_funding exception: {exc}")
+
+    # Если сейчас закрыли - в этот же тик НЕ открываем новую (даём
+    # данным обновиться в следующем funding_scan_tick).
+    if closed:
+        return
+
+    # Открытие, если активной нет.
+    active = arb_storage.get_active()
+    if active:
+        return
+    try:
+        await arb_executor.evaluate_and_open(
+            session, _FUNDING_ADAPTERS, snapshots, _arb_notify(session)
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB-EXEC] open exception: {exc}")
+
+
+def _arb_notify(session: aiohttp.ClientSession):
+    """Адаптер: возвращает async callable, отправляющую текст в Telegram
+    через telegram_bot.send_message с дефолтной клавиатурой."""
+    async def _notify(text: str) -> None:
+        try:
+            await telegram_bot.send_message(
+                session, text, reply_markup=telegram_bot.set_keyboard()
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ARB-EXEC] notify fail: {exc}")
+    return _notify
+
+
 async def _weekly_postmortem_tick(
     session: aiohttp.ClientSession,
     state: dict[str, Any],
@@ -1468,6 +1563,7 @@ async def trading_loop(
             await _try_recover_from_degradation(session, state)
             await _heartbeat_tick(session, state, now)
             await _funding_scan_tick(session, state, now)
+            await _arb_executor_tick(session, state, now)
             await _weekly_postmortem_tick(session, state, now)
 
             # Тик прошёл без верхнеуровневой ошибки - сбрасываем счётчик.
@@ -1568,6 +1664,8 @@ def _build_state() -> dict[str, Any]:
             "funding_snapshot": None,
             "last_funding_scan_epoch": 0.0,
             "funding_alert_seen": {},
+            # Arb executor (Фаза 3).
+            "last_arb_exec_epoch": 0.0,
         },
         "instruments": {},
     }
@@ -1584,6 +1682,7 @@ async def main() -> None:
         return
 
     memory.init_db()
+    arb_storage.init_arb_db()
     state = _build_state()
 
     async with aiohttp.ClientSession() as session:

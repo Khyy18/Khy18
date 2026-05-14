@@ -35,6 +35,7 @@ import aiohttp
 import ai_analyst
 import ai_postmortem
 import api_engine  # noqa: F401  # legacy shim
+import arb_executor
 import arbitrage_engine
 import config
 import memory
@@ -638,6 +639,7 @@ async def _process_message(
                 "Доп. команды:\n"
                 "<code>/arb</code> или <code>/funding</code> — funding rate "
                 "по биржам (read-only сканер)\n"
+                "<code>/arb_status</code> — состояние executor'а funding-арбитража\n"
                 "<code>/status</code> — короткая статистика\n"
                 "<code>/resume_kill_switch</code> — снять MDD"
             ),
@@ -671,6 +673,13 @@ async def _process_message(
         await send_message(
             session,
             "Меню ниже.",
+            reply_markup=set_keyboard(),
+        )
+        return
+    if lowered == "/arb_status":
+        await send_message(
+            session,
+            arb_executor.format_status(),
             reply_markup=set_keyboard(),
         )
         return
