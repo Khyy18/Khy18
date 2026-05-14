@@ -56,3 +56,18 @@ python main.py
 ## Дашборд
 
 `http://<host>:8080/` — статус бота, активные пары, funding-снапшот, история закрытий.
+
+
+## Walk-forward оптимизация
+
+Бот накапливает funding-снапшоты в SQLite (`funding_snapshots`) каждые 5 минут. Скрипт `optimize.py` по этой истории подбирает оптимальные пороги входа/выхода и максимальное время удержания пары через brute-force grid-search:
+
+```bash
+# Подобрать оптимальные пороги по истории за 30 дней:
+python3 optimize.py --days 30 --min-trades 20
+
+# Сохранить лучшие в .env.optimized:
+python3 optimize.py --days 30 --save-best .env.optimized
+```
+
+Сетка перебора: `open_threshold` ∈ {10, 15, 20, 25, 30}% APR, `close_threshold` ∈ {2, 5, 8, 10}% APR, `max_hold_hours` ∈ {48, 96, 168, 240}. Метрики на каждое комбо: `n_trades`, `total_pnl`, `mean_pnl_per_trade`, `win_rate`, `sharpe_proxy = mean/stdev`, `max_drawdown`. Результаты сортируются по sharpe и выводятся таблицей. Для оптимизации нужно ≥ 100 снапшотов в БД (≈ неделя работы бота).
