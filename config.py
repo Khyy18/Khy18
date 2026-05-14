@@ -174,6 +174,11 @@ ARB_OPEN_TIMEOUT_SEC = float(os.getenv("ARB_OPEN_TIMEOUT_SEC", "12") or 12)
 # в bps на каждой бирже. 15 bps = 0.15%. Если шире — пропускаем кандидата.
 ARB_MAX_SPREAD_BPS = float(os.getenv("ARB_MAX_SPREAD_BPS", "15") or 15)
 
+# Резерв на slippage при market-fallback и round-down к qtyStep.
+# 0.001 = -0.1% от целевого qty, чтобы реальный fill ушёл в пределах
+# margin_required и не вызвал rejected на одной из ног.
+ARB_SLIPPAGE_BUFFER = float(os.getenv("ARB_SLIPPAGE_BUFFER", "0.001") or 0.001)
+
 # Pre-funding bonus: окно (минуты) до next_funding_ts на SHORT-ноге.
 # Если funding-tick близко — кандидат получает бонус ×1.0..1.5 к скору.
 ARB_PREFUNDING_BONUS_WINDOW_MIN = float(

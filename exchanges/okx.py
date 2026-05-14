@@ -836,3 +836,59 @@ class OKXAdapter(ExchangeAdapter):
             "mark_price": mark,
             "interval_hours": float(interval_hours),
         }
+
+    # --- Funding history (honest PnL accounting) ------------------------
+
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты с OKX через /v5/account/bills.
+
+        Endpoint: GET /api/v5/account/bills?instType=SWAP&type=8&subType=173
+        type=8  — funding fee bucket; subType=173 — funding income (positive
+        если получили, negative если заплатили). Параметр `begin` (ms) —
+        отсечка по времени, лента возвращается за последние 7 дней.
+
+        Возвращает list[{"symbol": str, "ts": int_ms, "funding": float}].
+        Symbol сохраняется в исходном виде (BTCUSDT), не нормализованный.
+        При любой ошибке возвращает [] — fallback в executor сработает на
+        аналитическую оценку.
+        """
+        norm = _normalize_symbol(symbol)
+        params: dict[str, Any] = {
+            "instType": "SWAP",
+            "instId": norm,
+            "type": "8",
+            "subType": "173",
+            "limit": str(max(1, min(100, int(limit)))),
+        }
+        if since_ms is not None and since_ms > 0:
+            params["begin"] = str(int(since_ms))
+        resp = await self._request(
+            session, "GET", "/api/v5/account/bills", params=params, auth=True,
+        )
+        if not resp or str(resp.get("code")) != "0":
+            if resp:
+                print(f"[OKX] get_funding_history({symbol}): {resp.get('msg')}")
+            return []
+        data = resp.get("data") or []
+        out: list[dict[str, Any]] = []
+        for item in data:
+            try:
+                ts = int(item.get("ts") or 0)
+                # OKX отдаёт funding в поле pnl (со знаком).
+                funding = float(item.get("pnl") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "symbol": symbol,  # отдаём исходный символ, не нормализованный
+                "ts": ts,
+                "funding": funding,
+            })
+        return out

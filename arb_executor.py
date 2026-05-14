@@ -65,11 +65,12 @@ def _compute_qty_base(
     short_info: dict[str, Any],
     long_adapter: Any,
     short_adapter: Any,
+    slippage_buffer: Optional[float] = None,
 ) -> float:
     """Определить qty в базовой валюте, валидное на ОБЕИХ биржах.
 
     Алгоритм:
-      qty_target = notional / mark_price
+      qty_target = notional / mark_price * (1 - slippage_buffer)
       q_long = long_adapter.validate_and_round_qty(qty_target, long_info, mark)
       q_short = short_adapter.validate_and_round_qty(qty_target, short_info, mark)
       qty_final = min(q_long, q_short)
@@ -77,11 +78,22 @@ def _compute_qty_base(
     Берём минимум, чтобы оба адаптера приняли заявку без округления вниз
     на одной из сторон (иначе получим не дельта-нейтрально).
 
+    slippage_buffer (доля от 0 до 1, например 0.001 = 0.1%) — резерв на
+    slippage при PostOnly→Market IOC fallback и округление вниз к qtyStep.
+    Уменьшаем qty_target ДО валидации, чтобы реальный fill точно
+    уложился в margin_required и не вызвал rejected на одной из ног.
+    Если None — берём из config.ARB_SLIPPAGE_BUFFER (дефолт 0.001).
+
     Возвращает 0.0 если хотя бы один адаптер сказал "0" - не торгуем.
     """
     if mark_price <= 0:
         return 0.0
-    qty_target = notional_usdt / mark_price
+    if slippage_buffer is None:
+        slippage_buffer = float(getattr(config, "ARB_SLIPPAGE_BUFFER", 0.001) or 0.0)
+    # Защита от мусорных значений (отрицательных или >=1).
+    if slippage_buffer < 0 or slippage_buffer >= 1:
+        slippage_buffer = 0.0
+    qty_target = (notional_usdt / mark_price) * (1.0 - slippage_buffer)
 
     try:
         q_long = float(

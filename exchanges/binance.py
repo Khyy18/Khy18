@@ -436,6 +436,55 @@ class BinanceAdapter(ExchangeAdapter):
             "interval_hours": 8.0,  # Binance USDS-M: фиксированный 8h интервал
         }
 
+    async def get_funding_history(
+        self,
+        session: Any,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Реальные funding-выплаты с Binance USDS-M futures.
+
+        Endpoint: GET /fapi/v1/income?incomeType=FUNDING_FEE&symbol={symbol}
+        Параметры: startTime (ms), limit (до 1000).
+
+        Возвращает list[{"symbol": str, "ts": int_ms, "funding": float}].
+        Поле income — funding amount со знаком (положительное если получили,
+        отрицательное если заплатили). При любой ошибке возвращает []
+        — fallback в executor сработает на аналитическую оценку.
+        """
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "incomeType": "FUNDING_FEE",
+            "limit": max(1, min(1000, int(limit))),
+        }
+        if since_ms is not None and since_ms > 0:
+            params["startTime"] = int(since_ms)
+        resp = await self._get(session, "/fapi/v1/income", params, signed=True)
+        if not isinstance(resp, list):
+            # Ошибка от биржи приходит как dict {"code": ..., "msg": ...}.
+            if isinstance(resp, dict):
+                print(
+                    f"[BINANCE] get_funding_history({symbol}): "
+                    f"{resp.get('msg') or resp}"
+                )
+            return []
+        out: list[dict[str, Any]] = []
+        for item in resp:
+            try:
+                ts = int(item.get("time") or 0)
+                funding = float(item.get("income") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if ts <= 0:
+                continue
+            out.append({
+                "symbol": item.get("symbol") or symbol,
+                "ts": ts,
+                "funding": funding,
+            })
+        return out
+
 
 def _round_to_tick(price: float, tick: float) -> float:
     if tick <= 0:

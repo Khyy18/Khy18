@@ -587,6 +587,151 @@ async def trading_loop(
 
 # --- State / startup --------------------------------------------------
 
+async def _reconcile_arb_positions(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+) -> None:
+    """Сверка локальной БД активных арб-пар с реальными позициями на биржах.
+
+    Вызывается ОДИН раз на старте бота, перед запуском trading_loop.
+    Проверяем для каждой OPEN/CLOSING пары:
+      - LONG-нога присутствует на long_exchange со стороной Buy
+      - SHORT-нога присутствует на short_exchange со стороной Sell
+      - размер qty совпадает с qty_base из БД (допуск 1%)
+
+    Если позиция в БД есть, а на бирже её НЕТ — отмечаем mark_failed
+    с reason 'position_missing_on_exchange:{ex}' и шлём алерт.
+    Если qty не совпало — алерт-warning, без mark_failed (могла быть
+    частичная заливка или закрытие в обход бота).
+
+    Ошибки сети/адаптера ловим, не валим запуск бота. Если адаптер
+    биржи отсутствует (например, не настроен ключ) — пропускаем такую
+    пару с предупреждением в лог.
+    """
+    try:
+        active = arb_storage.get_all_active() or []
+    except Exception as exc:  # noqa: BLE001
+        print(f"[RECONCILE] arb_storage.get_all_active fail: {exc}")
+        return
+
+    if not active:
+        print("[RECONCILE] Активных пар в БД нет, сверка не нужна")
+        return
+
+    print(f"[RECONCILE] Сверяем {len(active)} активных пар с биржами")
+    ok_count = 0
+    missing_count = 0
+    mismatch_count = 0
+    qty_tolerance = 0.01  # 1%
+
+    for pos in active:
+        try:
+            arb_id = int(pos.get("id") or 0)
+            symbol = str(pos.get("symbol") or "")
+            qty_db = float(pos.get("qty_base") or 0.0)
+            long_ex = str(pos.get("long_exchange") or "").lower()
+            short_ex = str(pos.get("short_exchange") or "").lower()
+        except (TypeError, ValueError) as exc:
+            print(f"[RECONCILE] невалидная запись: {exc}, skip")
+            continue
+
+        # Каждую ногу сверяем независимо. Если хоть одна не нашлась —
+        # пара считается рассинхронизированной.
+        for leg_label, ex_name, expected_side in (
+            ("LONG", long_ex, "Buy"),
+            ("SHORT", short_ex, "Sell"),
+        ):
+            adapter = _FUNDING_ADAPTERS.get(ex_name)
+            if adapter is None:
+                print(
+                    f"[RECONCILE] arb#{arb_id} {symbol} {leg_label}@{ex_name}: "
+                    f"адаптер не настроен, пропуск"
+                )
+                continue
+
+            try:
+                positions_on_ex = await adapter.get_positions(session, symbol)
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[RECONCILE] arb#{arb_id} {symbol} {leg_label}@{ex_name}: "
+                    f"get_positions fail: {exc}"
+                )
+                continue
+
+            # Ищем ногу нужной стороны (Buy для LONG, Sell для SHORT).
+            matched = None
+            for p in positions_on_ex or []:
+                if str(p.get("side") or "") == expected_side:
+                    try:
+                        size = float(p.get("size") or 0.0)
+                    except (TypeError, ValueError):
+                        size = 0.0
+                    if size > 0:
+                        matched = p
+                        break
+
+            if matched is None:
+                missing_count += 1
+                reason = f"position_missing_on_exchange:{ex_name}"
+                print(
+                    f"[RECONCILE] arb#{arb_id} {symbol} {leg_label}@{ex_name}: "
+                    f"позиции на бирже НЕТ — mark_failed"
+                )
+                try:
+                    arb_storage.mark_failed(arb_id, reason)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[RECONCILE] mark_failed fail: {exc}")
+                try:
+                    await telegram_bot.send_message(
+                        session,
+                        (
+                            f"🚨 <b>RECONCILE</b> arb#{arb_id} {symbol}\n"
+                            f"{leg_label}@{ex_name}: позиции на бирже не найдено.\n"
+                            f"Помечаю в БД как FAILED ({reason}). "
+                            f"Проверьте вручную."
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[RECONCILE] telegram alert fail: {exc}")
+                # Дальше эту пару не проверяем — уже FAILED.
+                break
+
+            # Нога есть — сверяем qty.
+            try:
+                size = float(matched.get("size") or 0.0)
+            except (TypeError, ValueError):
+                size = 0.0
+            if qty_db > 0 and size > 0:
+                diff = abs(size - qty_db) / qty_db
+                if diff > qty_tolerance:
+                    mismatch_count += 1
+                    msg = (
+                        f"arb#{arb_id} {symbol} {leg_label}@{ex_name}: "
+                        f"qty mismatch БД={qty_db} биржа={size} "
+                        f"(diff={diff*100:.2f}%)"
+                    )
+                    print(f"[RECONCILE] WARNING {msg}")
+                    try:
+                        await telegram_bot.send_message(
+                            session,
+                            (
+                                f"⚠️ <b>RECONCILE warning</b>\n{msg}\n"
+                                f"Возможен частичный fill или внеплановое закрытие."
+                            ),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[RECONCILE] telegram warn fail: {exc}")
+                else:
+                    ok_count += 1
+            else:
+                ok_count += 1
+
+    print(
+        f"[RECONCILE] Готово: OK ног={ok_count}, missing={missing_count}, "
+        f"qty-mismatch={mismatch_count}"
+    )
+
+
 def _build_state() -> dict[str, Any]:
     return {
         # symbols: пустой словарь. Funding-only бот не торгует по символам
@@ -649,6 +794,14 @@ async def main() -> None:
             f"[MAIN] Executor: "
             f"{'ON' if getattr(config, 'ARB_EXECUTOR_ENABLED', False) else 'OFF (read-only)'}"
         )
+
+        # Сверка локальной БД и реальных позиций на биржах. Делается ОДИН
+        # раз перед стартом trading_loop, чтобы не оставить ноги без
+        # управления, если SQLite потерялась/разошлась с биржей.
+        try:
+            await _reconcile_arb_positions(session, state)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[RECONCILE] Верхнеуровневая ошибка, игнорируем: {exc}")
 
         await asyncio.gather(
             trading_loop(state, session),
