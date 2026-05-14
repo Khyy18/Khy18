@@ -1,4 +1,4 @@
-"""Telegram-терминал для Zenith-Control Ultimate v2.
+"""Telegram-терминал для Zenith-Control Ultimate v2 (Funding Arbitrage).
 
 Long polling через aiohttp напрямую (без python-telegram-bot).
 СТРОГО: каждое сообщение и callback_query, у которого from.id или chat.id
@@ -6,12 +6,12 @@ Long polling через aiohttp напрямую (без python-telegram-bot).
 пользователя отвечаем answerCallbackQuery с текстом «Доступ запрещён»,
 но ничего в системе не меняем.
 
-Десять inline-кнопок:
+Восемь inline-кнопок (4 строки × 2):
   ▶️ СТАРТ, ⏸ СТОП,
   📊 СТАТИСТИКА, 📂 ПОЗИЦИИ,
-  🚨 PANIC SELL, 🧠 ПОЧЕМУ МИМО?,
-  📈 ОТЧЁТ, 🎚 РЕЖИМЫ,
-  🛡 KILL-STATE, ✅ СНЯТЬ MDD.
+  ⚡ АРБ СТАТУС, 📡 ФАНДИНГ,
+  🚨 ЗАКРЫТЬ АРБ, 🛡 KILL-STATE,
+  ✅ СНЯТЬ MDD.
 
 Состояние state в v2 имеет форму:
     {
@@ -32,10 +32,11 @@ from typing import Any, Optional
 
 import aiohttp
 
-import ai_analyst
-import ai_postmortem
-import api_engine  # noqa: F401  # legacy shim
+import arb_executor
+import arb_storage
+import arbitrage_engine
 import config
+import key_manager
 import memory
 from exchanges import get_adapter
 
@@ -44,25 +45,39 @@ from exchanges import get_adapter
 EXCHANGE = get_adapter(config.EXCHANGE)
 
 
-# --- Callback data ids (короткие, чтобы влезали в ограничение Telegram 64 байта) ---
-CB_START = "zc:start"
-CB_STOP = "zc:stop"
-CB_STATS = "zc:stats"
-CB_POSITIONS = "zc:positions"
-CB_PANIC = "zc:panic"
-CB_WHY = "zc:why"
-CB_REPORT = "zc:report"
-CB_REGIMES = "zc:regimes"
-CB_KILL = "zc:kill"
-CB_RESUME_MDD = "zc:resume_mdd"
+# Адаптеры для funding-сканера. Те же экземпляры, что в main.py, но в
+# рамках этого модуля собираем свой набор - чтобы /arb можно было
+# вызвать ad-hoc даже до первого _funding_scan_tick (например на
+# свежезапущенном боте).
+_FUNDING_ADAPTERS: dict[str, Any] = {}
+for _ex_name in getattr(config, "FUNDING_SCAN_EXCHANGES", ()):
+    try:
+        _FUNDING_ADAPTERS[_ex_name] = get_adapter(_ex_name)
+    except Exception as _exc:  # noqa: BLE001
+        print(f"[TG] Funding-адаптер {_ex_name} недоступен: {_exc}")
 
-# Двухэтапное подтверждение опасных действий (PANIC SELL и снятие MDD).
-# Основная кнопка (CB_PANIC / CB_RESUME_MDD) не выполняет действие,
-# а показывает диалог с двумя кнопками: подтвердить или отменить.
-CB_PANIC_CONFIRM = "zc:panic_ok"
-CB_PANIC_CANCEL = "zc:panic_no"
+
+# --- Callback data ids (короткие, чтобы влезали в ограничение Telegram 64 байта) ---
+CB_START        = "zc:start"
+CB_STOP         = "zc:stop"
+CB_STATS        = "zc:stats"
+CB_POSITIONS    = "zc:positions"
+CB_ARB_STATUS   = "zc:arb"
+CB_FUNDING      = "zc:fund"
+CB_PANIC        = "zc:panic"
+CB_KILL         = "zc:kill"
+CB_RESUME_MDD   = "zc:resume_mdd"
+CB_KEYS         = "zc:keys"
+CB_EXCHANGES    = "zc:exchanges"
+
+# Двухэтапное подтверждение опасных действий.
+CB_PANIC_CONFIRM      = "zc:panic_ok"
+CB_PANIC_CANCEL       = "zc:panic_no"
 CB_RESUME_MDD_CONFIRM = "zc:mdd_ok"
-CB_RESUME_MDD_CANCEL = "zc:mdd_no"
+CB_RESUME_MDD_CANCEL  = "zc:mdd_no"
+
+# Префикс для toggle бирж: "zc:ext:" + exchange_name (e.g. "zc:ext:bitget")
+CB_EX_TOGGLE_PREFIX = "zc:ext:"
 
 
 def _bot_url(method: str) -> str:
@@ -82,31 +97,72 @@ def _g(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def set_keyboard() -> dict[str, Any]:
-    """Инлайн-клавиатура с 10 кнопками (5 строк по 2)."""
+    """Инлайн-клавиатура арб-бота (6 строк)."""
     return {
         "inline_keyboard": [
             [
                 {"text": "▶️ СТАРТ", "callback_data": CB_START},
-                {"text": "⏸ СТОП", "callback_data": CB_STOP},
+                {"text": "⏸ СТОП",  "callback_data": CB_STOP},
             ],
             [
                 {"text": "📊 СТАТИСТИКА", "callback_data": CB_STATS},
-                {"text": "📂 ПОЗИЦИИ", "callback_data": CB_POSITIONS},
+                {"text": "📂 ПОЗИЦИИ",    "callback_data": CB_POSITIONS},
             ],
             [
-                {"text": "🚨 PANIC SELL", "callback_data": CB_PANIC},
-                {"text": "🧠 ПОЧЕМУ МИМО?", "callback_data": CB_WHY},
+                {"text": "⚡ АРБ СТАТУС", "callback_data": CB_ARB_STATUS},
+                {"text": "📡 ФАНДИНГ",   "callback_data": CB_FUNDING},
             ],
             [
-                {"text": "📈 ОТЧЁТ", "callback_data": CB_REPORT},
-                {"text": "🎚 РЕЖИМЫ", "callback_data": CB_REGIMES},
+                {"text": "🚨 ЗАКРЫТЬ АРБ", "callback_data": CB_PANIC},
+                {"text": "🛡 KILL-STATE",  "callback_data": CB_KILL},
             ],
             [
-                {"text": "🛡 KILL-STATE", "callback_data": CB_KILL},
                 {"text": "✅ СНЯТЬ MDD", "callback_data": CB_RESUME_MDD},
+                {"text": "🔑 КЛЮЧИ",     "callback_data": CB_KEYS},
+            ],
+            [
+                {"text": "🏦 БИРЖИ", "callback_data": CB_EXCHANGES},
             ],
         ]
     }
+
+
+# Порядок отображения бирж в меню (все 8).
+_EXCHANGE_ORDER = ("bybit", "okx", "binance", "gate", "bitget", "mexc", "htx", "bingx")
+_EXCHANGE_LABELS = {
+    "bybit":   "Bybit",
+    "okx":     "OKX",
+    "binance": "Binance",
+    "gate":    "Gate.io",
+    "bitget":  "Bitget",
+    "mexc":    "MEXC",
+    "htx":     "HTX",
+    "bingx":   "BingX",
+}
+
+
+def _exchanges_keyboard(state: dict[str, Any]) -> dict[str, Any]:
+    """Инлайн-клавиатура управления биржами (toggle).
+
+    Зелёный кружок = включена (участвует в скане/торговле).
+    Красный кружок = отключена вручную.
+    Кнопка «← Назад» возвращает главное меню.
+    """
+    disabled: set[str] = set(_g(state).get("disabled_exchanges") or [])
+    rows: list[list[dict[str, Any]]] = []
+
+    # Биржи попарно в каждую строку.
+    exchanges = [ex for ex in _EXCHANGE_ORDER if ex in _FUNDING_ADAPTERS]
+    for i in range(0, len(exchanges), 2):
+        row = []
+        for ex in exchanges[i:i + 2]:
+            icon = "🔴" if ex in disabled else "🟢"
+            label = f"{icon} {_EXCHANGE_LABELS.get(ex, ex.upper())}"
+            row.append({"text": label, "callback_data": CB_EX_TOGGLE_PREFIX + ex})
+        rows.append(row)
+
+    rows.append([{"text": "← Назад", "callback_data": CB_START + "_menu"}])
+    return {"inline_keyboard": rows}
 
 
 async def send_message(
@@ -228,90 +284,155 @@ async def _handle_start(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
     _g(state)["bot_running"] = True
-    return "✅ Торговля <b>запущена</b>. Бот снова ищет сигналы."
+    return "✅ Арб-сканер <b>запущен</b>. Бот продолжает искать и вести арб-пары."
 
 
 async def _handle_stop(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
     _g(state)["bot_running"] = False
-    return "⏸ Торговля <b>остановлена</b>. Открытые позиции продолжают управляться."
+    return "⏸ Арб-сканер <b>остановлен</b>. Активная позиция продолжает вестись до закрытия вручную."
 
 
 async def _handle_stats(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    stats = memory.get_stats()
     g = _g(state)
-    daily_pnl = float(g.get("daily_pnl", 0.0) or 0.0)
-    weekly_pnl = float(g.get("weekly_pnl", 0.0) or 0.0)
-    status = "включен" if g.get("bot_running", True) else "на паузе"
-    return (
-        "📊 <b>Статистика</b>\n"
-        f"Статус: {status}\n"
-        f"Всего закрытых сделок: {stats['count']}\n"
-        f"Победы: {stats['wins']}, Убытки: {stats['losses']}\n"
-        f"Винрейт: {stats['winrate']:.2f}%\n"
-        f"Суммарный PnL: {stats['pnl_sum']:.4f}\n"
-        f"PnL за сегодня: {daily_pnl:.4f}\n"
-        f"PnL за неделю: {weekly_pnl:.4f}"
-    )
+    arb_stats = arb_storage.get_total_stats()
+    active_list = arb_storage.get_all_active()
+    recent = arb_storage.get_recent_closed(limit=3)
+    status = "▶️ активен" if g.get("bot_running", True) else "⏸ на паузе"
+    ks = str(g.get("kill_switch_state") or "NONE")
+    equity_start = g.get("equity_start")
+    cum_pnl = float(g.get("cumulative_pnl", 0.0) or 0.0)
+    equity_now = (float(equity_start) + cum_pnl) if equity_start is not None else None
+    equity_line = f"{equity_now:.2f} USDT" if equity_now is not None else "-"
+
+    lines = [
+        "📊 <b>Статистика арбитража</b>",
+        f"Статус: {status}  |  Kill-switch: {ks}",
+        f"Эквити: {equity_line}",
+        "",
+        "<b>Закрытых арб-сделок:</b> " + str(arb_stats.get("n", 0)),
+        f"  └ Total PnL: {arb_stats.get('pnl_sum', 0.0):+.4f} USDT",
+        f"  └ Funding:   {arb_stats.get('funding_sum', 0.0):+.4f} USDT",
+        f"  └ Direct.:   {arb_stats.get('dir_sum', 0.0):+.4f} USDT",
+        f"  └ Fees est:  −{arb_stats.get('fees_sum', 0.0):.4f} USDT",
+    ]
+    if active_list:
+        from datetime import datetime, timezone
+        for active in active_list:
+            held_h = ""
+            try:
+                opened_dt = datetime.fromisoformat(str(active["opened_ts"]))
+                if opened_dt.tzinfo is None:
+                    opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+                held_h = f" ({(datetime.now(tz=timezone.utc) - opened_dt).total_seconds() / 3600:.1f}ч)"
+            except Exception:  # noqa: BLE001
+                pass
+            lines += [
+                "",
+                f"<b>Пара #{active['id']}:</b> {active['symbol']}{held_h}",
+                f"  LONG @ {active['long_exchange']} / SHORT @ {active['short_exchange']}",
+                f"  Funding получено: {float(active.get('funding_received') or 0):+.4f} USDT",
+            ]
+    if recent:
+        lines.append("")
+        lines.append("<b>Последние закрытия:</b>")
+        for r in recent:
+            arrow = "▲" if (r.get("pnl_total") or 0) >= 0 else "▼"
+            pnl = float(r.get("pnl_total") or 0.0)
+            ts = (r.get("closed_ts") or "")[:16].replace("T", " ")
+            lines.append(f"  #{r['id']} {r.get('symbol')} {arrow} {pnl:+.4f} ({ts})")
+    return "\n".join(lines)
 
 
 async def _handle_positions(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    # Реальные позиции по всем символам + локальные OPEN-сделки для контекста.
-    remote: list[dict[str, Any]] = []
-    for sym in config.SYMBOLS:
-        try:
-            chunk = await EXCHANGE.get_positions(session, sym)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[TG] Ошибка get_positions({sym}): {exc}")
-            chunk = []
-        if chunk:
-            remote.extend(chunk)
-    local = memory.get_open_trades()
+    from datetime import datetime, timezone
+    from exchanges import get_adapter
 
-    lines = ["📂 <b>Открытые позиции</b>"]
-    if remote:
-        for p in remote:
-            lines.append(
-                f"• {p.get('symbol')} {p.get('side')} size={p.get('size')} "
-                f"entry={p.get('avgPrice')} uPnL={p.get('unrealisedPnl')}"
-            )
-    else:
-        lines.append("• на бирже позиций нет")
-    if local:
-        lines.append("")
-        lines.append("Локальные записи (OPEN):")
-        for t in local:
-            lines.append(
-                f"• #{t['id']} {t['symbol']} {t['side']} qty={t['qty']} entry={t['entry']}"
-            )
+    all_positions = arb_storage.get_all_active()
+    max_pos = int(getattr(config, "ARB_MAX_POSITIONS", 3))
+    lines = [f"📂 <b>Арб-позиции</b>  [{len(all_positions)}/{max_pos}]"]
+
+    if not all_positions:
+        lines.append("Нет активных арб-пар.")
+        return "\n".join(lines)
+
+    for idx, active in enumerate(all_positions, start=1):
+        sym = active.get("symbol", "-")
+        long_ex  = active.get("long_exchange", "-")
+        short_ex = active.get("short_exchange", "-")
+        qty      = active.get("qty_base", "-")
+        notional = active.get("notional_usdt", "-")
+        long_entry  = float(active.get("long_entry") or 0)
+        short_entry = float(active.get("short_entry") or 0)
+        funding_rcv = float(active.get("funding_received") or 0)
+        edge_apr    = float(active.get("edge_apr_open") or 0)
+        opened      = str(active.get("opened_ts") or "-")[:19].replace("T", " ")
+
+        held_h = ""
+        try:
+            opened_dt = datetime.fromisoformat(str(active["opened_ts"]))
+            if opened_dt.tzinfo is None:
+                opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+            held_h = f"  ⏱ {(datetime.now(tz=timezone.utc) - opened_dt).total_seconds() / 3600:.1f}ч"
+        except Exception:  # noqa: BLE001
+            pass
+
+        lines += [
+            "",
+            f"<b>── Пара #{active.get('id')}  ({idx}/{len(all_positions)}) ──</b>",
+            f"Символ: <b>{sym}</b>  Открыта: {opened}{held_h}",
+            f"🟢 LONG  @ <b>{long_ex}</b>  вход: {long_entry:.4f}  qty: {qty}",
+            f"🔴 SHORT @ <b>{short_ex}</b>  вход: {short_entry:.4f}  qty: {qty}",
+            f"Notional: ~{notional} USDT  |  Funding: <b>{funding_rcv:+.4f}</b>  |  APR вх.: {edge_apr*100:.2f}%",
+        ]
+
+        for ex_name in (long_ex, short_ex):
+            try:
+                adapter = get_adapter(ex_name)
+                ex_pos_list = await adapter.get_positions(session, sym)
+                for p in (ex_pos_list or []):
+                    upnl = p.get("unrealisedPnl") or p.get("unRealisedPnl")
+                    side = p.get("side")
+                    if upnl is not None:
+                        lines.append(f"  {ex_name} uPnL ({side}): {float(upnl):+.4f} USDT")
+            except Exception:  # noqa: BLE001
+                pass
+
     return "\n".join(lines)
 
 
 async def _handle_panic(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
-    """Первый шаг: показать диалог подтверждения, позиции НЕ трогаем.
-
-    Возвращает (текст, клавиатура). Реальное исполнение - в _handle_panic_confirm
-    при нажатии кнопки «⚠️ ДА, ЗАКРЫТЬ ВСЁ».
-    """
+    """Первый шаг: показать диалог подтверждения, ноги НЕ трогаем."""
+    positions = arb_storage.get_all_active()
+    if not positions:
+        return (
+            "🚨 Активных арб-пар нет — нечего закрывать.",
+            set_keyboard(),
+        )
+    pair_lines = "\n".join(
+        f"  #{p['id']} {p.get('symbol', '-')} — "
+        f"LONG@{p.get('long_exchange', '-')} SHORT@{p.get('short_exchange', '-')}"
+        for p in positions
+    )
+    count = len(positions)
     text = (
-        "🚨 <b>PANIC SELL — подтверждение</b>\n\n"
-        "Будут закрыты <b>все открытые позиции</b> по "
-        f"{', '.join(config.SYMBOLS)} reduce-only маркетом, "
-        "и торговля будет поставлена на паузу.\n\n"
-        "Вы уверены?"
+        f"🚨 <b>ЗАКРЫТЬ АРБ — подтверждение</b>\n\n"
+        f"Будет принудительно закрыто <b>{count}</b> пар:\n"
+        f"{pair_lines}\n\n"
+        "Все ноги будут закрыты маркетом. Продолжить?"
     )
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": "⚠️ ДА, ЗАКРЫТЬ ВСЁ", "callback_data": CB_PANIC_CONFIRM},
-                {"text": "Отмена", "callback_data": CB_PANIC_CANCEL},
+                {"text": "⚠️ ДА, ЗАКРЫТЬ ВСЕ", "callback_data": CB_PANIC_CONFIRM},
+                {"text": "Отмена",               "callback_data": CB_PANIC_CANCEL},
             ]
         ]
     }
@@ -321,118 +442,48 @@ async def _handle_panic(
 async def _handle_panic_confirm(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    """Второй шаг: реально закрываем все позиции и ставим торговлю на паузу."""
+    """Второй шаг: принудительно закрываем ВСЕ арб-пары через executor."""
     _g(state)["bot_running"] = False
+    positions = arb_storage.get_all_active()
+    if not positions:
+        return "🚨 Активных арб-пар уже нет."
     if getattr(config, "DRY_RUN", False):
-        return (
-            "[DRY RUN] 🚨 PANIC SELL имитация: реальные ордера не отправлены. "
-            "Торговля поставлена на паузу."
-        )
-    total_orders = 0
-    for sym in config.SYMBOLS:
+        return "[DRY RUN] 🚨 Принудительное закрытие имитировано. Реальные ордера не отправлены."
+    results: list[str] = []
+    for pos in positions:
         try:
-            results = await EXCHANGE.panic_sell(session, sym)
+            await arb_executor._force_close(
+                session, _FUNDING_ADAPTERS, pos, "manual_panic", None
+            )
+            results.append(f"#{pos['id']} {pos.get('symbol', '-')} — закрыта ✓")
         except Exception as exc:  # noqa: BLE001
-            print(f"[TG] Ошибка panic_sell({sym}): {exc}")
-            results = []
-        total_orders += len(results or [])
-    if total_orders == 0:
-        return "🚨 PANIC SELL: открытых позиций не было. Торговля поставлена на паузу."
+            print(f"[TG] Ошибка _force_close #{pos.get('id')}: {exc}")
+            results.append(f"#{pos['id']} {pos.get('symbol', '-')} — ошибка: {exc}")
+    summary = "\n".join(results)
     return (
-        f"🚨 PANIC SELL выполнен: отправлено {total_orders} ордеров на закрытие "
-        f"по {len(config.SYMBOLS)} символам. Торговля поставлена на паузу."
+        f"🚨 Принудительное закрытие завершено:\n{summary}\n\n"
+        "Арб-сканер остановлен. Нажмите ▶️ СТАРТ для возобновления."
     )
 
 
 async def _handle_panic_cancel(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    return "Отменено. Позиции не тронуты, торговля продолжается."
+    return "Отменено. Арб-позиция не тронута."
 
 
-async def _handle_why(
+async def _handle_arb_status(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    last: Optional[dict[str, Any]] = None
-    g = _g(state)
-    ring = g.get("rejection_ring")
-    if ring:
-        try:
-            last = dict(ring[-1])  # последний элемент deque
-        except (IndexError, TypeError, ValueError):
-            last = None
-    if last is None:
-        try:
-            last = memory.get_last_rejected_check()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[TG] Ошибка get_last_rejected_check: {exc}")
-            last = None
-    if not last:
-        return "🧠 Отклонённых сигналов пока нет."
-
-    try:
-        errors = memory.get_recent_errors(5)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[TG] Ошибка get_recent_errors: {exc}")
-        errors = []
-    try:
-        explanation = await ai_analyst.explain_last_rejection(session, last, errors)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[TG] explain_last_rejection: {exc}")
-        explanation = "Объяснение временно недоступно."
-
-    header = "🧠 <b>ПОЧЕМУ МИМО?</b>"
-    ts = last.get("ts") or "-"
-    symbol = last.get("symbol") or "-"
-    filt = last.get("filter") or last.get("reason") or "-"
-    detail = last.get("detail") or ""
-    return (
-        f"{header}\n"
-        f"Дата: {ts}\n"
-        f"Символ: {symbol}\n"
-        f"Фильтр: {filt}\n"
-        f"Детали: {detail}\n\n"
-        f"Разбор: {explanation}"
-    )
+    """⚡ АРБ СТАТУС — детальный отчёт executor'а (активная пара + закрытые)."""
+    return arb_executor.format_status()
 
 
-async def _handle_report(
+async def _handle_keys(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
-    try:
-        text = await ai_postmortem.report(session, days=7)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[TG] Ошибка ai_postmortem.report: {exc}")
-        text = "Отчёт временно недоступен."
-    text = (text or "Отчёт временно недоступен.").strip()
-    if len(text) > 3800:
-        text = text[:3800].rstrip()
-    return "📈 <b>Еженедельный отчёт</b>\n\n" + text
-
-
-async def _handle_regimes(
-    session: aiohttp.ClientSession, state: dict[str, Any]
-) -> str:
-    symbols = state.get("symbols") if isinstance(state, dict) else None
-    if not isinstance(symbols, dict) or not symbols:
-        return "🎚 Данных о режимах пока нет."
-    lines = ["🎚 <b>Режимы по символам</b>"]
-    for symbol in config.SYMBOLS:
-        sym_state = symbols.get(symbol) or {}
-        regime = sym_state.get("regime") or {}
-        regime_name = str(regime.get("regime") or "-")
-        conf = regime.get("confidence")
-        ts = regime.get("ts")
-        if not ts:
-            lines.append(f"• {symbol}: не опрошен")
-            continue
-        ts_dt = _parse_iso(ts)
-        when = ts_dt.strftime("%H:%M UTC") if ts_dt else str(ts)
-        conf_str = f"conf={conf}" if conf is not None else "conf=?"
-        lines.append(
-            f"• {symbol}: {regime_name} ({conf_str}, обновлено {when})"
-        )
-    return "\n".join(lines)
+    """🔑 КЛЮЧИ — маскированный статус API-ключей + инструкция по смене."""
+    return key_manager.get_status_report()
 
 
 async def _handle_kill_state(
@@ -521,21 +572,112 @@ async def _handle_resume_mdd_cancel(
     return "Отменено. MDD kill-switch остаётся активным."
 
 
+async def _handle_exchanges(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """🏦 БИРЖИ — показать статус бирж с кнопками включить/отключить."""
+    g = _g(state)
+    disabled: set[str] = set(g.get("disabled_exchanges") or [])
+    enabled_count = len([ex for ex in _EXCHANGE_ORDER if ex in _FUNDING_ADAPTERS and ex not in disabled])
+    total_count = len([ex for ex in _EXCHANGE_ORDER if ex in _FUNDING_ADAPTERS])
+    text = (
+        "🏦 <b>Управление биржами</b>\n\n"
+        f"Активных: <b>{enabled_count}/{total_count}</b>\n"
+        "Нажмите на биржу, чтобы включить или отключить её.\n"
+        "🟢 = включена  |  🔴 = отключена\n\n"
+        "⚠️ Отключение биржи останавливает поиск новых пар через неё.\n"
+        "Уже открытые позиции мониторятся до закрытия."
+    )
+    return text, _exchanges_keyboard(state)
+
+
+async def _handle_exchange_toggle(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    exchange_name: str,
+) -> tuple[str, dict[str, Any]]:
+    """Toggle включён/отключён для конкретной биржи."""
+    g = _g(state)
+    disabled: set[str] = set(g.get("disabled_exchanges") or [])
+    label = _EXCHANGE_LABELS.get(exchange_name, exchange_name.upper())
+
+    if exchange_name in disabled:
+        disabled.discard(exchange_name)
+        action = f"✅ <b>{label}</b> включена в скан и торговлю."
+    else:
+        # Проверка: нельзя отключить биржу с активной арб-позицией
+        for active_pos in arb_storage.get_all_active():
+            long_ex = str(active_pos.get("long_exchange") or "").lower()
+            short_ex = str(active_pos.get("short_exchange") or "").lower()
+            if exchange_name in (long_ex, short_ex):
+                text = (
+                    f"⚠️ Нельзя отключить <b>{label}</b>: на этой бирже "
+                    f"открыта активная арб-позиция #{active_pos.get('id')}.\n"
+                    "Сначала закройте позицию."
+                )
+                return text, _exchanges_keyboard(state)
+        disabled.add(exchange_name)
+        action = f"🔴 <b>{label}</b> отключена. Новые пары через неё открываться не будут."
+
+    g["disabled_exchanges"] = list(disabled)
+
+    enabled_count = len([ex for ex in _EXCHANGE_ORDER if ex in _FUNDING_ADAPTERS and ex not in disabled])
+    total_count = len([ex for ex in _EXCHANGE_ORDER if ex in _FUNDING_ADAPTERS])
+    text = (
+        f"{action}\n\n"
+        f"Активных бирж: <b>{enabled_count}/{total_count}</b>"
+    )
+    return text, _exchanges_keyboard(state)
+
+
+async def _handle_funding(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """📡 ФАНДИНГ — текущий funding-скан по всем биржам.
+
+    Сначала пробуем кэш из state (обновляется каждые FUNDING_SCAN_INTERVAL_SEC),
+    если кэша нет — делаем ad-hoc скан прямо сейчас.
+    """
+    g = _g(state)
+    snapshots = g.get("funding_snapshot")
+
+    if not snapshots:
+        if not _FUNDING_ADAPTERS:
+            return (
+                "📡 Сканер не настроен. Задайте FUNDING_SCAN_EXCHANGES в config "
+                "и убедитесь, что адаптеры зарегистрированы."
+            )
+        try:
+            snapshots = await arbitrage_engine.scan_funding(session, _FUNDING_ADAPTERS)
+            g["funding_snapshot"] = snapshots
+        except Exception as exc:  # noqa: BLE001
+            print(f"[TG] /funding: ошибка scan_funding: {exc}")
+            return "📡 Не удалось снять funding по биржам. Сетевая ошибка."
+
+    if not any(snapshots.values()):
+        return "📡 Funding-данных нет (все адаптеры вернули пусто)."
+
+    return arbitrage_engine.format_full_report(snapshots)
+
+
 _HANDLERS = {
-    CB_START: _handle_start,
-    CB_STOP: _handle_stop,
-    CB_STATS: _handle_stats,
-    CB_POSITIONS: _handle_positions,
-    CB_PANIC: _handle_panic,
-    CB_PANIC_CONFIRM: _handle_panic_confirm,
-    CB_PANIC_CANCEL: _handle_panic_cancel,
-    CB_WHY: _handle_why,
-    CB_REPORT: _handle_report,
-    CB_REGIMES: _handle_regimes,
-    CB_KILL: _handle_kill_state,
-    CB_RESUME_MDD: _handle_resume_mdd,
+    CB_START:              _handle_start,
+    CB_STOP:               _handle_stop,
+    CB_STATS:              _handle_stats,
+    CB_POSITIONS:          _handle_positions,
+    CB_ARB_STATUS:         _handle_arb_status,
+    CB_FUNDING:            _handle_funding,
+    CB_PANIC:              _handle_panic,
+    CB_PANIC_CONFIRM:      _handle_panic_confirm,
+    CB_PANIC_CANCEL:       _handle_panic_cancel,
+    CB_KILL:               _handle_kill_state,
+    CB_RESUME_MDD:         _handle_resume_mdd,
     CB_RESUME_MDD_CONFIRM: _handle_resume_mdd_confirm,
-    CB_RESUME_MDD_CANCEL: _handle_resume_mdd_cancel,
+    CB_RESUME_MDD_CANCEL:  _handle_resume_mdd_cancel,
+    CB_KEYS:               _handle_keys,
+    CB_EXCHANGES:          _handle_exchanges,
+    # "← Назад" в меню бирж возвращает главное меню.
+    CB_START + "_menu":    _handle_start,
 }
 
 
@@ -546,6 +688,20 @@ async def _process_callback(
 ) -> None:
     cb_id = cb.get("id")
     data = cb.get("data", "")
+
+    # Обработка toggle-кнопок бирж (префикс "zc:ext:").
+    if data.startswith(CB_EX_TOGGLE_PREFIX):
+        ex_name = data[len(CB_EX_TOGGLE_PREFIX):]
+        if cb_id:
+            await answer_callback(session, cb_id, "Готово")
+        try:
+            text, keyboard = await _handle_exchange_toggle(session, state, ex_name)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[TG] Ошибка exchange_toggle {ex_name}: {exc}")
+            text, keyboard = f"Ошибка: {exc}", set_keyboard()
+        await send_message(session, text, reply_markup=keyboard)
+        return
+
     handler = _HANDLERS.get(data)
     if not handler:
         if cb_id:
@@ -581,7 +737,30 @@ async def _process_message(
     if lowered in ("/start", "/menu", "/help"):
         await send_message(
             session,
-            "👋 <b>Zenith-Control Ultimate v2</b>\nВыберите действие кнопкой ниже.",
+            (
+                "👋 <b>Zenith-Control Ultimate v2 — Funding Arbitrage</b>\n"
+                "8 бирж: Bybit · OKX · Binance · Gate · Bitget · MEXC · HTX · BingX\n"
+                "Используйте кнопки ниже.\n\n"
+                "<b>Кнопки:</b>\n"
+                "▶️ СТАРТ / ⏸ СТОП — пауза арб-сканера\n"
+                "📊 СТАТИСТИКА — сводка по арб-сделкам\n"
+                "📂 ПОЗИЦИИ — детали активной арб-пары\n"
+                "⚡ АРБ СТАТУС — отчёт executor'а\n"
+                "📡 ФАНДИНГ — текущий funding-скан по биржам\n"
+                "🚨 ЗАКРЫТЬ АРБ — принудительное закрытие пары\n"
+                "🛡 KILL-STATE — статус kill-switch / просадки\n"
+                "✅ СНЯТЬ MDD — снять MDD kill-switch вручную\n"
+                "🔑 КЛЮЧИ — статус и быстрая смена API-ключей\n"
+                "🏦 БИРЖИ — включить/отключить биржи вручную\n\n"
+                "<b>Текстовые команды:</b>\n"
+                "<code>/status</code> — краткая статистика\n"
+                "<code>/arb_status</code> — статус executor'а\n"
+                "<code>/funding</code> — funding-скан\n"
+                "<code>/exchanges</code> — управление биржами\n"
+                "<code>/resume_kill_switch</code> — снять MDD\n"
+                "<code>/setkey ИМЯ значение</code> — сменить API-ключ\n"
+                "<code>/delkey ИМЯ</code> — сбросить к Replit-секрету"
+            ),
             reply_markup=set_keyboard(),
         )
         return
@@ -594,8 +773,6 @@ async def _process_message(
         return
     if lowered == "/resume_kill_switch":
         result = await _handle_resume_mdd(session, state)
-        # Handler теперь возвращает либо str (MDD не активен), либо tuple
-        # (текст, клавиатура подтверждения). Оба случая поддерживаем.
         if isinstance(result, tuple) and len(result) == 2:
             reply, keyboard = result
         else:
@@ -603,7 +780,76 @@ async def _process_message(
             keyboard = set_keyboard()
         await send_message(session, reply, reply_markup=keyboard)
         return
-    # Любое другое сообщение - просто показываем меню.
+    if lowered in ("/arb", "/funding"):
+        report = await _handle_funding(session, state)
+        await send_message(session, report)
+        await send_message(session, "Меню ниже.", reply_markup=set_keyboard())
+        return
+    if lowered == "/exchanges":
+        text, keyboard = await _handle_exchanges(session, state)
+        await send_message(session, text, reply_markup=keyboard)
+        return
+    if lowered == "/arb_status":
+        await send_message(
+            session,
+            arb_executor.format_status(),
+            reply_markup=set_keyboard(),
+        )
+        return
+    # /setkey ИМЯ значение — сменить API-ключ в рантайме
+    if lowered.startswith("/setkey "):
+        parts = text.split(None, 2)  # ["/setkey", "ИМЯ", "значение"]
+        if len(parts) < 3:
+            await send_message(
+                session,
+                "Формат: <code>/setkey ИМЯ значение</code>\n"
+                "Пример: <code>/setkey OKX_API_KEY abc123xyz</code>",
+                reply_markup=set_keyboard(),
+            )
+            return
+        key_name, key_value = parts[1].upper(), parts[2]
+        try:
+            key_manager.set_key(key_name, key_value)
+            await send_message(
+                session,
+                f"✅ <b>{key_name}</b> обновлён и применён немедленно.\n\n"
+                "⚠️ <b>Удалите это сообщение из чата!</b>",
+                reply_markup=set_keyboard(),
+            )
+        except ValueError as exc:
+            await send_message(
+                session, f"❌ Ошибка: {exc}", reply_markup=set_keyboard()
+            )
+        return
+
+    # /delkey ИМЯ — сбросить оверрайд, Replit-секрет снова станет активным
+    if lowered.startswith("/delkey "):
+        parts = text.split(None, 1)
+        if len(parts) < 2:
+            await send_message(
+                session,
+                "Формат: <code>/delkey ИМЯ</code>\n"
+                "Пример: <code>/delkey OKX_API_KEY</code>",
+                reply_markup=set_keyboard(),
+            )
+            return
+        key_name = parts[1].strip().upper()
+        if key_manager.delete_key(key_name):
+            await send_message(
+                session,
+                f"✅ Оверрайд <b>{key_name}</b> удалён. "
+                "Теперь используется Replit-секрет (если задан).",
+                reply_markup=set_keyboard(),
+            )
+        else:
+            await send_message(
+                session,
+                f"ℹ️ Оверрайда для <b>{key_name}</b> не было — ничего не изменилось.",
+                reply_markup=set_keyboard(),
+            )
+        return
+
+    # Любое другое сообщение — показываем меню.
     await send_message(
         session,
         "Используйте кнопки ниже для управления ботом.",

@@ -33,8 +33,20 @@ def get_adapter(name: str, **kwargs: Any) -> ExchangeAdapter:
 
 
 # Авто-регистрация адаптеров при импорте пакета.
+from .binance import BinanceAdapter  # noqa: E402
+from .bingx import BingXAdapter  # noqa: E402
+from .bitget import BitgetAdapter  # noqa: E402
 from .bybit import BybitAdapter  # noqa: E402
+from .gate import GateAdapter  # noqa: E402
+from .htx import HTXAdapter  # noqa: E402
+from .mexc import MEXCAdapter  # noqa: E402
 from .okx import OKXAdapter  # noqa: E402
 
+register("binance", BinanceAdapter)
+register("bingx", BingXAdapter)
+register("bitget", BitgetAdapter)
 register("bybit", BybitAdapter)
+register("gate", GateAdapter)
+register("htx", HTXAdapter)
+register("mexc", MEXCAdapter)
 register("okx", OKXAdapter)
