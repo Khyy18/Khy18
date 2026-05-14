@@ -4,7 +4,10 @@
   - Подпись: Base64(HMAC_SHA256(secret, timestamp + method + path + body)).
   - Timestamp в заголовке: ISO 8601 с миллисекундами (2024-01-02T03:04:05.678Z).
   - Демо-счёт: обязательный заголовок x-simulated-trading: 1 на ВСЕХ запросах
-    (и публичных, и приватных), когда config.IS_TESTNET=True.
+    (и публичных, и приватных), когда config.IS_TESTNET=True. В mainnet-режиме
+    (IS_TESTNET=False) заголовок НЕ добавляется - OKX маршрутизирует запросы
+    на реальный счёт. Ключи при этом читаются из config.OKX_API_KEY, куда
+    config.py подставил нужную тройку (demo или real) по значению IS_TESTNET.
   - Символ SWAP: BTC-USDT-SWAP (дефисы, суффикс -SWAP).
   - Таймфреймы: 1m/15m/1H/4H/1D (буквенные). Биржевые интервалы Bybit
     (1/15/60/240/D) транслируются через _INTERVAL_MAP.
@@ -113,10 +116,17 @@ class OKXAdapter(ExchangeAdapter):
     name = "okx"
 
     def __init__(self, **_: Any) -> None:
-        self.api_key = os.getenv("OKX_API_KEY", "")
-        self.api_secret = os.getenv("OKX_API_SECRET", "")
-        self.passphrase = os.getenv("OKX_PASSPHRASE", "")
-        # IS_TESTNET в config означает "демо-счёт OKX".
+        # Ключи читаем через config (не напрямую из os.getenv), чтобы
+        # работала раздельная тройка demo/real: config.py уже выбрал
+        # активные OKX_API_KEY / _SECRET / _PASSPHRASE по значению
+        # IS_TESTNET. При переключении режима через кнопку "🏦 Демо/Реал"
+        # процесс рестартуется systemd'ом - конфиг перечитается.
+        self.api_key = getattr(config, "OKX_API_KEY", "") or ""
+        self.api_secret = getattr(config, "OKX_API_SECRET", "") or ""
+        self.passphrase = getattr(config, "OKX_PASSPHRASE", "") or ""
+        # IS_TESTNET в config означает "демо-счёт OKX" (x-simulated-trading:1).
+        # В mainnet этот заголовок НЕ добавляется - OKX тогда маршрутизирует
+        # запрос на реальный счёт.
         self.is_testnet = bool(getattr(config, "IS_TESTNET", True))
         self.base_url = _OKX_BASE_URL
         self._instrument_cache: dict[str, dict[str, float]] = {}

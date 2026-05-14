@@ -94,7 +94,7 @@ id -u zenith >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/
 # владельцем zenith. Это стандартный паттерн для system-user'а без
 # write-доступа к родительскому каталогу.
 REPO_URL="${REPO_URL:-https://github.com/Khyy18/Khy18.git}"
-BRANCH="${BRANCH:-feat/zenith-control-ultimate}"
+BRANCH="${BRANCH:-feat/v3-stability}"
 if [[ ! -d /opt/zenith/.git ]]; then
     # Если /opt/zenith есть, но это не git-репо (недозавершённый прошлый
     # запуск, мусор) - сносим, чтобы clone не падал на "not empty".
@@ -135,6 +135,16 @@ sudo -u zenith "${PYTHON_BIN}" -m venv /opt/zenith/.venv
 sudo -u zenith /opt/zenith/.venv/bin/pip install --upgrade pip
 sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
 
+# --- .env: автокопирование шаблона при первой установке -------------------
+# Идемпотентно: если .env уже есть (повторный запуск installer'а), НЕ затираем.
+# При первой установке копируем .env.example → .env, чтобы пользователю
+# оставалось только nano /opt/zenith/.env, а не два шага.
+if [[ ! -f /opt/zenith/.env ]]; then
+    echo "[INFO] /opt/zenith/.env не найден, копируем .env.example как стартовый шаблон"
+    sudo -u zenith cp /opt/zenith/.env.example /opt/zenith/.env
+    chmod 600 /opt/zenith/.env
+fi
+
 # --- systemd unit ----------------------------------------------------------
 install -m 644 /opt/zenith/deploy/zenith.service /etc/systemd/system/zenith.service
 systemctl daemon-reload
@@ -146,8 +156,7 @@ cat <<'EOF'
 [OK] Zenith-Control Ultimate установлен в /opt/zenith.
 
 Следующие шаги (выполнять ВРУЧНУЮ):
-  1. Скопируйте образец и заполните секреты:
-         sudo -u zenith cp /opt/zenith/.env.example /opt/zenith/.env
+  1. Заполните секреты в /opt/zenith/.env (шаблон уже скопирован):
          sudo -u zenith nano /opt/zenith/.env
      Минимально обязательные переменные для EXCHANGE=okx:
          OKX_API_KEY, OKX_API_SECRET, OKX_PASSPHRASE
@@ -156,6 +165,8 @@ cat <<'EOF'
      Рекомендуется также добавить:
          TRADES_DB_PATH=/opt/zenith/data/trades.db
          DRY_RUN=true  # на первые сутки - paper-trading без реальных ордеров
+     Опционально (для failover между LLM):
+         CEREBRAS_API_KEY, GOOGLE_AI_KEY
 
   2. Запустите сервис:
          sudo systemctl start zenith

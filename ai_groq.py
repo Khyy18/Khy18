@@ -32,11 +32,101 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from typing import Any, Optional
 
 import aiohttp
 
 import config
+
+
+# Снимок последнего состояния квоты Groq API.
+# Обновляется на каждом HTTP-ответе от Groq (200, 429, любой) внутри _post().
+# Читается Telegram-ботом для показа в кнопке 🤖 GROQ - без дополнительных
+# сетевых вызовов (Groq и так возвращает rate-limit заголовки).
+# updated_epoch == 0.0 означает, что снапшот ещё не заполнялся (первый вызов
+# ещё не состоялся). Вызывающий должен обработать этот случай отдельно.
+_last_quota_snapshot: dict[str, Any] = {
+    "updated_epoch": 0.0,
+    "rpd_limit": 0,
+    "rpd_remaining": 0,
+    "tpd_limit": 0,
+    "tpd_remaining": 0,
+    "rpm_limit": 0,
+    "rpm_remaining": 0,
+    "rpd_reset": "",
+    "tpd_reset": "",
+    "rpm_reset": "",
+}
+
+
+def _parse_int_safe(value: Any) -> int:
+    """Защищённый парсинг int из HTTP-заголовка. На ошибке возвращает 0."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _update_quota_snapshot(headers: Any) -> None:
+    """Обновить снапшоты квоты Groq из заголовков ответа.
+
+    Заполняет:
+      - локальный _last_quota_snapshot (legacy для обратной совместимости)
+      - центральный реестр ai_quotas (через update_groq_from_headers)
+
+    Groq возвращает rate-limit заголовки (OpenAI-совместимый формат):
+      x-ratelimit-limit-requests / x-ratelimit-remaining-requests      (суточный RPD)
+      x-ratelimit-limit-tokens / x-ratelimit-remaining-tokens          (суточный TPD)
+      x-ratelimit-limit-requests-per-minute / -remaining-*             (минутный RPM)
+      x-ratelimit-reset-requests / -reset-tokens                       (время до сброса)
+    Все заголовки опциональны — если какого-то нет, оставляем 0/"".
+    """
+    _last_quota_snapshot["updated_epoch"] = time.time()
+    _last_quota_snapshot["rpd_limit"] = _parse_int_safe(
+        headers.get("x-ratelimit-limit-requests", 0)
+    )
+    _last_quota_snapshot["rpd_remaining"] = _parse_int_safe(
+        headers.get("x-ratelimit-remaining-requests", 0)
+    )
+    _last_quota_snapshot["tpd_limit"] = _parse_int_safe(
+        headers.get("x-ratelimit-limit-tokens", 0)
+    )
+    _last_quota_snapshot["tpd_remaining"] = _parse_int_safe(
+        headers.get("x-ratelimit-remaining-tokens", 0)
+    )
+    _last_quota_snapshot["rpm_limit"] = _parse_int_safe(
+        headers.get("x-ratelimit-limit-requests-per-minute", 0)
+    )
+    _last_quota_snapshot["rpm_remaining"] = _parse_int_safe(
+        headers.get("x-ratelimit-remaining-requests-per-minute", 0)
+    )
+    _last_quota_snapshot["rpd_reset"] = str(
+        headers.get("x-ratelimit-reset-requests", "")
+    )
+    _last_quota_snapshot["tpd_reset"] = str(
+        headers.get("x-ratelimit-reset-tokens", "")
+    )
+    _last_quota_snapshot["rpm_reset"] = str(
+        headers.get("x-ratelimit-reset-requests-per-minute", "")
+    )
+
+    # Зеркалим в централизованный реестр квот для UI Telegram-бота.
+    try:
+        import ai_quotas
+        ai_quotas.update_groq_from_headers(headers)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[GROQ] не удалось обновить ai_quotas: {exc}")
+
+
+def get_quota_snapshot() -> dict[str, Any]:
+    """Вернуть копию последнего снапшота квоты Groq API.
+
+    Telegram-бот использует это для кнопки 🤖 GROQ. Если updated_epoch==0.0,
+    снапшот ещё не заполнялся (первый вызов Groq ещё не состоялся) и
+    вызывающий должен показать "квота пока недоступна".
+    """
+    return dict(_last_quota_snapshot)
 
 
 # Экспоненциальный backoff для Groq HTTP 429 (rate limit exceeded).
@@ -167,6 +257,12 @@ async def _post(
                 headers=_headers(),
                 timeout=timeout,
             ) as resp:
+                # Читаем rate-limit заголовки на КАЖДЫЙ ответ (200/429/любой).
+                # Пассивный мониторинг квоты — без дополнительных сетевых вызовов.
+                try:
+                    _update_quota_snapshot(resp.headers)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[GROQ] не удалось распарсить rate-limit заголовки: {exc}")
                 if resp.status == 429:
                     # Rate limit. Экспоненциальный backoff: 10 -> 20 -> 40с.
                     body_text = await resp.text()
