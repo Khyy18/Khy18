@@ -253,6 +253,7 @@ def run_backtest(
     trades: list[dict[str, Any]] = []
     position: dict[str, Any] | None = None
     equity_curve: list[float] = [1.0]  # нормализованный equity
+    pending_signal: str | None = None  # для confirmation bar
 
     for i in range(ema_slow + 1, len(klines)):
         price = closes[i]
@@ -332,11 +333,19 @@ def run_backtest(
             # Ищем сигнал
             signal = momentum_engine.detect_crossover(fast_ema[:i + 1], slow_ema[:i + 1])
 
-            # #2: Confirmation bar — кросс должен быть на предыдущем баре
-            if signal and confirmation_bar and i > ema_slow + 2:
-                prev_signal = momentum_engine.detect_crossover(fast_ema[:i], slow_ema[:i])
-                if prev_signal != signal:
-                    signal = None  # Кросс только что, ждём confirmation
+            # #2: Confirmation bar — вход на следующем баре после кросса
+            if confirmation_bar:
+                if signal:
+                    # Кросс произошёл сейчас — сохраняем, не входим
+                    pending_signal = signal
+                    signal = None
+                elif pending_signal:
+                    # Следующий бар после кросса — проверяем подтверждение
+                    if pending_signal == "LONG" and fast_ema[i] > slow_ema[i]:
+                        signal = pending_signal
+                    elif pending_signal == "SHORT" and fast_ema[i] < slow_ema[i]:
+                        signal = pending_signal
+                    pending_signal = None
 
             if signal and atr_pct >= min_atr_pct:
                 if signal == "LONG":
