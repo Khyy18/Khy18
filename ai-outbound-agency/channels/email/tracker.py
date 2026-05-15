@@ -152,8 +152,8 @@ async def track_open(
             lead_id_row = msg_result.scalar_one_or_none()
             if lead_id_row:
                 asyncio.create_task(trigger_score_update(lead_id_row, _get_session_factory()))
-        except Exception:
-            pass  # Non-blocking, don't fail tracking
+        except Exception as exc:
+            logger.debug("Score update trigger failed for open event (message %s): %s", message_id, exc)
     except Exception as exc:
         logger.error("Failed to track open: %s", str(exc))
 
@@ -215,8 +215,8 @@ async def track_click(
                 lead_id_row = msg_result.scalar_one_or_none()
                 if lead_id_row:
                     asyncio.create_task(trigger_score_update(lead_id_row, _get_session_factory()))
-            except Exception:
-                pass  # Non-blocking, don't fail tracking
+            except Exception as exc:
+                logger.debug("Score update trigger failed for click event (message %s): %s", message_id, exc)
     except Exception as exc:
         logger.error("Failed to track click: %s", str(exc))
 

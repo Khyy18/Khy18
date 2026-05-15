@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,8 +28,22 @@ class NotificationsScheduler:
     - Real-time alerts: provides method to be called by other components
     """
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        redis_url: str | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._redis_url = redis_url
+        self._redis: aioredis.Redis | None = None
+
+    async def _get_redis(self) -> aioredis.Redis | None:
+        """Get or create Redis connection. Returns None if redis_url not configured."""
+        if self._redis_url is None:
+            return None
+        if self._redis is None:
+            self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
+        return self._redis
 
     async def weekly_digest_tick(self) -> None:
         """Check if it's Monday 9:00 AM UTC hour. If so, send digests to all tenants with weekly_digest enabled."""
@@ -51,6 +66,23 @@ class NotificationsScheduler:
 
             for tenant in tenants:
                 try:
+                    # Idempotency guard: prevent duplicate digest sends
+                    redis = await self._get_redis()
+                    if redis is not None:
+                        iso_year, week_number, _ = now.isocalendar()
+                        idempotency_key = f"digest_sent:{tenant.id}:{iso_year}:{week_number}"
+                        already_sent = not await redis.set(
+                            idempotency_key, "1", nx=True, ex=604800
+                        )
+                        if already_sent:
+                            logger.debug(
+                                "Weekly digest already sent for tenant %s (week %d/%d), skipping",
+                                tenant.id,
+                                iso_year,
+                                week_number,
+                            )
+                            continue
+
                     channels, preferences = await _get_tenant_notification_config(
                         tenant.id, session
                     )
@@ -84,3 +116,9 @@ class NotificationsScheduler:
                 event_type,
                 exc,
             )
+
+    async def close(self) -> None:
+        """Close Redis connection."""
+        if self._redis:
+            await self._redis.close()
+            self._redis = None

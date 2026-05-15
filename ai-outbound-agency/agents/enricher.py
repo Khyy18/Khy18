@@ -51,6 +51,29 @@ class EnricherAgent:
     def __init__(self, llm_client: LLMClient, settings: Settings) -> None:
         self._llm = llm_client
         self._settings = settings
+        self._technographic_client: TechnographicClient | None = None
+        self._job_boards_client: JobBoardsClient | None = None
+
+    def _get_technographic_client(self, redis_url: str) -> TechnographicClient:
+        """Get or create a shared TechnographicClient instance."""
+        if self._technographic_client is None:
+            self._technographic_client = TechnographicClient(redis_url=redis_url)
+        return self._technographic_client
+
+    def _get_job_boards_client(self, redis_url: str) -> JobBoardsClient:
+        """Get or create a shared JobBoardsClient instance."""
+        if self._job_boards_client is None:
+            self._job_boards_client = JobBoardsClient(redis_url=redis_url)
+        return self._job_boards_client
+
+    async def close_enhanced_clients(self) -> None:
+        """Close shared enhanced enrichment clients (TechnographicClient, JobBoardsClient)."""
+        if self._technographic_client is not None:
+            await self._technographic_client.close()
+            self._technographic_client = None
+        if self._job_boards_client is not None:
+            await self._job_boards_client.close()
+            self._job_boards_client = None
 
     async def enrich(self, lead: dict[str, Any]) -> dict[str, Any]:
         """Enrich a single lead with web search data and LLM analysis.
@@ -301,17 +324,14 @@ class EnricherAgent:
         if not domain:
             return lead
 
-        client = TechnographicClient(redis_url=redis_url)
-        try:
-            tech_stack = await client.get_tech_stack(domain)
-            enriched = {**lead}
-            enriched["enrichment_data"] = {
-                **enriched.get("enrichment_data", {}),
-                "tech_stack": tech_stack,
-            }
-            return enriched
-        finally:
-            await client.close()
+        client = self._get_technographic_client(redis_url)
+        tech_stack = await client.get_tech_stack(domain)
+        enriched = {**lead}
+        enriched["enrichment_data"] = {
+            **enriched.get("enrichment_data", {}),
+            "tech_stack": tech_stack,
+        }
+        return enriched
 
     async def enrich_intent_signals(
         self, lead: dict[str, Any], redis_url: str
@@ -331,11 +351,8 @@ class EnricherAgent:
             return lead
 
         # Get hiring signals
-        client = JobBoardsClient(redis_url=redis_url)
-        try:
-            job_listings = await client.search_jobs(company)
-        finally:
-            await client.close()
+        client = self._get_job_boards_client(redis_url)
+        job_listings = await client.search_jobs(company)
 
         # Filter for relevant hiring roles
         relevant_keywords = [
@@ -416,7 +433,12 @@ class EnricherAgent:
         return min(score, 100.0)
 
     def _extract_domain(self, lead: dict[str, Any]) -> str:
-        """Extract company domain from email or company name."""
+        """Extract company domain from email address.
+
+        Returns the domain portion of the lead's email if it is not a generic
+        provider (gmail, yahoo, etc.). Returns empty string when no reliable
+        domain can be determined, avoiding naive company-name guessing.
+        """
         email = lead.get("email", "")
         if email and "@" in email:
             domain = email.split("@")[1]
@@ -427,12 +449,5 @@ class EnricherAgent:
             }
             if domain.lower() not in generic:
                 return domain
-
-        # Fallback: use company name as a domain guess
-        company = lead.get("company", "")
-        if company:
-            # Simple domain guess: lowercase, remove spaces, add .com
-            clean = company.lower().replace(" ", "").replace(",", "")
-            return f"{clean}.com"
 
         return ""

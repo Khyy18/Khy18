@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import redis.asyncio as aioredis
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -293,7 +293,7 @@ class SequenceRunner:
             direction=MessageDirection.outbound,
             content=content,
             subject=None,
-            status=MessageStatus.sent,
+            status=MessageStatus.draft,
             sent_at=now,
             meta={
                 "linkedin_task": task_name,
@@ -505,14 +505,23 @@ class SequenceRunner:
         campaign_id: uuid.UUID,
         lead_id: uuid.UUID,
     ) -> int:
-        """Count outbound messages sent for a specific campaign+lead pair."""
+        """Count outbound messages sent (or queued) for a specific campaign+lead pair.
+
+        Counts all outbound messages except email drafts. LinkedIn drafts are
+        counted because they represent queued actions awaiting worker execution.
+        """
         stmt = (
             select(func.count())
             .select_from(Message)
             .where(Message.campaign_id == campaign_id)
             .where(Message.lead_id == lead_id)
             .where(Message.direction == MessageDirection.outbound)
-            .where(Message.status != MessageStatus.draft)
+            .where(
+                or_(
+                    Message.status != MessageStatus.draft,
+                    Message.channel == ChannelType.linkedin,
+                )
+            )
         )
         result = await session.execute(stmt)
         return result.scalar() or 0
@@ -523,13 +532,18 @@ class SequenceRunner:
         campaign_id: uuid.UUID,
         lead_id: uuid.UUID,
     ) -> Message | None:
-        """Get the most recently sent outbound message for a campaign+lead pair."""
+        """Get the most recently sent/queued outbound message for a campaign+lead pair."""
         stmt = (
             select(Message)
             .where(Message.campaign_id == campaign_id)
             .where(Message.lead_id == lead_id)
             .where(Message.direction == MessageDirection.outbound)
-            .where(Message.status != MessageStatus.draft)
+            .where(
+                or_(
+                    Message.status != MessageStatus.draft,
+                    Message.channel == ChannelType.linkedin,
+                )
+            )
             .order_by(Message.sent_at.desc())
             .limit(1)
         )
