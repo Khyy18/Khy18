@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY kindergarten_accountant_bot/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY kindergarten_accountant_bot/ kindergarten_accountant_bot/
+COPY backend/ backend/
+
+CMD ["python3", "-m", "kindergarten_accountant_bot.main"]
