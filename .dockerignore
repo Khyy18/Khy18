@@ -40,3 +40,9 @@ backtester/data/*.json
 .dockerignore
 deploy/README.md
 README.md
+
+# AI Agency: тесты, данные и артефакты
+ai_agency/tests/
+ai_agency/*.db
+ai_agency/logs/
+ai_agency/backups/

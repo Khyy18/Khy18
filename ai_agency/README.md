@@ -1,427 +1,451 @@
-# AI-Agency - Автоматизированное текстовое агентство
+# AI Text Agency
 
-Полнофункциональное AI-агентство на базе Telegram-ботов с оплатой, подписками, реферальной системой, многоагентным пайплайном, REST API для B2B, мульти-бот архитектурой и веб-лендингом.
+Production-grade Telegram bot platform for automated text content services (copywriting, rewriting, SEO, translations) with integrated payments, admin panel, REST API, and web landing page.
 
-## Обзор возможностей
-
-1. **10 текстовых услуг** - копирайтинг, рерайт, SEO, переводы, саммари, деловые документы, контент-планы, email-маркетинг, анализ конкурентов, сценарии видео
-2. **Платежный шлюз YooKassa** - пополнение баланса и оплата подписок
-3. **Подписки (Basic / Pro)** - лимитированный и безлимитный тарифы
-4. **Многоагентный пайплайн** - Writer, Editor, QA с фолбэком на Groq
-5. **Реферальная система** - 10% бонус за привлеченных клиентов
-6. **Рейтинг и авто-переделка** - оценка результата, автоматическая переделка при низком рейтинге
-7. **Аналитика** - дашборд с метриками, спарклайнами, конверсией
-8. **Планировщик** - retention-напоминания, upsell, истечение подписок
-9. **Веб-лендинг** - aiohttp + jinja2, SEO-оптимизированная страница
-10. **Бесплатная пробная версия** - первый заказ бесплатно для новых клиентов
-11. **Динамическое ценообразование** - множители за длину текста и срочность
-12. **Экспорт документов** - скачивание результатов в .docx и .pdf
-13. **White-label персона** - настраиваемая личность бота
-14. **A/B тестирование** - алгоритм UCB1 для оптимизации промптов
-15. **Интернационализация (i18n)** - поддержка RU и EN
-16. **Парсер заказов Kwork** - мониторинг RSS-ленты по ключевым словам
-17. **Авто-постинг кейсов** - публикация выполненных заказов в Telegram-канал
-18. **REST API для B2B** - FastAPI-эндпоинты с API-ключами и rate-limiting
-19. **Мульти-бот архитектура** - фабрика для создания нишевых ботов
-
-## Архитектура
+## Architecture
 
 ```
-                    +-------------------+
-                    |    Web Landing    |
-                    |  (aiohttp:8080)   |
-                    +--------+----------+
-                             |
-        +--------------------+--------------------+
-        |                    |                    |
-+-------v-------+   +-------v-------+   +-------v-------+
-| Client Bot    |   |  Admin Bot    |   | YooKassa      |
-| (telegram)    |   |  (telegram)   |   | Webhook       |
-+-------+-------+   +-------+-------+   +-------+-------+
-        |                    |                    |
-+-------v-------+   +-------v-------+   +-------v-------+
-| Niche Bot 1   |   | Niche Bot 2   |   | REST API      |
-| (bot_factory) |   | (bot_factory) |   | (FastAPI:8000)|
-+-------+-------+   +-------+-------+   +-------+-------+
-        |                    |                    |
-        +--------------------+--------------------+
-                             |
-                    +--------v----------+
-                    |   Pipeline        |
-                    | Writer->Editor->QA|
-                    | (OpenAI + Groq)   |
-                    +--------+----------+
-                             |
-              +--------------+--------------+
-              |              |              |
-     +--------v---+  +------v------+  +----v--------+
-     | A/B Testing|  | Pricing     |  | Doc Export  |
-     | (UCB1)     |  | (dynamic)   |  | (.docx/.pdf)|
-     +------------+  +-------------+  +-------------+
-                             |
-                    +--------v----------+
-                    |    Database       |
-                    |   (SQLite)        |
-                    +-------------------+
-                             |
-              +--------------+--------------+
-              |              |              |
-     +--------v---+  +------v------+  +----v--------+
-     | Scheduler  |  | Lead Parser |  | Auto-posting|
-     | (asyncio)  |  | (Kwork RSS) |  | (channel)   |
-     +------------+  +-------------+  +-------------+
++-------------------+       +-------------------+       +-------------------+
+|   Telegram Bot    |       |    Admin Bot      |       |   REST API        |
+|  (bot.py)         |       |  (admin_bot.py)   |       |  (api/app.py)     |
++--------+----------+       +--------+----------+       +--------+----------+
+         |                           |                           |
+         +---------------------------+---------------------------+
+                                     |
+                    +----------------+----------------+
+                    |          Core Services           |
+                    |  pipeline.py | services.py      |
+                    |  billing.py  | pricing.py       |
+                    |  subscriptions.py               |
+                    +----------------+----------------+
+                                     |
+         +---------------------------+---------------------------+
+         |                           |                           |
++--------+----------+   +-----------+---------+   +-------------+-------+
+|  Queue Manager    |   |     Database        |   |   Scheduler         |
+|  (queue_manager)  |   |  (database.py)      |   |  (scheduler.py)     |
++-------------------+   +---------------------+   +-----------------------+
+         |                           |                           |
++--------+----------+   +-----------+---------+   +-------------+-------+
+|  Rate Limiter     |   |     Backup          |   |   Monitoring        |
+|  (rate_limiter)   |   |  (backup.py)        |   |  (monitoring.py)    |
++-------------------+   +---------------------+   +-----------------------+
+         |                           |                           |
++--------+----------+   +-----------+---------+   +-------------+-------+
+|  CRM / Segments   |   |     Resilience      |   |   Logging Config    |
+|  (crm.py)         |   |  (resilience.py)    |   |  (logging_config)   |
++-------------------+   +---------------------+   +-----------------------+
 ```
 
-## Новые возможности (v2)
+### Services (Docker Compose)
 
-### Бесплатная пробная версия (Free Trial)
+| Service     | Description                          | Port |
+|-------------|--------------------------------------|------|
+| `bot`       | Main Telegram client bot             | -    |
+| `admin_bot` | Admin management bot                 | -    |
+| `api`       | REST API for B2B integrations        | 8000 |
+| `web`       | Landing page with analytics          | 8080 |
+| `scheduler` | Background tasks (backup, CRM, etc.) | -    |
 
-Каждый новый клиент получает первый заказ бесплатно. Система автоматически определяет, использовал ли клиент пробный заказ, и пропускает списание средств для первого заказа.
-
-### Динамическое ценообразование (Dynamic Pricing)
-
-Цена рассчитывается на основе базовой стоимости услуги с применением множителей:
-
-| Длина текста | Множитель |
-|-------------|-----------|
-| <= 1000 символов | x1.0 |
-| <= 3000 символов | x1.5 |
-| <= 5000 символов | x2.0 |
-| > 5000 символов | x3.0 |
-
-| Срочность | Множитель |
-|-----------|-----------|
-| Обычный | x1.0 |
-| Срочный | x1.5 |
-
-Формула: `итоговая_цена = базовая_цена * множитель_длины * множитель_срочности`
-
-### Экспорт документов (Document Export)
-
-После выполнения заказа клиент может скачать результат в формате:
-- **.docx** - документ Word с заголовком и форматированием
-- **.pdf** - PDF-документ с поддержкой кириллицы
-
-Кнопки экспорта отображаются автоматически после получения результата.
-
-### White-label персона (Bot Persona)
-
-Бот может представляться любым именем и использовать пользовательское приветствие. Настраивается через переменные окружения:
-- `BOT_PERSONA_NAME` - имя бота (по умолчанию "Алиса")
-- `BOT_PERSONA_GREETING` - текст приветствия
-
-### A/B тестирование промптов (A/B Testing)
-
-Система автоматически тестирует варианты промптов для повышения качества генерации:
-- Алгоритм **UCB1** (Upper Confidence Bound) для выбора варианта
-- Оценки клиентов (1-5 звезд) как сигнал для оптимизации
-- Автоматический баланс между исследованием и эксплуатацией
-
-### Интернационализация (i18n)
-
-Поддержка двух языков интерфейса:
-- **RU** - русский (по умолчанию)
-- **EN** - английский
-
-Клиент может переключить язык через команду /language. Все сообщения бота, кнопки и уведомления переводятся автоматически.
-
-### Парсер заказов Kwork (Lead Parser)
-
-Автоматический мониторинг RSS-ленты Kwork по ключевым словам:
-- Парсинг новых заказов по заданным ключевым словам
-- Уведомление администратора о подходящих заказах
-- Настройка ключевых слов через `KWORK_KEYWORDS`
-
-### Авто-постинг кейсов (Auto-posting)
-
-Автоматическая публикация выполненных заказов в Telegram-канал:
-- Отправка превью результата с описанием услуги
-- Публикация оценки клиента (если есть)
-- Настройка канала через `CHANNEL_ID`
-
-### REST API для B2B (FastAPI)
-
-Полноценный REST API для интеграции с внешними системами:
-
-#### Аутентификация
-
-Все запросы требуют заголовок `X-API-Key` с валидным API-ключом. Rate-limiting: 60 запросов в день на ключ (настраивается).
-
-#### Эндпоинты
-
-| Метод | Путь | Описание |
-|-------|------|----------|
-| POST | `/api/orders` | Создать заказ |
-| GET | `/api/orders/{order_id}` | Получить статус заказа |
-| GET | `/api/orders/{order_id}/result` | Получить результат заказа |
-
-#### Создание заказа
+## Quick Start (Docker)
 
 ```bash
-curl -X POST http://localhost:8000/api/orders \
-  -H "X-API-Key: your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "service_type": "copywriting",
-    "input_text": "Написать пост о технологиях ИИ",
-    "urgent": false
-  }'
-```
-
-Ответ:
-```json
-{
-  "order_id": 42,
-  "status": "pending",
-  "price": 150.0
-}
-```
-
-#### Получение статуса
-
-```bash
-curl http://localhost:8000/api/orders/42 \
-  -H "X-API-Key: your-api-key"
-```
-
-Ответ:
-```json
-{
-  "order_id": 42,
-  "status": "completed",
-  "service_type": "copywriting",
-  "created_at": "2024-01-15T12:00:00",
-  "price": 150.0
-}
-```
-
-#### Получение результата
-
-```bash
-curl http://localhost:8000/api/orders/42/result \
-  -H "X-API-Key: your-api-key"
-```
-
-Ответ:
-```json
-{
-  "order_id": 42,
-  "result_text": "Текст выполненного заказа..."
-}
-```
-
-### Мульти-бот архитектура (Multi-bot)
-
-Фабрика для создания нишевых ботов с ограниченным набором услуг. Каждый бот имеет собственный токен, набор услуг и персону.
-
-#### Конфигурация
-
-Переменная `NICHE_BOTS` содержит JSON-массив с конфигурацией нишевых ботов:
-
-```bash
-export NICHE_BOTS='[
-  {
-    "token": "123456:ABC-DEF",
-    "name": "SEO-бот",
-    "services": ["seo", "copywriting", "content_plan"],
-    "persona_name": "SEO-мастер"
-  },
-  {
-    "token": "789012:GHI-JKL",
-    "name": "Переводчик",
-    "services": ["translation"],
-    "persona_name": "Переводчик Максим"
-  }
-]'
-```
-
-#### Запуск
-
-```bash
-python main_multi.py
-```
-
-Запускает основной бот и все нишевые боты конкурентно в одном процессе.
-
-## Услуги
-
-| # | Услуга | Описание | Базовая цена |
-|---|--------|----------|-------------|
-| 1 | Копирайтинг | Посты, статьи, описания товаров | 150 руб. |
-| 2 | Рерайт | Уникализация текста с сохранением смысла | 100 руб. |
-| 3 | SEO-оптимизация | Оптимизация для поисковых систем | 200 руб. |
-| 4 | Перевод RU-EN | Профессиональный перевод | 180 руб. |
-| 5 | Саммари | Краткое изложение длинного текста | 120 руб. |
-| 6 | Деловые документы | КП, вакансии, резюме | 250 руб. |
-| 7 | Контент-план | Контент-план для соцсетей | 200 руб. |
-| 8 | Email-маркетинг | Цепочки писем, welcome-серии | 180 руб. |
-| 9 | Анализ конкурентов | Анализ с рекомендациями | 300 руб. |
-| 10 | Сценарий видео | Сценарии для YouTube/Reels/TikTok | 250 руб. |
-
-## Подписки
-
-| Тариф | Цена | Лимит заказов | Особенности |
-|-------|------|---------------|-------------|
-| Basic | 990 руб./мес | 20 заказов/мес | Все услуги, приоритет |
-| Pro | 2490 руб./мес | Безлимит | Все услуги, приоритет, поддержка |
-
-## Переменные окружения
-
-| Переменная | Описание | По умолчанию |
-|-----------|----------|--------------|
-| `TELEGRAM_BOT_TOKEN` | Токен клиентского бота | (обязательно) |
-| `TELEGRAM_ADMIN_BOT_TOKEN` | Токен админского бота | - |
-| `ADMIN_TELEGRAM_ID` | Telegram ID администратора | 0 |
-| `OPENAI_API_KEY` | Ключ OpenAI API | (обязательно) |
-| `DEFAULT_MODEL` | Модель OpenAI | gpt-4o-mini |
-| `DATABASE_PATH` | Путь к SQLite БД | agency.db |
-| `YOOKASSA_SHOP_ID` | ID магазина YooKassa | (обязательно) |
-| `YOOKASSA_SECRET_KEY` | Секретный ключ YooKassa | (обязательно) |
-| `YOOKASSA_WEBHOOK_SECRET` | Секрет для вебхуков YooKassa | - |
-| `GROQ_API_KEY` | Ключ Groq API (фолбэк) | - |
-| `WEB_HOST` | Хост веб-сервера | 0.0.0.0 |
-| `WEB_PORT` | Порт веб-сервера | 8080 |
-| `BOT_USERNAME` | Username бота (без @) | - |
-| `REFERRAL_BONUS_PERCENT` | Процент реферального бонуса | 10 |
-| `SUBSCRIPTION_BASIC_PRICE` | Цена подписки Basic | 990 |
-| `SUBSCRIPTION_BASIC_ORDERS` | Лимит заказов Basic | 20 |
-| `SUBSCRIPTION_PRO_PRICE` | Цена подписки Pro | 2490 |
-| `BOT_PERSONA_NAME` | Имя персоны бота | Алиса |
-| `BOT_PERSONA_GREETING` | Приветственное сообщение бота | Привет! Я Алиса... |
-| `CHANNEL_ID` | ID Telegram-канала для авто-постинга | - |
-| `KWORK_KEYWORDS` | Ключевые слова для парсера Kwork (через запятую) | копирайтинг,рерайт,SEO,перевод |
-| `NICHE_BOTS` | JSON-конфигурация нишевых ботов | [] |
-| `API_HOST` | Хост REST API | 0.0.0.0 |
-| `API_PORT` | Порт REST API | 8000 |
-
-## Установка и запуск
-
-```bash
-# 1. Перейти в директорию
+# 1. Clone and enter directory
 cd ai_agency
 
-# 2. Установить зависимости
+# 2. Create environment file
+cp .env.example .env
+# Edit .env with your tokens and keys
+
+# 3. Build and run all services
+make build
+make up
+
+# 4. Check status
+make status
+
+# 5. View logs
+make logs
+```
+
+## Manual Installation
+
+```bash
+# 1. Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# venv\Scripts\activate   # Windows
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Настроить переменные окружения
-export TELEGRAM_BOT_TOKEN="your_token"
-export OPENAI_API_KEY="sk-..."
-export YOOKASSA_SHOP_ID="your_shop_id"
-export YOOKASSA_SECRET_KEY="your_secret"
-export BOT_USERNAME="your_bot"
+# 3. Configure environment
+cp .env.example .env
+# Edit .env
 
-# 4. Запустить клиентский бот
-python bot.py
-
-# 5. Запустить админский бот (отдельный терминал)
-python admin_bot.py
-
-# 6. Запустить веб-лендинг (отдельный терминал)
-python -c "import asyncio; from web.app import start_web_app; asyncio.run(start_web_app())"
-
-# 7. Запустить REST API (отдельный терминал)
-uvicorn api.app:app --host 0.0.0.0 --port 8000
-
-# 8. Или запустить все боты вместе (мульти-бот режим)
+# 4. Run the application
 python main_multi.py
 ```
 
-## Реферальная система
+## Configuration
 
-- Каждый пользователь получает уникальную ссылку: `t.me/{BOT_USERNAME}?start=ref_{user_id}`
-- При переходе по ссылке новый пользователь привязывается к рефереру
-- После первого заказа привлеченного клиента реферер получает бонус (10% от суммы заказа)
-- Статистика рефералов доступна через кнопку "Реферальная ссылка" в боте
+All configuration is managed via environment variables. Copy `.env.example` to `.env` and fill in the values.
 
-## Платежная система (YooKassa)
+### Required Variables
 
-1. Клиент нажимает "Пополнить баланс" или "Подписка"
-2. Система создает платеж через YooKassa API
-3. Клиент получает ссылку на оплату
-4. После успешной оплаты YooKassa отправляет webhook
-5. Система обновляет баланс или активирует подписку
-6. Клиент получает уведомление в боте
+| Variable | Description |
+|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Token for the client-facing Telegram bot |
+| `OPENAI_API_KEY` | OpenAI API key for text generation |
+| `YOOKASSA_SHOP_ID` | YooKassa payment shop ID |
+| `YOOKASSA_SECRET_KEY` | YooKassa secret key |
 
-## Многоагентный пайплайн
+### Optional Variables
 
-Обработка каждого заказа проходит через трехэтапный конвейер:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TELEGRAM_ADMIN_BOT_TOKEN` | - | Token for admin bot |
+| `ADMIN_TELEGRAM_ID` | `0` | Admin's Telegram user ID |
+| `DEFAULT_MODEL` | `gpt-4o-mini` | Default LLM model |
+| `DATABASE_PATH` | `agency.db` | SQLite database path |
+| `GROQ_API_KEY` | - | Groq API key (fallback LLM) |
+| `WEB_HOST` | `0.0.0.0` | Web server host |
+| `WEB_PORT` | `8080` | Web server port |
+| `API_HOST` | `0.0.0.0` | API server host |
+| `API_PORT` | `8000` | API server port |
+| `BOT_USERNAME` | - | Bot username for deep links |
+| `BOT_PERSONA_NAME` | `Алиса` | Bot persona name |
+| `BOT_PERSONA_GREETING` | `Привет! Я Алиса...` | Greeting message |
+| `SENTRY_DSN` | - | Sentry DSN for error tracking |
+| `LOG_LEVEL` | `INFO` | Logging level |
+| `LOG_FILE` | `logs/agency.log` | Log file path |
+| `QUEUE_MAX_SIZE` | `100` | Max order queue size |
+| `QUEUE_WORKERS` | `3` | Number of queue workers |
+| `BACKUP_DIR` | `backups` | Backup directory |
+| `BACKUP_KEEP_COUNT` | `7` | Number of backups to retain |
+| `STARS_TO_RUB_RATE` | `1.5` | Telegram Stars to RUB conversion |
+| `GOOGLE_ANALYTICS_ID` | - | Google Analytics tracking ID |
+| `YANDEX_METRIKA_ID` | - | Yandex Metrika counter ID |
+| `SUBSCRIPTION_BASIC_PRICE` | `990` | Basic subscription price (RUB) |
+| `SUBSCRIPTION_BASIC_ORDERS` | `20` | Orders in Basic plan |
+| `SUBSCRIPTION_PRO_PRICE` | `2490` | Pro subscription price (RUB) |
+| `REFERRAL_BONUS_PERCENT` | `10` | Referral bonus percentage |
+| `CHANNEL_ID` | - | Telegram channel for case posting |
+| `KWORK_KEYWORDS` | `копирайтинг,...` | Keywords for lead parsing |
+| `NICHE_BOTS` | `[]` | Multi-bot config (JSON) |
 
-1. **Writer** - генерирует текст по системному промпту услуги (OpenAI)
-2. **Editor** - проверяет и улучшает стиль, грамматику, структуру
-3. **QA** - финальная проверка качества по критериям услуги
+## Docker Deployment
 
-Если OpenAI недоступен, система автоматически переключается на Groq API (фолбэк). Каждый этап логируется для аналитики.
+### Build and Run
 
-## Рейтинг и авто-переделка
+```bash
+# Build all services
+docker-compose build
 
-- После выполнения заказа клиент может оценить результат (1-5 звезд)
-- При оценке 1-2 звезды система автоматически переделывает заказ бесплатно
-- Переделка выполняется с улучшенным промптом для повышения качества
-- Рейтинг сохраняется в аналитике
+# Start in background
+docker-compose up -d
 
-## Планировщик (Scheduler)
+# View logs
+docker-compose logs -f bot
 
-Фоновые задачи на asyncio:
-
-| Задача | Интервал | Действие |
-|--------|----------|----------|
-| retention_check | 24 часа | Напоминание неактивным клиентам (7+ дней) |
-| upsell_check | 24 часа | Предложение подписки клиентам с 3+ заказами |
-| subscription_expiry | 1 час | Деактивация истекших подписок |
-
-## Структура проекта
-
-```
-ai_agency/
-├── config.py             - конфигурация из переменных окружения
-├── models.py             - Pydantic-модели и enum-ы
-├── services.py           - определения 10 услуг с промптами
-├── database.py           - асинхронная работа с SQLite (aiosqlite)
-├── billing.py            - биллинг, баланс, подписки, списания
-├── pipeline.py           - многоагентный пайплайн (Writer->Editor->QA)
-├── payment_gateway.py    - интеграция с YooKassa
-├── subscriptions.py      - управление подписками
-├── analytics.py          - аналитика и дашборд
-├── scheduler.py          - фоновые задачи (retention, upsell, expiry)
-├── utils.py              - утилиты форматирования для Telegram
-├── bot.py                - клиентский Telegram-бот
-├── admin_bot.py          - админский Telegram-бот
-├── pricing.py            - динамическое ценообразование
-├── i18n.py               - интернационализация (RU/EN)
-├── document_generator.py - экспорт в .docx и .pdf
-├── ab_testing.py         - A/B тестирование промптов (UCB1)
-├── lead_parser.py        - парсер заказов Kwork (RSS)
-├── auto_posting.py       - авто-постинг кейсов в канал
-├── bot_factory.py        - фабрика нишевых ботов
-├── main_multi.py         - запуск мульти-бот архитектуры
-├── api/
-│   ├── __init__.py       - модуль REST API
-│   ├── app.py            - FastAPI приложение (эндпоинты)
-│   └── auth.py           - аутентификация API-ключами
-├── web/
-│   ├── __init__.py       - модуль веб-приложения
-│   ├── app.py            - aiohttp приложение (лендинг + health)
-│   ├── templates/
-│   │   └── index.html    - HTML-шаблон лендинга
-│   └── static/
-│       └── style.css     - стили лендинга
-├── requirements.txt      - зависимости Python
-└── README.md             - документация
+# Stop all
+docker-compose down
 ```
 
-## Технологии
+### Volume Mounts
 
-- **Python 3.11+** - основной язык
-- **python-telegram-bot 20+** - Telegram Bot API
-- **OpenAI API** - генерация текстов (gpt-4o-mini)
-- **Groq API** - фолбэк для генерации
-- **aiosqlite** - асинхронная БД
-- **Pydantic v2** - валидация данных
-- **YooKassa SDK** - платежи
-- **aiohttp + jinja2** - веб-лендинг
-- **asyncio** - асинхронный планировщик
-- **FastAPI + Uvicorn** - REST API для B2B
-- **python-docx** - генерация .docx документов
-- **ReportLab** - генерация PDF
-- **feedparser** - парсинг RSS-лент (Kwork)
-- **APScheduler** - планировщик задач
+| Volume | Purpose |
+|--------|---------|
+| `app-data` | SQLite database persistence |
+| `app-logs` | Application logs |
+| `app-backups` | Database backups |
+
+### Health Checks
+
+All services include health checks:
+- **bot/web**: `GET http://localhost:8080/health`
+- **api**: `GET http://localhost:8000/api/orders`
+
+## Makefile Commands
+
+| Command | Description |
+|---------|-------------|
+| `make build` | Build Docker images |
+| `make up` | Start all services in background |
+| `make down` | Stop all services |
+| `make restart` | Restart all services |
+| `make logs` | Follow logs from all services |
+| `make shell` | Open shell in bot container |
+| `make status` | Show service status |
+| `make test` | Run test suite |
+| `make backup` | Create database backup |
+| `make clean` | Remove containers, volumes, and images |
+
+## Module Descriptions
+
+### Core Modules
+
+| Module | Description |
+|--------|-------------|
+| `bot.py` | Main Telegram bot with conversation handlers for ordering |
+| `admin_bot.py` | Admin bot with statistics, order management, CRM, monitoring |
+| `main_multi.py` | Application entry point, starts bot + web + API concurrently |
+| `config.py` | Centralized configuration from environment variables |
+| `database.py` | SQLite async operations with aiosqlite |
+| `models.py` | Data models and ServiceType enum |
+| `services.py` | Service definitions (copywriting, rewriting, SEO, etc.) |
+
+### Processing
+
+| Module | Description |
+|--------|-------------|
+| `pipeline.py` | LLM processing pipeline with OpenAI + Groq fallback |
+| `queue_manager.py` | Priority-based async order queue with worker pool |
+| `resilience.py` | Retry with backoff, circuit breaker, graceful shutdown |
+
+### Payments and Billing
+
+| Module | Description |
+|--------|-------------|
+| `billing.py` | Balance management and order cost calculations |
+| `pricing.py` | Dynamic pricing engine |
+| `payment_gateway.py` | YooKassa payment integration |
+| `telegram_payments.py` | Telegram Stars native payments |
+| `subscriptions.py` | Subscription management (Basic/Pro plans) |
+
+### Analytics and Marketing
+
+| Module | Description |
+|--------|-------------|
+| `analytics.py` | Business analytics and reporting |
+| `ab_testing.py` | A/B testing framework |
+| `crm.py` | Client segmentation and personal offers |
+| `auto_posting.py` | Automated case publishing to channel |
+| `lead_parser.py` | Kwork lead parsing |
+
+### Infrastructure
+
+| Module | Description |
+|--------|-------------|
+| `logging_config.py` | Structured JSON logging with rotation |
+| `monitoring.py` | Health checks, metrics, admin alerts |
+| `backup.py` | Automated SQLite backup with rotation |
+| `rate_limiter.py` | Per-user anti-spam and flood protection |
+| `scheduler.py` | Background task scheduler |
+| `scheduler_standalone.py` | Standalone scheduler entry point for Docker |
+
+### Web and API
+
+| Module | Description |
+|--------|-------------|
+| `web/app.py` | aiohttp landing page server |
+| `web/templates/index.html` | Responsive landing with Tailwind CSS |
+| `web/static/style.css` | Custom CSS overrides |
+| `api/app.py` | FastAPI REST API |
+| `api/auth.py` | API authentication |
+
+### Utilities
+
+| Module | Description |
+|--------|-------------|
+| `utils.py` | Telegram card formatting, progress bars, sparklines |
+| `i18n.py` | Internationalization |
+| `document_generator.py` | DOCX/PDF document generation |
+| `bot_factory.py` | Multi-bot architecture factory |
+
+## Queue System
+
+The order queue (`queue_manager.py`) provides:
+
+- **Priority-based processing**: Urgent orders processed first
+- **Configurable worker pool**: `QUEUE_WORKERS` concurrent processors
+- **Backpressure**: When queue is full (`QUEUE_MAX_SIZE`), returns estimated wait time
+- **Statistics**: Real-time queue size, active workers, average processing time
+- **Graceful lifecycle**: Clean start/stop with in-progress order completion
+
+```python
+# Queue usage (internal)
+from queue_manager import OrderQueue
+
+queue = OrderQueue(max_size=100, worker_count=3)
+await queue.start()
+await queue.enqueue_order(order_id, service_type, input_text, priority=1)
+stats = queue.get_queue_stats()
+await queue.shutdown()
+```
+
+## Monitoring and Alerts
+
+The monitoring system (`monitoring.py`) provides:
+
+- **Health checks**: Database connectivity, OpenAI API, bot responsiveness
+- **Metrics collection**: Orders in queue, processing time, error rate, uptime
+- **Admin alerts**: Telegram notifications on critical failures
+- **Watchdog**: Automatic alerting if bot is unresponsive for 5+ minutes
+
+Health endpoint response:
+```json
+{
+  "status": "healthy",
+  "checks": {
+    "database": {"status": "ok"},
+    "openai_api": {"status": "ok"},
+    "bot": {"status": "ok"}
+  },
+  "metrics": {
+    "orders_in_queue": 3,
+    "avg_processing_time": 12.5,
+    "error_rate": 0.02,
+    "uptime": 86400
+  }
+}
+```
+
+## Logging
+
+Structured logging with `logging_config.py`:
+
+- **Console output**: Human-readable format for development
+- **File output**: JSON format with rotation (10MB, 5 files)
+- **Structured fields**: order_id, client_id, duration, status
+- **Sentry integration**: Optional error tracking via `SENTRY_DSN`
+
+Log levels controlled via `LOG_LEVEL` environment variable.
+
+## Backup and Recovery
+
+Automated backup system (`backup.py`):
+
+- **Daily backups**: SQLite database copied with timestamp
+- **Rotation**: Keeps last N backups (`BACKUP_KEEP_COUNT`, default 7)
+- **Format**: `agency_backup_YYYYMMDD_HHMMSS.db`
+- **Manual backup**: `make backup`
+
+Recovery:
+```bash
+# List available backups
+ls backups/
+
+# Restore from backup
+cp backups/agency_backup_20240101_120000.db agency.db
+```
+
+## Rate Limiting
+
+Anti-spam protection (`rate_limiter.py`):
+
+- **Order limit**: Max 5 orders per hour per user
+- **Flood detection**: Ban if >20 messages per minute
+- **Cooldown**: 30-second minimum between orders
+- **In-memory**: Fast per-user tracking with automatic cleanup
+
+## CRM and Segmentation
+
+Client relationship management (`crm.py`):
+
+| Segment | Criteria |
+|---------|----------|
+| `new` | Registered less than 7 days, 0 orders |
+| `active` | Ordered in last 14 days |
+| `vip` | Total spent > 5000 RUB |
+| `sleeping` | No orders for 14+ days |
+
+Features:
+- Automatic segment recalculation (every 6 hours via scheduler)
+- Personalized offers based on segment
+- Client timeline view in admin bot
+
+## Telegram Stars Payments
+
+Native Telegram payment method (`telegram_payments.py`):
+
+- No external payment provider needed
+- Configurable conversion rate (`STARS_TO_RUB_RATE`)
+- Automatic balance credit on successful payment
+- Integrated alongside YooKassa in top-up menu
+
+## Testing
+
+```bash
+# Run all tests
+make test
+
+# Run with verbose output
+python -m pytest tests/ -v
+
+# Run specific test file
+python -m pytest tests/test_queue.py -v
+```
+
+## API Reference
+
+### REST API (port 8000)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/orders` | List orders (with pagination) |
+| POST | `/api/orders` | Create new order |
+| GET | `/api/orders/{id}` | Get order by ID |
+| GET | `/api/clients` | List clients |
+| GET | `/api/stats` | Service statistics |
+
+Authentication: Bearer token in `Authorization` header.
+
+### Web Endpoints (port 8080)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Landing page |
+| GET | `/health` | Health check |
+| GET | `/api/stats` | Public stats (total orders, rating) |
+
+## Troubleshooting
+
+### Bot not starting
+
+1. Check `TELEGRAM_BOT_TOKEN` is set correctly
+2. Verify bot token with: `curl https://api.telegram.org/bot<TOKEN>/getMe`
+3. Check logs: `make logs` or `cat logs/agency.log`
+
+### Orders stuck in queue
+
+1. Check queue status in admin bot (Monitoring section)
+2. Verify OpenAI API key is valid
+3. Check if circuit breaker is open (5 consecutive LLM failures)
+4. Restart workers: `make restart`
+
+### Database errors
+
+1. Check file permissions on `agency.db`
+2. Verify volume mount in Docker: `docker-compose exec bot ls -la /app/data/`
+3. Restore from backup if corrupted (see Backup and Recovery section)
+
+### Payment failures
+
+1. Verify YooKassa credentials in `.env`
+2. Check webhook URL is accessible from internet
+3. For Telegram Stars: ensure bot has payment capabilities enabled via @BotFather
+
+### Health check failing
+
+1. Check which component is down: `curl http://localhost:8080/health`
+2. Review monitoring alerts in admin bot
+3. Common issues:
+   - Database locked: too many concurrent writes
+   - OpenAI API: rate limit or invalid key
+   - Bot: token revoked or network issue
+
+### Docker issues
+
+```bash
+# Rebuild from scratch
+make clean
+make build
+make up
+
+# Check container logs
+docker-compose logs bot --tail=50
+
+# Enter container for debugging
+make shell
+```
