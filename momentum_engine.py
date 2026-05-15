@@ -293,89 +293,90 @@ async def _process_symbol(
     adapter: ExchangeAdapter,
     symbol: str,
 ) -> str:
-    """Обработать один символ: сигнал + управление позицией."""
+    """Обработать один символ: regime-adaptive routing + управление позицией."""
     mom_state = state["momentum"]
 
     # Получаем свечи
     klines = await adapter.get_klines(
         session, symbol, cfg.MOMENTUM_TIMEFRAME, limit=100
     )
-    if not klines or len(klines) < cfg.MOMENTUM_EMA_SLOW + 5:
+    if not klines or len(klines) < 50:
         return "недостаточно свечей"
 
     # Извлекаем close-цены
     closes = [float(k["close"]) for k in klines]
 
-    # Считаем EMA
-    fast_ema = calc_ema(closes, cfg.MOMENTUM_EMA_FAST)
-    slow_ema = calc_ema(closes, cfg.MOMENTUM_EMA_SLOW)
-
     # Текущая цена
     current_price = closes[-1]
+
+    # Calculate ADX and RSI for regime routing
+    adx = calc_adx(klines[-50:], period=14)
+    rsi = calc_rsi(closes[-30:], period=14)
 
     # Проверяем существующую позицию по символу
     existing = _find_position(mom_state, symbol)
 
     if existing:
-        # Управляем открытой позицией (trailing stop + выход)
+        # Управляем открытой позицией
         return await _manage_position(
-            session, state, adapter, symbol, existing, fast_ema, slow_ema, current_price, klines
+            session, state, adapter, symbol, existing,
+            closes, current_price, klines, rsi
         )
 
-    # Нет позиции — ищем сигнал
-    signal = detect_crossover(fast_ema, slow_ema)
+    # Нет позиции — regime-adaptive signal generation
+
+    # Time-of-day filter: skip quiet hours
+    if cfg.MOMENTUM_SESSION_FILTER_ENABLED:
+        from datetime import datetime, timezone
+        hour = datetime.now(tz=timezone.utc).hour
+        if hour < cfg.MOMENTUM_SESSION_START_UTC or hour >= cfg.MOMENTUM_SESSION_END_UTC:
+            return f"вне торговой сессии ({hour}:00 UTC)"
+
+    # Regime routing
+    signal = None
+    strategy_type = "BO"
+
+    if adx < cfg.MOMENTUM_ADX_RANGE_THRESHOLD:
+        # Mean-Reversion regime: RSI extremes
+        if rsi < cfg.MOMENTUM_MR_RSI_OVERSOLD:
+            signal = "LONG"
+            strategy_type = "MR"
+        elif rsi > cfg.MOMENTUM_MR_RSI_OVERBOUGHT:
+            signal = "SHORT"
+            strategy_type = "MR"
+    elif adx >= cfg.MOMENTUM_ADX_TREND_THRESHOLD:
+        # Breakout regime: price breaks N-bar high/low with volume confirmation
+        lookback = cfg.MOMENTUM_BO_LOOKBACK
+        if len(klines) > lookback + 1:
+            window = klines[-lookback - 1:-1]
+            window_highs = [float(k["high"]) for k in window]
+            window_lows = [float(k["low"]) for k in window]
+            window_volumes = [float(k.get("volume", 0)) for k in window]
+            avg_vol = sum(window_volumes) / len(window_volumes) if window_volumes else 0
+            current_high = float(klines[-1]["high"])
+            current_low = float(klines[-1]["low"])
+            current_vol = float(klines[-1].get("volume", 0))
+            vol_ok = avg_vol > 0 and current_vol > avg_vol * cfg.MOMENTUM_BO_MIN_VOL_RATIO
+
+            if current_high > max(window_highs) and vol_ok:
+                signal = "LONG"
+                strategy_type = "BO"
+            elif current_low < min(window_lows) and vol_ok:
+                signal = "SHORT"
+                strategy_type = "BO"
+    else:
+        # Dead zone: 20 <= ADX < 25
+        return f"ADX dead zone ({adx:.1f}), skip"
+
     if signal is None:
         return "нет сигнала"
 
-    # #2: Confirmation bar — проверяем что кросс подтверждён закрытием
-    # предыдущей свечи (не текущей). Смотрим на [-3:-1] вместо [-2:]
-    if cfg.MOMENTUM_CONFIRMATION_BAR:
-        # Проверяем кросс на предыдущем баре, а текущий бар подтверждает
-        if len(fast_ema) >= 3 and len(slow_ema) >= 3:
-            # Кросс должен был случиться на пред-предыдущем → предыдущем
-            prev_signal = detect_crossover(fast_ema[:-1], slow_ema[:-1])
-            if prev_signal != signal:
-                # Кросс только на текущем баре — ждём confirmation
-                # Сохраняем pending signal
-                mom_state.setdefault("pending_signals", {})[symbol] = {
-                    "signal": signal,
-                    "epoch": time.time(),
-                }
-                return f"сигнал {signal}, ждём confirmation"
-            # Проверяем pending — если был на прошлом тике и совпадает
-            pending = mom_state.get("pending_signals", {}).get(symbol)
-            if not pending or pending.get("signal") != signal:
-                mom_state.setdefault("pending_signals", {})[symbol] = {
-                    "signal": signal,
-                    "epoch": time.time(),
-                }
-                return f"сигнал {signal}, ждём confirmation"
-            # Confirmation получен — удаляем pending
-            mom_state.get("pending_signals", {}).pop(symbol, None)
+    # --- Guards ---
 
-    # ATR-фильтр: не входим если волатильность слишком низкая (боковик)
-    atr = calc_atr(klines, period=14)
-    if current_price > 0 and atr / current_price < cfg.MOMENTUM_MIN_ATR_PCT:
-        return f"сигнал {signal}, но ATR слишком мал ({atr/current_price*100:.2f}%)"
-
-    # ADX filter: не входим если нет тренда
-    if cfg.MOMENTUM_MIN_ADX > 0:
-        adx = calc_adx(klines, period=14)
-        if adx < cfg.MOMENTUM_MIN_ADX:
-            return f"сигнал {signal}, но ADX слишком мал ({adx:.1f} < {cfg.MOMENTUM_MIN_ADX})"
-
-    # RSI filter: не входим в перекупленность/перепроданность
-    rsi = calc_rsi(closes, period=14)
-    if signal == "LONG" and rsi > cfg.MOMENTUM_RSI_OVERBOUGHT:
-        return f"сигнал LONG, но RSI перекуплен ({rsi:.1f} > {cfg.MOMENTUM_RSI_OVERBOUGHT})"
-    if signal == "SHORT" and rsi < cfg.MOMENTUM_RSI_OVERSOLD:
-        return f"сигнал SHORT, но RSI перепродан ({rsi:.1f} < {cfg.MOMENTUM_RSI_OVERSOLD})"
-
-    # #6: Cross-strategy exposure check
+    # Cross-strategy exposure check
     max_exposure = cfg.RISK_MAX_EXPOSURE_PER_SYMBOL_PCT
     if max_exposure > 0:
         equity = capital_allocator.get_current_equity(state)
-        # Считаем текущую экспозицию по символу (grid + momentum)
         existing_exposure = _get_symbol_exposure(state, symbol)
         new_notional = _calc_position_size(state, current_price) * current_price
         if equity > 0 and (existing_exposure + new_notional) / equity > max_exposure:
@@ -387,37 +388,9 @@ async def _process_symbol(
     if open_count >= cfg.MOMENTUM_MAX_POSITIONS:
         return f"сигнал {signal}, но макс. позиций ({cfg.MOMENTUM_MAX_POSITIONS})"
 
-    # #7: Per-strategy daily loss check
+    # Per-strategy daily loss check
     if _is_daily_loss_exceeded(state, "momentum", cfg.RISK_DAILY_LOSS_MOMENTUM_PCT):
         return f"сигнал {signal}, но daily loss limit"
-
-    # #4: AI Signal scoring — фильтр слабых сигналов
-    try:
-        import ai_integration
-        should_enter, score = ai_integration.score_momentum_entry(
-            klines, fast_ema, slow_ema, signal, min_score=0.35
-        )
-        if not should_enter:
-            return f"сигнал {signal}, но score={score:.2f} < 0.35"
-    except Exception:  # noqa: BLE001
-        score = 0.5  # fallback — входим без scoring
-
-    # Spread guard: проверяем что ликвидность достаточная
-    try:
-        import runtime_state
-        top = await adapter.get_orderbook_top(session, symbol)
-        if top and runtime_state.is_spread_too_wide(top[0], top[1]):
-            return f"сигнал {signal}, но spread слишком широкий"
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Correlation guard: не открывать в том же направлении по BTC если ETH уже LONG
-    try:
-        import runtime_state
-        if not runtime_state.check_correlation_allows_entry(state, symbol, signal):
-            return f"сигнал {signal}, но correlation guard (группа уже open)"
-    except Exception:  # noqa: BLE001
-        pass
 
     # Macro calendar blackout check
     if cfg.MACRO_CALENDAR_ENABLED:
@@ -430,31 +403,27 @@ async def _process_symbol(
         except Exception:
             pass
 
-    # Time-of-day filter: skip quiet hours
-    if cfg.MOMENTUM_SESSION_FILTER_ENABLED:
-        from datetime import datetime, timezone
-        hour = datetime.now(tz=timezone.utc).hour
-        if hour < cfg.MOMENTUM_SESSION_START_UTC or hour >= cfg.MOMENTUM_SESSION_END_UTC:
-            return f"сигнал {signal}, но вне торговой сессии ({hour}:00 UTC)"
+    # Spread guard
+    try:
+        import runtime_state
+        top = await adapter.get_orderbook_top(session, symbol)
+        if top and runtime_state.is_spread_too_wide(top[0], top[1]):
+            return f"сигнал {signal}, но spread слишком широкий"
+    except Exception:  # noqa: BLE001
+        pass
 
-    # Multi-timeframe confirmation: 1h EMA must be aligned
-    if cfg.MOMENTUM_MTF_ENABLED:
-        try:
-            klines_1h = await adapter.get_klines(session, symbol, cfg.MOMENTUM_MTF_TIMEFRAME, limit=50)
-            if klines_1h and len(klines_1h) >= 26:
-                closes_1h = [float(k["close"]) for k in klines_1h]
-                fast_1h = calc_ema(closes_1h, 9)
-                slow_1h = calc_ema(closes_1h, 21)
-                if signal == "LONG" and fast_1h[-1] < slow_1h[-1]:
-                    return f"сигнал {signal}, но 1h EMA не aligned (fast < slow)"
-                elif signal == "SHORT" and fast_1h[-1] > slow_1h[-1]:
-                    return f"сигнал {signal}, но 1h EMA не aligned (fast > slow)"
-        except Exception:
-            pass  # If unable to get 1h data, enter without confirmation
+    # Correlation guard
+    try:
+        import runtime_state
+        if not runtime_state.check_correlation_allows_entry(state, symbol, signal):
+            return f"сигнал {signal}, но correlation guard (группа уже open)"
+    except Exception:  # noqa: BLE001
+        pass
 
     # Открываем позицию
     return await _open_position(
-        session, state, adapter, symbol, signal, current_price, klines=klines
+        session, state, adapter, symbol, signal, current_price,
+        klines=klines, strategy_type=strategy_type
     )
 
 
@@ -475,6 +444,7 @@ async def _open_position(
     signal: str,
     price: float,
     klines: list[dict[str, Any]] | None = None,
+    strategy_type: str = "BO",
 ) -> str:
     """Открыть позицию по сигналу."""
     mom_state = state["momentum"]
@@ -492,24 +462,18 @@ async def _open_position(
     # Определяем side
     side = "Buy" if signal == "LONG" else "Sell"
 
-    # Стоп-лосс и тейк-профит
-    sl_pct = cfg.MOMENTUM_STOP_LOSS_PCT
-    tp_pct = cfg.MOMENTUM_TAKE_PROFIT_PCT
-
-    # ATR-based stops
-    if cfg.MOMENTUM_USE_ATR_STOPS and klines:
-        atr = calc_atr(klines, period=14)
-        if atr > 0 and price > 0:
-            atr_pct = atr / price
-            sl_pct = atr_pct * cfg.MOMENTUM_ATR_SL_MULT
-            tp_pct = atr_pct * cfg.MOMENTUM_ATR_TP_MULT
+    # Strategy-specific stop-loss
+    if strategy_type == "MR":
+        sl_pct = cfg.MOMENTUM_MR_SL_PCT
+    else:
+        sl_pct = cfg.MOMENTUM_BO_SL_PCT
 
     if signal == "LONG":
         stop_loss = price * (1 - sl_pct)
-        take_profit = price * (1 + tp_pct) if tp_pct > 0 else None
     else:
         stop_loss = price * (1 + sl_pct)
-        take_profit = price * (1 - tp_pct) if tp_pct > 0 else None
+
+    take_profit = None  # Exits handled by _manage_position
 
     # Размещаем ордер
     result = await adapter.place_order_with_fallback(
@@ -544,6 +508,8 @@ async def _open_position(
         "status": "OPEN",
         "notional_usdt": qty * fill_price,
         "slippage_pct": slippage_pct,
+        "strategy_type": strategy_type,
+        "opened_bar": len(klines) if klines else 0,
     }
     mom_state.setdefault("positions", []).append(position)
 
@@ -553,13 +519,14 @@ async def _open_position(
         "signal": signal,
         "price": fill_price,
         "epoch": time.time(),
+        "strategy_type": strategy_type,
     })
     # Лимитируем историю
     if len(mom_state["signals_history"]) > 50:
         mom_state["signals_history"] = mom_state["signals_history"][-50:]
 
     direction = "LONG ↗" if signal == "LONG" else "SHORT ↘"
-    return f"ОТКРЫТО {direction} @{fill_price:.2f}, qty={qty}, SL={stop_loss:.2f}"
+    return f"ОТКРЫТО {direction} [{strategy_type}] @{fill_price:.2f}, qty={qty}, SL={stop_loss:.2f}"
 
 
 async def _manage_position(
@@ -568,118 +535,79 @@ async def _manage_position(
     adapter: ExchangeAdapter,
     symbol: str,
     position: dict[str, Any],
-    fast_ema: list[float],
-    slow_ema: list[float],
+    closes: list[float],
     current_price: float,
     klines: list[dict[str, Any]] | None = None,
+    rsi: float = 50.0,
 ) -> str:
-    """Управление открытой позицией: trailing stop + проверка выхода."""
-    signal = detect_crossover(fast_ema, slow_ema)
+    """Управление открытой позицией: regime-adaptive exits."""
     pos_side = position["side"]  # "LONG" или "SHORT"
-
-    # Выход по обратному сигналу
-    should_close = False
-    close_reason = ""
-
-    if pos_side == "LONG" and signal == "SHORT":
-        should_close = True
-        close_reason = "обратный сигнал (SHORT cross)"
-    elif pos_side == "SHORT" and signal == "LONG":
-        should_close = True
-        close_reason = "обратный сигнал (LONG cross)"
+    entry = float(position["entry_price"])
+    strategy_type = position.get("strategy_type", "BO")
 
     # Рассчитываем текущий PnL%
-    entry = float(position["entry_price"])
     if pos_side == "LONG":
         pnl_pct = (current_price - entry) / entry
     else:
         pnl_pct = (entry - current_price) / entry
 
-    # Trailing stop логика
-    trail_activate = cfg.MOMENTUM_TRAIL_ACTIVATE_PCT
-    trail_distance = cfg.MOMENTUM_TRAIL_DISTANCE_PCT
+    # SL check (common for both strategies)
     current_sl = float(position.get("stop_loss", 0.0))
+    should_close = False
+    close_reason = ""
 
-    if trail_activate > 0 and trail_distance > 0 and pnl_pct >= trail_activate:
-        # Прибыль достигла порога — подтягиваем SL
-        if pos_side == "LONG":
-            new_sl = current_price * (1 - trail_distance)
-            if new_sl > current_sl:
-                # Обновляем SL на бирже
-                result = await retry_async(
-                    lambda _sl=new_sl: adapter.set_trading_stop(session, symbol, stop_loss=_sl),
-                    max_retries=2, base_delay=0.5, label=f"trailing_SL_{symbol}",
-                )
-                if result is not None:
-                    position["stop_loss"] = new_sl
-        else:
-            new_sl = current_price * (1 + trail_distance)
-            if new_sl < current_sl or current_sl == 0:
-                result = await retry_async(
-                    lambda _sl=new_sl: adapter.set_trading_stop(session, symbol, stop_loss=_sl),
-                    max_retries=2, base_delay=0.5, label=f"trailing_SL_{symbol}",
-                )
-                if result is not None:
-                    position["stop_loss"] = new_sl
+    if pos_side == "LONG" and current_sl > 0 and current_price <= current_sl:
+        should_close = True
+        close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
+    elif pos_side == "SHORT" and current_sl > 0 and current_price >= current_sl:
+        should_close = True
+        close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
 
-    # Partial close on trail activate (50% by default)
-    if (cfg.MOMENTUM_PARTIAL_CLOSE_ENABLED
-            and trail_activate > 0
-            and pnl_pct >= trail_activate
-            and not position.get("_partial_closed")):
-        half_qty = float(position["qty"]) * cfg.MOMENTUM_PARTIAL_CLOSE_PCT
-        close_side = "Sell" if pos_side == "LONG" else "Buy"
-        try:
-            partial_result = await adapter.place_order_with_fallback(
-                session, symbol=symbol, side=close_side, qty=half_qty, reduce_only=True,
-            )
-            if partial_result and partial_result.get("fill_price"):
-                position["_partial_closed"] = True
-                partial_fill = float(partial_result["fill_price"])
-                entry = float(position["entry_price"])
-                if pos_side == "LONG":
-                    partial_pnl = (partial_fill - entry) * half_qty
-                else:
-                    partial_pnl = (entry - partial_fill) * half_qty
-                capital_allocator.record_pnl(state, "momentum", partial_pnl)
-                position["qty"] = float(position["qty"]) - half_qty
-                position["partial_pnl"] = partial_pnl
-        except Exception as exc:
-            print(f"[MOMENTUM] partial close {symbol}: {exc}")
+    if not should_close and strategy_type == "MR":
+        # RSI reversion exit
+        if pos_side == "LONG" and rsi > 55:
+            should_close = True
+            close_reason = f"RSI reversion ({rsi:.1f} > 55)"
+        elif pos_side == "SHORT" and rsi < 45:
+            should_close = True
+            close_reason = f"RSI reversion ({rsi:.1f} < 45)"
 
-    # Проверка SL/TP (на случай если биржа не сработала)
-    current_sl = float(position.get("stop_loss", 0.0))
-    if pos_side == "LONG":
-        if current_sl > 0 and current_price <= current_sl:
-            should_close = True
-            close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
-        elif cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 and pnl_pct >= cfg.MOMENTUM_TAKE_PROFIT_PCT:
-            should_close = True
-            close_reason = f"тейк-профит ({pnl_pct*100:.1f}%)"
-    else:
-        if current_sl > 0 and current_price >= current_sl:
-            should_close = True
-            close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
-        elif cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 and pnl_pct >= cfg.MOMENTUM_TAKE_PROFIT_PCT:
-            should_close = True
-            close_reason = f"тейк-профит ({pnl_pct*100:.1f}%)"
-
-    if not should_close:
-        # #6: Volume anomaly early exit
-        try:
-            import ai_integration
-            if klines and ai_integration.check_volume_anomaly_exit(klines, pos_side):
+        # Time stop
+        if not should_close:
+            opened_epoch = float(position.get("opened_epoch", 0))
+            bars_held = int((time.time() - opened_epoch) / (15 * 60))
+            if bars_held > cfg.MOMENTUM_MR_MAX_HOLD_BARS:
                 should_close = True
-                close_reason = "volume anomaly (institutional exit)"
-        except Exception:  # noqa: BLE001
-            pass
+                close_reason = f"time stop ({bars_held} bars > {cfg.MOMENTUM_MR_MAX_HOLD_BARS})"
+
+    if not should_close and strategy_type == "BO":
+        # Trailing stop logic
+        trail_activate = cfg.MOMENTUM_BO_TRAIL_ACTIVATE_PCT
+        trail_distance = cfg.MOMENTUM_BO_TRAIL_DISTANCE_PCT
+
+        if pnl_pct >= trail_activate:
+            if pos_side == "LONG":
+                new_sl = current_price * (1 - trail_distance)
+                if new_sl > current_sl:
+                    result = await retry_async(
+                        lambda _sl=new_sl: adapter.set_trading_stop(session, symbol, stop_loss=_sl),
+                        max_retries=2, base_delay=0.5, label=f"trailing_SL_{symbol}",
+                    )
+                    if result is not None:
+                        position["stop_loss"] = new_sl
+            else:
+                new_sl = current_price * (1 + trail_distance)
+                if new_sl < current_sl or current_sl == 0:
+                    result = await retry_async(
+                        lambda _sl=new_sl: adapter.set_trading_stop(session, symbol, stop_loss=_sl),
+                        max_retries=2, base_delay=0.5, label=f"trailing_SL_{symbol}",
+                    )
+                    if result is not None:
+                        position["stop_loss"] = new_sl
 
     if not should_close:
         held_h = (time.time() - float(position.get("opened_epoch", 0))) / 3600
-        trail_info = ""
-        if trail_activate > 0 and pnl_pct >= trail_activate:
-            trail_info = " [trail]"
-        return f"держим {pos_side} ({held_h:.1f}ч, PnL {pnl_pct*100:+.1f}%{trail_info})"
+        return f"держим {pos_side} [{strategy_type}] ({held_h:.1f}ч, PnL {pnl_pct*100:+.1f}%)"
 
     # Закрываем позицию
     return await _close_position(

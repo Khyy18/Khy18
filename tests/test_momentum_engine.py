@@ -2,6 +2,7 @@
 
 import sys
 import os
+import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
@@ -218,8 +219,121 @@ def test_calc_rsi_insufficient_data():
 
 
 @pytest.mark.asyncio
-async def test_partial_close_on_trail_activate():
-    """Partial close fires when trail activate threshold is hit."""
+async def test_regime_routing_ranging():
+    """Mean-Reversion: ADX < 20 and RSI < oversold -> LONG MR."""
+    import unittest.mock as mock
+
+    state = _make_state()
+
+    # Mock adapter
+    adapter = mock.AsyncMock()
+    # Return enough klines (50+)
+    klines = []
+    for i in range(100):
+        klines.append({
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1000.0,
+        })
+    adapter.get_klines = mock.AsyncMock(return_value=klines)
+    adapter.get_instrument_info = mock.AsyncMock(return_value={"min_qty": 0.001, "qty_step": 0.001})
+    adapter.validate_and_round_qty = mock.Mock(return_value=0.01)
+    adapter.place_order_with_fallback = mock.AsyncMock(return_value={
+        "fill_price": 100.0,
+        "order_id": "test_mr_long",
+    })
+
+    session = mock.AsyncMock()
+
+    with mock.patch("momentum_engine.calc_adx", return_value=15.0), \
+         mock.patch("momentum_engine.calc_rsi", return_value=20.0):
+        result = await momentum_engine._process_symbol(session, state, adapter, "BTCUSDT")
+
+    assert "ОТКРЫТО" in result
+    assert "LONG" in result
+    assert "[MR]" in result
+
+
+@pytest.mark.asyncio
+async def test_regime_routing_trending():
+    """Breakout: ADX >= 25, price breaks 20-bar high with volume."""
+    import unittest.mock as mock
+
+    state = _make_state()
+
+    # Build klines where current bar breaks 20-bar high with high volume
+    klines = []
+    for i in range(100):
+        klines.append({
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1000.0,
+        })
+    # Last bar breaks above the 20-bar high
+    klines[-1] = {
+        "open": 100.0,
+        "high": 105.0,
+        "low": 100.0,
+        "close": 104.0,
+        "volume": 2000.0,  # > 1.5 * avg (1000)
+    }
+
+    adapter = mock.AsyncMock()
+    adapter.get_klines = mock.AsyncMock(return_value=klines)
+    adapter.get_instrument_info = mock.AsyncMock(return_value={"min_qty": 0.001, "qty_step": 0.001})
+    adapter.validate_and_round_qty = mock.Mock(return_value=0.01)
+    adapter.place_order_with_fallback = mock.AsyncMock(return_value={
+        "fill_price": 104.0,
+        "order_id": "test_bo_long",
+    })
+
+    session = mock.AsyncMock()
+
+    with mock.patch("momentum_engine.calc_adx", return_value=30.0), \
+         mock.patch("momentum_engine.calc_rsi", return_value=55.0):
+        result = await momentum_engine._process_symbol(session, state, adapter, "BTCUSDT")
+
+    assert "ОТКРЫТО" in result
+    assert "LONG" in result
+    assert "[BO]" in result
+
+
+@pytest.mark.asyncio
+async def test_regime_routing_deadzone():
+    """ADX between 20 and 25 -> dead zone, skip."""
+    import unittest.mock as mock
+
+    state = _make_state()
+
+    klines = []
+    for i in range(100):
+        klines.append({
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1000.0,
+        })
+
+    adapter = mock.AsyncMock()
+    adapter.get_klines = mock.AsyncMock(return_value=klines)
+
+    session = mock.AsyncMock()
+
+    with mock.patch("momentum_engine.calc_adx", return_value=22.0), \
+         mock.patch("momentum_engine.calc_rsi", return_value=50.0):
+        result = await momentum_engine._process_symbol(session, state, adapter, "BTCUSDT")
+
+    assert "dead zone" in result.lower() or "dead zone" in result
+
+
+@pytest.mark.asyncio
+async def test_mr_exit_rsi_reversion():
+    """MR position LONG closes when RSI > 55."""
     import unittest.mock as mock
 
     state = _make_state()
@@ -228,34 +342,70 @@ async def test_partial_close_on_trail_activate():
         "side": "LONG",
         "entry_price": 50000.0,
         "qty": 0.01,
-        "stop_loss": 48000.0,
+        "stop_loss": 49250.0,
         "take_profit": None,
-        "opened_epoch": 1000000.0,
+        "opened_epoch": time.time() - 300,
         "status": "OPEN",
         "notional_usdt": 500.0,
+        "strategy_type": "MR",
     }]
 
-    # Mock adapter
     adapter = mock.AsyncMock()
     adapter.place_order_with_fallback = mock.AsyncMock(return_value={
-        "fill_price": 50700.0,
-        "order_id": "partial_123",
+        "fill_price": 50500.0,
+        "order_id": "close_mr",
     })
-    adapter.set_trading_stop = mock.AsyncMock(return_value=True)
 
     session = mock.AsyncMock()
-
-    # Price at +1.3% above entry to trigger trail (trail_activate = 1.2%)
-    current_price = 50000.0 * 1.013  # +1.3% > 1.2% trail activate
-    fast_ema = [50000.0, 50500.0, 50600.0]
-    slow_ema = [49000.0, 49500.0, 49800.0]
-    klines = None
-
+    closes = [50000.0] * 50
+    current_price = 50500.0
     position = state["momentum"]["positions"][0]
+
     result = await momentum_engine._manage_position(
-        session, state, adapter, "BTCUSDT", position, fast_ema, slow_ema, current_price, klines
+        session, state, adapter, "BTCUSDT", position,
+        closes, current_price, klines=None, rsi=60.0
     )
 
-    # Partial close should have been triggered
-    assert position.get("_partial_closed") is True
-    assert adapter.place_order_with_fallback.called
+    assert "RSI reversion" in result or "ЗАКРЫТО" in result
+    assert position["status"] == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_mr_time_stop():
+    """MR position closes when held > max bars."""
+    import unittest.mock as mock
+
+    state = _make_state()
+    # opened_epoch far in the past: > 20 * 15 * 60 = 18000 seconds ago
+    state["momentum"]["positions"] = [{
+        "symbol": "BTCUSDT",
+        "side": "LONG",
+        "entry_price": 50000.0,
+        "qty": 0.01,
+        "stop_loss": 49250.0,
+        "take_profit": None,
+        "opened_epoch": time.time() - 25000,  # > 20 bars of 15min
+        "status": "OPEN",
+        "notional_usdt": 500.0,
+        "strategy_type": "MR",
+    }]
+
+    adapter = mock.AsyncMock()
+    adapter.place_order_with_fallback = mock.AsyncMock(return_value={
+        "fill_price": 50000.0,
+        "order_id": "close_time",
+    })
+
+    session = mock.AsyncMock()
+    closes = [50000.0] * 50
+    current_price = 50000.0
+    position = state["momentum"]["positions"][0]
+
+    # RSI = 50 (not triggering RSI reversion for LONG, since 50 <= 55)
+    result = await momentum_engine._manage_position(
+        session, state, adapter, "BTCUSDT", position,
+        closes, current_price, klines=None, rsi=50.0
+    )
+
+    assert "time stop" in result or "ЗАКРЫТО" in result
+    assert position["status"] == "CLOSED"
