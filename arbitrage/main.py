@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import signal
 import sys
 import time
@@ -63,6 +64,9 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
     allocator = BankrollAllocator(session=session, bankroll=state.get("bankroll", 1000.0))
     executor = BetExecutor()
     anti_ban = AntiBanEngine()
+    ranker = ArbRanker(top_n=int(state.get("ranker_top_n", 10)))
+    recheck_engine = RecheckEngine(session=session)
+    last_quota_alert_time: float = 0.0
 
     print("[SCANNER] Цикл сканирования запущен")
 
@@ -118,10 +122,13 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             else:
                 remaining_pct = 100.0
             if remaining_pct < 10.0 or latency_ms > 5000:
-                try:
-                    await telegram_bot.send_quota_alert(session, remaining_pct, latency_ms)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[SCANNER] Ошибка отправки quota-алерта: {exc}")
+                now_ts = time.time()
+                if now_ts - last_quota_alert_time >= 900.0:
+                    last_quota_alert_time = now_ts
+                    try:
+                        await telegram_bot.send_quota_alert(session, remaining_pct, latency_ms)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[SCANNER] Ошибка отправки quota-алерта: {exc}")
 
             # 2. Извлечь sharp-линии Pinnacle
             sharp_probs = PinnacleClient.extract_pinnacle_from_odds_api(all_events)
@@ -186,21 +193,11 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             print(f"[SCANNER] Прошли AI-фильтр: {len(filtered)}")
 
             # 4a. Ранжирование
-            ranker = ArbRanker(top_n=int(state.get("ranker_top_n", 10)))
             filtered = ranker.rank(filtered)
             print(f"[SCANNER] После ранжирования: {len(filtered)}")
 
-            # 4b. Перепроверка коэффициентов
-            recheck_engine = RecheckEngine(session=session)
-            rechecked: list[dict[str, Any]] = []
-            for opp_dict in filtered:
-                try:
-                    alive = await recheck_engine.recheck_opportunity(session, opp_dict)
-                    if alive:
-                        rechecked.append(opp_dict)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[SCANNER] Ошибка recheck: {exc}")
-                    rechecked.append(opp_dict)
+            # 4b. Перепроверка коэффициентов (батчевая - один запрос на спорт)
+            rechecked = await recheck_engine.recheck_batch(session, filtered)
 
             if not rechecked:
                 print("[SCANNER] После recheck кандидатов нет")
@@ -298,6 +295,15 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     bookmakers = opp.get("bookmakers", [])
                     for bm in bookmakers:
                         anti_ban.record_bet(bm)
+                        # Фиксируем acceptance time для пре-бан детектора.
+                        # В DRY_RUN симулируем длительность приёма (0.5-2.0с);
+                        # в live-режиме executor предоставит реальную длительность.
+                        if config.DRY_RUN:
+                            simulated_duration = random.uniform(0.5, 2.0)
+                            anti_ban.record_acceptance_time(bm, simulated_duration)
+                        elif i < len(results):
+                            real_duration = results[i].get("acceptance_duration", 1.0)
+                            anti_ban.record_acceptance_time(bm, real_duration)
 
                     # 9. Telegram-алерт
                     if opp.get("profit_pct", 0.0) >= config.MIN_ARB_PROFIT:

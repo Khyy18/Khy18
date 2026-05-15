@@ -39,14 +39,62 @@ class RecheckEngine:
     def __init__(self, session: aiohttp.ClientSession) -> None:
         self._session: aiohttp.ClientSession = session
         self._odds_client: OddsAPIClient = OddsAPIClient(session=session)
+        # Кэш свежих данных по спорту для батчевой перепроверки
+        self._sport_cache: dict[str, list[dict[str, Any]]] = {}
+
+    async def recheck_batch(
+        self, session: aiohttp.ClientSession, opportunities: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Перепроверить батч возможностей, группируя запросы по спорту.
+
+        Вызывает get_odds один раз на каждый уникальный спорт, затем
+        верифицирует каждую возможность по кэшированному ответу.
+
+        Args:
+            session: aiohttp-сессия
+            opportunities: список возможностей для проверки
+
+        Returns:
+            Список подтвержденных возможностей
+        """
+        # Собираем уникальные спорты из всех возможностей
+        sport_keys: set[str] = set()
+        for opp in opportunities:
+            sport = opp.get("sport", "")
+            if sport:
+                sport_keys.add(sport)
+
+        # Один запрос на каждый уникальный спорт
+        self._sport_cache.clear()
+        for sport in sport_keys:
+            try:
+                fresh_events = await self._odds_client.get_odds(sport)
+                self._sport_cache[sport] = fresh_events
+            except Exception as exc:
+                logger.error("Recheck: ошибка запроса OddsAPI для %s: %s", sport, exc)
+                # При ошибке сети - кэшируем пустой список, fail-open
+                self._sport_cache[sport] = []
+
+        # Верифицируем каждую возможность по кэшированным данным
+        confirmed: list[dict[str, Any]] = []
+        for opp in opportunities:
+            try:
+                alive = await self.recheck_opportunity(session, opp)
+                if alive:
+                    confirmed.append(opp)
+            except Exception as exc:
+                logger.warning("Recheck: ошибка проверки: %s", exc)
+                confirmed.append(opp)  # fail-open
+
+        return confirmed
 
     async def recheck_opportunity(
         self, session: aiohttp.ClientSession, opportunity: dict[str, Any]
     ) -> bool:
         """Перепроверить арбитражную возможность.
 
-        Повторно запрашивает коэффициенты для события, проверяет что арб
-        по-прежнему жив и коэффициенты не сдвинулись критично.
+        Использует кэшированные данные из recheck_batch если доступны,
+        иначе запрашивает заново (для обратной совместимости).
 
         Args:
             session: aiohttp-сессия
@@ -64,13 +112,20 @@ class RecheckEngine:
             logger.warning("Recheck: недостаточно данных для проверки %s", event_name)
             return False
 
-        # Повторный запрос коэффициентов
-        try:
-            fresh_events = await self._odds_client.get_odds(sport)
-        except Exception as exc:
-            logger.error("Recheck: ошибка запроса OddsAPI: %s", exc)
-            # При ошибке сети - пропускаем (не блокируем)
-            return True
+        # Используем кэшированные данные если доступны (батчевый режим)
+        if sport in self._sport_cache:
+            fresh_events = self._sport_cache[sport]
+            # Пустой кэш означает ошибку сети - fail-open
+            if not fresh_events:
+                return True
+        else:
+            # Fallback: одиночный запрос (обратная совместимость)
+            try:
+                fresh_events = await self._odds_client.get_odds(sport)
+            except Exception as exc:
+                logger.error("Recheck: ошибка запроса OddsAPI: %s", exc)
+                # При ошибке сети - пропускаем (не блокируем)
+                return True
 
         # Ищем нужное событие среди свежих данных
         target_event: Optional[dict[str, Any]] = None

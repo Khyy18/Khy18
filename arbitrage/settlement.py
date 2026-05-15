@@ -106,6 +106,10 @@ class SettlementEngine:
           - наиболее прибыльные типы арбитража
           - рабочие пороги profit_pct
         Вызывает LLM для генерации правил, сохраняет в ai_learnings.
+
+        Примечание: в DRY_RUN все ставки симулированы. Обучение на таких данных
+        допускается только для проверки пайплайна. Правила из симуляции
+        не должны смешиваться с реальными данными.
         """
         if ai_router is None:
             print("[SETTLEMENT] ai_router недоступен, обучение пропущено")
@@ -114,6 +118,16 @@ class SettlementEngine:
         # Получаем данные за 7 дней
         daily_data = memory.get_daily_pnl(days=7)
         recent_bets = memory.get_recent_bets(limit=200)
+
+        # Проверяем наличие реальных (не симулированных) ставок
+        has_real_bets = any(
+            bet.get("status") not in ("SIMULATED", None)
+            and bet.get("result") in ("WON", "LOST")
+            for bet in (recent_bets or [])
+        )
+        if not has_real_bets:
+            # Все ставки симулированные - логируем явно, что обучение на тестовых данных
+            print("[SETTLEMENT] Обучение на симулированных данных (тестовый режим)")
 
         if not recent_bets:
             print("[SETTLEMENT] Нет данных для обучения")

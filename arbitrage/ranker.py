@@ -85,17 +85,27 @@ class ArbRanker:
     def _freshness_factor(opportunity: dict[str, Any]) -> float:
         """Фактор свежести: 1.0 при 0с, линейно убывает до 0.5 при 300с.
 
+        Freshness измеряет возраст (age) с момента обнаружения (timestamp)
+        до текущего момента (time.time / datetime.now). Чем старше возможность,
+        тем ниже фактор свежести.
+
         Если timestamp отсутствует или не парсится, возвращает 0.75 (нейтрально).
         """
-        timestamp_str: str = opportunity.get("timestamp", "")
-        if not timestamp_str:
+        timestamp_val = opportunity.get("timestamp", "")
+        if not timestamp_val:
             return 0.75
 
+        # Поддерживаем и ISO строку, и float epoch
         try:
-            detected_time = datetime.fromisoformat(timestamp_str)
-            if detected_time.tzinfo is None:
-                detected_time = detected_time.replace(tzinfo=timezone.utc)
-            age_sec: float = (datetime.now(timezone.utc) - detected_time).total_seconds()
+            if isinstance(timestamp_val, (int, float)):
+                # Epoch timestamp (float/int) - сравниваем через time.time()
+                age_sec = time.time() - float(timestamp_val)
+            else:
+                # ISO string - парсим и вычисляем возраст
+                detected_time = datetime.fromisoformat(str(timestamp_val))
+                if detected_time.tzinfo is None:
+                    detected_time = detected_time.replace(tzinfo=timezone.utc)
+                age_sec = (datetime.now(timezone.utc) - detected_time).total_seconds()
         except (ValueError, TypeError):
             return 0.75
 

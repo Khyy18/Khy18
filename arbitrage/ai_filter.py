@@ -35,12 +35,12 @@ _CACHE_TTL: int = 300  # 5 минут
 class ArbFilter:
     """Оценивает арбитражные возможности через LLM."""
 
-    # Кэш коэффициентов для вычисления line_velocity
-    _odds_cache: dict[str, tuple[float, list[float]]] = {}
-
     def __init__(self, session: aiohttp.ClientSession) -> None:
         self._session = session
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        # Кэш коэффициентов для вычисления line_velocity (instance-level, с TTL)
+        self._odds_cache: dict[str, tuple[float, list[float]]] = {}
+        self._CACHE_TTL: float = 600.0  # 10 минут TTL для записей кэша коэффициентов
 
     def _cache_key(self, opportunity: dict[str, Any]) -> str:
         """Генерация ключа кэша из основных параметров возможности."""
@@ -74,8 +74,17 @@ class ArbFilter:
         if not event_key or not odds:
             return None
 
-        cached = self._odds_cache.get(event_key)
         now = time.time()
+
+        # Прореживаем записи старше TTL перед использованием кэша
+        expired_keys = [
+            k for k, (ts, _) in self._odds_cache.items()
+            if now - ts > self._CACHE_TTL
+        ]
+        for k in expired_keys:
+            del self._odds_cache[k]
+
+        cached = self._odds_cache.get(event_key)
 
         if cached is not None:
             prev_ts, prev_odds = cached
