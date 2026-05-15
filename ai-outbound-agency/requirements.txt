@@ -28,6 +28,8 @@ structlog
 prometheus-client
 sentry-sdk[fastapi]
 dnspython
+scikit-learn
+joblib
 
 # Test dependencies
 pytest

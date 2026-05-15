@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Branding Settings - {{ brand_company_name | default("AI Outbound Agency") }}{% endblock %}
+
+{% block page_title %}White-Label Branding{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold mb-4">Brand Settings</h3>
+        <p class="text-gray-600 mb-6">Customize your platform branding. These settings apply to all emails and the dashboard.</p>
+
+        <form id="brand-settings-form" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
+                <input type="text" name="company_name" id="company_name"
+                       class="w-full border border-gray-300 rounded px-3 py-2"
+                       placeholder="Your Company Name">
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Logo URL</label>
+                <input type="url" name="logo_url" id="logo_url"
+                       class="w-full border border-gray-300 rounded px-3 py-2"
+                       placeholder="https://example.com/logo.png">
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Favicon URL</label>
+                <input type="url" name="favicon_url" id="favicon_url"
+                       class="w-full border border-gray-300 rounded px-3 py-2"
+                       placeholder="https://example.com/favicon.ico">
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Primary Color</label>
+                    <input type="color" name="primary_color" id="primary_color"
+                           class="w-full h-10 border border-gray-300 rounded"
+                           value="#2563eb">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Secondary Color</label>
+                    <input type="color" name="secondary_color" id="secondary_color"
+                           class="w-full h-10 border border-gray-300 rounded"
+                           value="#1e40af">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Custom Domain</label>
+                <input type="text" name="custom_domain" id="custom_domain"
+                       class="w-full border border-gray-300 rounded px-3 py-2"
+                       placeholder="app.yourdomain.com">
+                <p class="text-xs text-gray-500 mt-1">Point a CNAME record to our servers to use a custom domain.</p>
+            </div>
+
+            <div class="pt-4">
+                <button type="submit"
+                        class="px-6 py-2 text-white rounded hover:opacity-90 transition"
+                        style="background-color: var(--brand-primary);">
+                    Save Settings
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <div class="bg-white rounded-lg shadow p-6 mt-6">
+        <h3 class="text-lg font-semibold mb-4">Preview</h3>
+        <div id="brand-preview" class="border border-gray-200 rounded p-4">
+            <p class="text-gray-500 text-sm">Save your settings to see a preview of your branded email template.</p>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    const token = localStorage.getItem('access_token');
+    if (!token) return;
+
+    // Load current settings
+    try {
+        const resp = await fetch('/api/whitelabel/settings', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            document.getElementById('company_name').value = data.company_name || '';
+            document.getElementById('logo_url').value = data.logo_url || '';
+            document.getElementById('favicon_url').value = data.favicon_url || '';
+            document.getElementById('primary_color').value = data.primary_color || '#2563eb';
+            document.getElementById('secondary_color').value = data.secondary_color || '#1e40af';
+            document.getElementById('custom_domain').value = data.custom_domain || '';
+        }
+    } catch (e) { console.error(e); }
+
+    // Handle form submit
+    document.getElementById('brand-settings-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payload = {
+            company_name: document.getElementById('company_name').value,
+            logo_url: document.getElementById('logo_url').value,
+            favicon_url: document.getElementById('favicon_url').value,
+            primary_color: document.getElementById('primary_color').value,
+            secondary_color: document.getElementById('secondary_color').value,
+            custom_domain: document.getElementById('custom_domain').value || null,
+        };
+        try {
+            const resp = await fetch('/api/whitelabel/settings', {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+            if (resp.ok) {
+                alert('Settings saved successfully!');
+                location.reload();
+            }
+        } catch (e) { console.error(e); }
+    });
+});
+</script>
+{% endblock %}

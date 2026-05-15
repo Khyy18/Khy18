@@ -25,6 +25,8 @@ from dashboard.routes.sequences import router as sequences_router
 from dashboard.routes.analytics import router as analytics_router
 from dashboard.routes.optimizer import router as optimizer_router
 from dashboard.routes.billing import router as billing_router
+from dashboard.routes.whitelabel import router as whitelabel_router
+from dashboard.routes.integrations_api import router as integrations_api_router
 from dashboard.views import router as views_router
 from agents.approval_queue import router as approvals_router, set_email_sender
 
@@ -268,6 +270,8 @@ app.include_router(sequences_router)
 app.include_router(analytics_router)
 app.include_router(optimizer_router)
 app.include_router(billing_router)
+app.include_router(whitelabel_router)
+app.include_router(integrations_api_router)
 app.include_router(approvals_router)
 app.include_router(views_router)
 

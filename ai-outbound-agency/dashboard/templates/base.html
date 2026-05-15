@@ -3,16 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}AI Outbound Agency{% endblock %}</title>
+    <title>{% block title %}{{ brand_company_name | default("AI Outbound Agency") }}{% endblock %}</title>
+    <link rel="icon" href="{{ brand_favicon_url | default('/static/images/favicon.ico') }}">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="/static/app.js" defer></script>
+    <style>
+        :root {
+            --brand-primary: {{ brand_primary_color | default("#2563eb") }};
+            --brand-secondary: {{ brand_secondary_color | default("#1e40af") }};
+        }
+    </style>
 </head>
 <body class="bg-gray-100 min-h-screen flex">
     <!-- Sidebar -->
     <aside class="w-64 bg-gray-900 text-white min-h-screen flex flex-col fixed">
         <div class="p-6 border-b border-gray-700">
-            <h1 class="text-xl font-bold">AI Outbound Agency</h1>
+            {% if brand_logo_url %}
+            <img src="{{ brand_logo_url }}" alt="{{ brand_company_name | default('AI Outbound Agency') }}" class="h-8 mb-2">
+            {% endif %}
+            <h1 class="text-xl font-bold">{{ brand_company_name | default("AI Outbound Agency") }}</h1>
         </div>
         <nav class="flex-1 p-4 space-y-2">
             <a href="/dashboard" class="flex items-center px-4 py-2 rounded hover:bg-gray-700 transition">

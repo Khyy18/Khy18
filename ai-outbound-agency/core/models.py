@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum,
@@ -118,6 +119,7 @@ class Tenant(Base):
     name = Column(String, nullable=False)
     domain = Column(String, nullable=False)
     settings = Column(JSONB, default=dict)
+    brand_settings = Column(JSONB, default=dict)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     leads = relationship("Lead", back_populates="tenant")
@@ -127,6 +129,8 @@ class Tenant(Base):
     ab_tests = relationship("ABTest", back_populates="tenant")
     subscriptions = relationship("Subscription", back_populates="tenant")
     usage_records = relationship("UsageRecord", back_populates="tenant")
+    api_keys = relationship("ApiKey", back_populates="tenant")
+    webhooks = relationship("Webhook", back_populates="tenant")
 
 
 class User(Base):
@@ -319,3 +323,31 @@ class PendingApproval(Base):
 
     lead = relationship("Lead", back_populates="pending_approvals")
     message = relationship("Message")
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    key_hash = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    tenant = relationship("Tenant", back_populates="api_keys")
+
+
+class Webhook(Base):
+    __tablename__ = "webhooks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    url = Column(String, nullable=False)
+    events = Column(JSONB, default=list)
+    secret = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    tenant = relationship("Tenant", back_populates="webhooks")

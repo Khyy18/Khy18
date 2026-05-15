@@ -80,5 +80,8 @@ class Settings(BaseSettings):
     # Approval settings
     approval_required_company_size: int = 500
 
+    # Client Telegram bot token
+    client_telegram_bot_token: str = ""
+
 
 settings = Settings()  # type: ignore[call-arg]
