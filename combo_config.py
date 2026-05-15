@@ -188,6 +188,29 @@ RISK_MAX_EXPOSURE_PER_SYMBOL_PCT = float(
 HEARTBEAT_INTERVAL_SEC = float(os.getenv("COMBO_HEARTBEAT_INTERVAL_SEC", "600") or 600)
 
 
+# --- Macro Calendar ---
+MACRO_BLACKOUT_BEFORE_MIN = int(os.getenv("MACRO_BLACKOUT_BEFORE_MIN", "30") or 30)
+MACRO_BLACKOUT_AFTER_MIN = int(os.getenv("MACRO_BLACKOUT_AFTER_MIN", "60") or 60)
+MACRO_CALENDAR_ENABLED = os.getenv("MACRO_CALENDAR_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+
+# --- Momentum: Multi-timeframe ---
+MOMENTUM_MTF_ENABLED = os.getenv("MOMENTUM_MTF_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+MOMENTUM_MTF_TIMEFRAME = os.getenv("MOMENTUM_MTF_TIMEFRAME", "60").strip()
+
+# --- Momentum: Partial close ---
+MOMENTUM_PARTIAL_CLOSE_ENABLED = os.getenv("MOMENTUM_PARTIAL_CLOSE_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+MOMENTUM_PARTIAL_CLOSE_PCT = float(os.getenv("MOMENTUM_PARTIAL_CLOSE_PCT", "0.5") or 0.5)
+
+# --- Momentum: Session filter ---
+MOMENTUM_SESSION_FILTER_ENABLED = os.getenv("MOMENTUM_SESSION_FILTER_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+MOMENTUM_SESSION_START_UTC = int(os.getenv("MOMENTUM_SESSION_START_UTC", "8") or 8)
+MOMENTUM_SESSION_END_UTC = int(os.getenv("MOMENTUM_SESSION_END_UTC", "22") or 22)
+
+# --- Grid: Profit reinvestment ---
+GRID_REINVEST_ENABLED = os.getenv("GRID_REINVEST_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
+GRID_REINVEST_PCT = float(os.getenv("GRID_REINVEST_PCT", "0.5") or 0.5)
+
+
 # ─── Валидация ────────────────────────────────────────────────────────
 
 def validate_combo_config() -> list[str]:

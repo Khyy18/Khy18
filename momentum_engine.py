@@ -419,6 +419,39 @@ async def _process_symbol(
     except Exception:  # noqa: BLE001
         pass
 
+    # Macro calendar blackout check
+    if cfg.MACRO_CALENDAR_ENABLED:
+        try:
+            import macro_calendar
+            from datetime import datetime, timezone
+            is_blackout, event_name = macro_calendar.is_macro_blackout(datetime.now(tz=timezone.utc))
+            if is_blackout:
+                return f"сигнал {signal}, но macro blackout ({event_name})"
+        except Exception:
+            pass
+
+    # Time-of-day filter: skip quiet hours
+    if cfg.MOMENTUM_SESSION_FILTER_ENABLED:
+        from datetime import datetime, timezone
+        hour = datetime.now(tz=timezone.utc).hour
+        if hour < cfg.MOMENTUM_SESSION_START_UTC or hour >= cfg.MOMENTUM_SESSION_END_UTC:
+            return f"сигнал {signal}, но вне торговой сессии ({hour}:00 UTC)"
+
+    # Multi-timeframe confirmation: 1h EMA must be aligned
+    if cfg.MOMENTUM_MTF_ENABLED:
+        try:
+            klines_1h = await adapter.get_klines(session, symbol, cfg.MOMENTUM_MTF_TIMEFRAME, limit=50)
+            if klines_1h and len(klines_1h) >= 26:
+                closes_1h = [float(k["close"]) for k in klines_1h]
+                fast_1h = calc_ema(closes_1h, 9)
+                slow_1h = calc_ema(closes_1h, 21)
+                if signal == "LONG" and fast_1h[-1] < slow_1h[-1]:
+                    return f"сигнал {signal}, но 1h EMA не aligned (fast < slow)"
+                elif signal == "SHORT" and fast_1h[-1] > slow_1h[-1]:
+                    return f"сигнал {signal}, но 1h EMA не aligned (fast > slow)"
+        except Exception:
+            pass  # If unable to get 1h data, enter without confirmation
+
     # Открываем позицию
     return await _open_position(
         session, state, adapter, symbol, signal, current_price, klines=klines
@@ -494,6 +527,11 @@ async def _open_position(
 
     fill_price = float(result.get("fill_price", price))
 
+    # Slippage tracking
+    slippage_pct = abs(fill_price - price) / price if price > 0 else 0
+    if slippage_pct > 0.001:  # > 0.1%
+        print(f"[MOMENTUM] HIGH SLIPPAGE {symbol}: expected={price:.2f} got={fill_price:.2f} slip={slippage_pct*100:.2f}%")
+
     # Записываем позицию
     position = {
         "symbol": symbol,
@@ -505,6 +543,7 @@ async def _open_position(
         "opened_epoch": time.time(),
         "status": "OPEN",
         "notional_usdt": qty * fill_price,
+        "slippage_pct": slippage_pct,
     }
     mom_state.setdefault("positions", []).append(position)
 
@@ -582,6 +621,31 @@ async def _manage_position(
                 )
                 if result is not None:
                     position["stop_loss"] = new_sl
+
+    # Partial close on trail activate (50% by default)
+    if (cfg.MOMENTUM_PARTIAL_CLOSE_ENABLED
+            and trail_activate > 0
+            and pnl_pct >= trail_activate
+            and not position.get("_partial_closed")):
+        position["_partial_closed"] = True
+        half_qty = float(position["qty"]) * cfg.MOMENTUM_PARTIAL_CLOSE_PCT
+        close_side = "Sell" if pos_side == "LONG" else "Buy"
+        try:
+            partial_result = await adapter.place_order_with_fallback(
+                session, symbol=symbol, side=close_side, qty=half_qty, reduce_only=True,
+            )
+            if partial_result and partial_result.get("fill_price"):
+                partial_fill = float(partial_result["fill_price"])
+                entry = float(position["entry_price"])
+                if pos_side == "LONG":
+                    partial_pnl = (partial_fill - entry) * half_qty
+                else:
+                    partial_pnl = (entry - partial_fill) * half_qty
+                capital_allocator.record_pnl(state, "momentum", partial_pnl)
+                position["qty"] = float(position["qty"]) - half_qty
+                position["partial_pnl"] = partial_pnl
+        except Exception as exc:
+            print(f"[MOMENTUM] partial close {symbol}: {exc}")
 
     # Проверка SL/TP (на случай если биржа не сработала)
     current_sl = float(position.get("stop_loss", 0.0))

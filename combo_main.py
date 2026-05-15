@@ -372,6 +372,23 @@ async def _main_loop(
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMBO] perf monitoring: {exc}")
 
+            # 5.7: Announcement monitor (every 10 min)
+            try:
+                import announcement_monitor
+                g = state.get("global", {})
+                last_announce = float(g.get("last_announce_check_epoch", 0))
+                if (time.time() - last_announce) >= 600:  # 10 min
+                    g["last_announce_check_epoch"] = time.time()
+                    alerts = await announcement_monitor.check_and_alert(
+                        session, _FUNDING_ADAPTERS or {},
+                        lambda text: _notify(session, text),
+                        g,
+                    )
+                    if alerts:
+                        print(f"[COMBO] Announcement: {len(alerts)} new alerts")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMBO] announcement monitor: {exc}")
+
             # 6. Persist state
             await _persist_tick(state)
 

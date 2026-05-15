@@ -106,6 +106,14 @@ def _calc_grid_order_size(state: dict[str, Any], n_levels: int) -> float:
     per_symbol = allocated / n_symbols
     # Каждый ордер = per_symbol / n_levels (только одна сторона active).
     order_size = per_symbol / max(1, n_levels)
+
+    # Profit reinvestment
+    if cfg.GRID_REINVEST_ENABLED:
+        grid_profit = float(state.get("grid", {}).get("total_profit_usdt", 0.0))
+        if grid_profit > 0:
+            reinvest = grid_profit * cfg.GRID_REINVEST_PCT
+            order_size += reinvest / max(1, n_levels)
+
     return max(5.0, order_size)  # минимум $5 на ордер
 
 

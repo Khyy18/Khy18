@@ -4,6 +4,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import pytest
 import capital_allocator
 import momentum_engine
 
@@ -214,3 +215,47 @@ def test_calc_rsi_insufficient_data():
     closes = [100.0, 101.0, 99.0]  # only 3 points, period=14 needs 15
     rsi = momentum_engine.calc_rsi(closes, period=14)
     assert rsi == 50.0
+
+
+@pytest.mark.asyncio
+async def test_partial_close_on_trail_activate():
+    """Partial close fires when trail activate threshold is hit."""
+    import unittest.mock as mock
+
+    state = _make_state()
+    state["momentum"]["positions"] = [{
+        "symbol": "BTCUSDT",
+        "side": "LONG",
+        "entry_price": 50000.0,
+        "qty": 0.01,
+        "stop_loss": 48000.0,
+        "take_profit": None,
+        "opened_epoch": 1000000.0,
+        "status": "OPEN",
+        "notional_usdt": 500.0,
+    }]
+
+    # Mock adapter
+    adapter = mock.AsyncMock()
+    adapter.place_order_with_fallback = mock.AsyncMock(return_value={
+        "fill_price": 50700.0,
+        "order_id": "partial_123",
+    })
+    adapter.set_trading_stop = mock.AsyncMock(return_value=True)
+
+    session = mock.AsyncMock()
+
+    # Price at +1.3% above entry to trigger trail (trail_activate = 1.2%)
+    current_price = 50000.0 * 1.013  # +1.3% > 1.2% trail activate
+    fast_ema = [50000.0, 50500.0, 50600.0]
+    slow_ema = [49000.0, 49500.0, 49800.0]
+    klines = None
+
+    position = state["momentum"]["positions"][0]
+    result = await momentum_engine._manage_position(
+        session, state, adapter, "BTCUSDT", position, fast_ema, slow_ema, current_price, klines
+    )
+
+    # Partial close should have been triggered
+    assert position.get("_partial_closed") is True
+    assert adapter.place_order_with_fallback.called
