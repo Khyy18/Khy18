@@ -144,9 +144,38 @@ def _select_candidates(
         pairs = [p for p in pairs if p.symbol not in excluded_symbols]
     if not pairs:
         return []
-    # Скоринг с pre-funding бонусом. Сохраняем оригинальный порядок при
-    # равных скорах через стабильную сортировку.
-    pairs_scored = [(p, p.net_edge_apr * _pre_funding_bonus(p)) for p in pairs]
+    # Скоринг с pre-funding бонусом + ML direction multiplier.
+    # ML-фактор bounded в [0.8, 1.3] и не является gate'ом — даже если
+    # модель сломана/отсутствует, скоринг продолжает работать через
+    # graceful fallback (multiplier=1.0). Сохраняем оригинальный порядок
+    # при равных скорах через стабильную сортировку.
+    def _score(p):
+        score = p.net_edge_apr * _pre_funding_bonus(p)
+        # ML direction multiplier — bounded в [0.8, 1.3], не gate.
+        try:
+            import funding_predictor
+            import funding_history as _fh
+            model = funding_predictor.load_model("funding_predictor_model.json")
+            if model is not None:
+                # Получаем history для SHORT-ноги (та, что получает funding).
+                short_history = _fh.get_recent_for_symbol_exchange(
+                    p.short_leg.exchange, p.symbol, hours=25,
+                )
+                features = funding_predictor.extract_features(short_history)
+                if features is not None:
+                    delta = funding_predictor.predict_delta(features, model)
+                    if delta is not None:
+                        multiplier = funding_predictor.to_multiplier(
+                            delta, p.short_leg.funding_rate,
+                        )
+                        score *= multiplier
+        except Exception:
+            # ML недоступен или сломан — без multiplier'а, скоринг
+            # продолжает работать как раньше.
+            pass
+        return score
+
+    pairs_scored = [(p, _score(p)) for p in pairs]
     pairs_scored.sort(key=lambda x: x[1], reverse=True)
     return [p for p, _ in pairs_scored[:max(1, limit)]]
 

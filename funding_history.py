@@ -140,6 +140,37 @@ def mean_apr(
         return None
 
 
+def get_recent_for_symbol_exchange(
+    exchange: str, symbol: str, hours: float = 25,
+) -> list[tuple[datetime, float, float]]:
+    """Вернуть (ts, rate, apr) за последние N часов для (биржа, символ).
+
+    Используется funding_predictor для построения фич — нужна 24h+
+    история, поэтому default hours=25.
+    """
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT ts, rate, apr FROM funding_snapshots "
+                "WHERE exchange = ? AND symbol = ? AND ts >= ? "
+                "ORDER BY ts ASC",
+                (exchange.lower(), symbol, cutoff),
+            ).fetchall()
+    except sqlite3.Error:
+        return []
+    out: list[tuple[datetime, float, float]] = []
+    for r in rows:
+        try:
+            ts = datetime.fromisoformat(str(r["ts"]))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            out.append((ts, float(r["rate"]), float(r["apr"])))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def is_spike(
     long_exchange: str,
     symbol: str,

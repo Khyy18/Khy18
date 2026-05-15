@@ -248,6 +248,15 @@ ANNOUNCE_BLACKLIST_HOURS = float(
     os.getenv("ANNOUNCE_BLACKLIST_HOURS", "72") or 72
 )
 
+# --- Anomaly detector ---
+# Z-score detector для operational metrics (response_time, spread,
+# funding_rate_volatility и т.д.). |z| > threshold → alert в Telegram.
+# Окно — последние WINDOW_SIZE значений по каждой метрике, cooldown
+# между одинаковыми алертами — ALERT_COOLDOWN_SEC.
+ANOMALY_Z_THRESHOLD = float(os.getenv("ANOMALY_Z_THRESHOLD", "3.0") or 3.0)
+ANOMALY_WINDOW_SIZE = int(os.getenv("ANOMALY_WINDOW_SIZE", "100") or 100)
+ANOMALY_ALERT_COOLDOWN_SEC = float(os.getenv("ANOMALY_ALERT_COOLDOWN_SEC", "3600") or 3600)
+
 # --- Веб-дашборд ------------------------------------------------------
 DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "true").strip().lower() not in (
     "0", "false", "no", "off",

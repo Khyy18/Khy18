@@ -301,6 +301,27 @@ async def _funding_scan_tick(
     except Exception as exc:  # noqa: BLE001
         print(f"[FUND-HIST] record fail: {exc}")
 
+    # Anomaly detection на funding-APR. Z-score детектор по
+    # (биржа, символ): если текущее значение выпало за threshold σ от
+    # своей собственной 100-точечной истории — алерт. Любая ошибка
+    # этой секции НЕ должна валить funding_scan_tick.
+    try:
+        import anomaly_detector
+        detector = anomaly_detector.get_detector()
+        for ex_name, snaps in snapshots.items():
+            for s in snaps:
+                metric_name = f"funding_apr_{ex_name}_{s.symbol}"
+                alert = detector.record(metric_name, s.apr)
+                if alert:
+                    await _notify(session, (
+                        f"📊 <b>Аномалия в funding</b>\n"
+                        f"Метрика: <code>{alert['metric']}</code>\n"
+                        f"Значение: {alert['value']:.4f} APR (z={alert['z_score']:.2f}σ)\n"
+                        f"Среднее за окно: {alert['mean']:.4f} ± {alert['std']:.4f}"
+                    ))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ANOMALY-FUNDING] {exc}")
+
     # Алерты по высокому |net_apr|.
     alert_threshold = float(getattr(config, "FUNDING_ALERT_APR", 0.30))
     cooldown = float(getattr(config, "FUNDING_ALERT_COOLDOWN_SEC", 6 * 3600))
