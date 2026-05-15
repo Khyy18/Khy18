@@ -215,6 +215,144 @@ class ArbitrageScanner:
 
         return opportunities
 
+    def find_surebets_totals(self, events: list[dict[str, Any]]) -> list[ArbOpportunity]:
+        """Ищет surebets на рынке тоталов (over/under).
+
+        Для каждого события проверяет тоталы у разных букмекеров.
+        Если сумма обратных лучших коэффициентов over + under < 1,
+        это гарантированная прибыль.
+
+        Args:
+            events: нормализованные события из OddsAPI
+
+        Returns:
+            Список ArbOpportunity с type="surebet_totals"
+        """
+        return self._find_surebets_market(events, market_key="totals", arb_type="surebet_totals")
+
+    def find_surebets_spreads(self, events: list[dict[str, Any]]) -> list[ArbOpportunity]:
+        """Ищет surebets на рынке спредов (handicap).
+
+        Для каждого события проверяет спреды у разных букмекеров.
+        Если сумма обратных лучших коэффициентов по всем исходам < 1,
+        это гарантированная прибыль.
+
+        Args:
+            events: нормализованные события из OddsAPI
+
+        Returns:
+            Список ArbOpportunity с type="surebet_spreads"
+        """
+        return self._find_surebets_market(events, market_key="spreads", arb_type="surebet_spreads")
+
+    def _find_surebets_market(
+        self,
+        events: list[dict[str, Any]],
+        market_key: str,
+        arb_type: str,
+    ) -> list[ArbOpportunity]:
+        """Общий метод поиска surebets для произвольного рынка.
+
+        Args:
+            events: нормализованные события
+            market_key: ключ рынка ('totals', 'spreads')
+            arb_type: тип арбитража для ArbOpportunity
+
+        Returns:
+            Список найденных ArbOpportunity
+        """
+        opportunities: list[ArbOpportunity] = []
+
+        for event in events:
+            sport: str = event.get("sport", "")
+            home: str = event.get("home_team", "")
+            away: str = event.get("away_team", "")
+            event_name: str = f"{home} vs {away}"
+
+            # Извлекаем исходы по рынку
+            outcomes_map = self._extract_market_outcomes(event, market_key)
+            if not outcomes_map:
+                continue
+
+            outcome_names = list(outcomes_map.keys())
+            if len(outcome_names) < 2:
+                continue
+
+            # Для каждого исхода берём лучший (максимальный) коэффициент
+            best_odds: list[float] = []
+            best_bookmakers: list[str] = []
+
+            for outcome in outcome_names:
+                if not outcomes_map[outcome]:
+                    break
+                sorted_offers = sorted(outcomes_map[outcome], key=lambda x: x[0], reverse=True)
+                best_odds.append(sorted_offers[0][0])
+                best_bookmakers.append(sorted_offers[0][1])
+
+            if len(best_odds) != len(outcome_names):
+                continue
+
+            # Проверяем условие арбитража: sum(1/odds) < 1
+            inverse_sum: float = sum(1.0 / o for o in best_odds if o > 0)
+
+            if inverse_sum < 1.0:
+                profit_pct: float = (1.0 / inverse_sum - 1.0) * 100.0
+
+                if profit_pct >= self._min_arb_profit:
+                    opp = ArbOpportunity(
+                        type=arb_type,
+                        sport=sport,
+                        event_name=event_name,
+                        home=home,
+                        away=away,
+                        bookmakers=best_bookmakers,
+                        odds=best_odds,
+                        profit_pct=profit_pct,
+                        details={
+                            "outcomes": outcome_names,
+                            "inverse_sum": inverse_sum,
+                            "market": market_key,
+                        },
+                    )
+                    opportunities.append(opp)
+                    logger.info(
+                        "Surebet (%s) найден: %s | прибыль %.2f%% | %s",
+                        market_key, event_name, profit_pct, best_bookmakers,
+                    )
+
+        return opportunities
+
+    @staticmethod
+    def _extract_market_outcomes(
+        event: dict[str, Any],
+        market_key: str,
+    ) -> dict[str, list[tuple[float, str]]]:
+        """Извлекает исходы заданного рынка из всех букмекеров события.
+
+        Args:
+            event: нормализованное событие
+            market_key: ключ рынка ('h2h', 'totals', 'spreads')
+
+        Returns:
+            {outcome_name: [(odds, bookmaker_key), ...]}
+        """
+        outcomes_map: dict[str, list[tuple[float, str]]] = {}
+
+        for bm in event.get("bookmakers", []):
+            bm_key: str = bm.get("key", "")
+            for market in bm.get("markets", []):
+                if market.get("key") != market_key:
+                    continue
+                for outcome in market.get("outcomes", []):
+                    name: str = outcome.get("name", "")
+                    price: float = outcome.get("price", 0.0)
+                    if name and price > 1.0:
+                        if name not in outcomes_map:
+                            outcomes_map[name] = []
+                        outcomes_map[name].append((price, bm_key))
+
+        return outcomes_map
+
     @staticmethod
     def _extract_h2h_outcomes(
         event: dict[str, Any],

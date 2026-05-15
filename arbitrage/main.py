@@ -24,6 +24,8 @@ from arbitrage.anti_ban import AntiBanEngine
 from arbitrage.executor import BetExecutor
 from arbitrage.odds_api import OddsAPIClient
 from arbitrage.pinnacle_api import PinnacleClient
+from arbitrage.ranker import ArbRanker
+from arbitrage.recheck import RecheckEngine
 from arbitrage.scanner import ArbitrageScanner
 
 logger = logging.getLogger(__name__)
@@ -109,7 +111,9 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             # 3. Найти surebets и value bets
             surebets = scanner.find_surebets(all_events)
             value_bets = scanner.find_value_bets(all_events, sharp_probs)
-            all_opps = surebets + value_bets
+            surebets_totals = scanner.find_surebets_totals(all_events)
+            surebets_spreads = scanner.find_surebets_spreads(all_events)
+            all_opps = surebets + value_bets + surebets_totals + surebets_spreads
 
             if not all_opps:
                 print("[SCANNER] Арбитражей не найдено")
@@ -161,6 +165,31 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 continue
 
             print(f"[SCANNER] Прошли AI-фильтр: {len(filtered)}")
+
+            # 4a. Ранжирование
+            ranker = ArbRanker(top_n=int(state.get("ranker_top_n", 10)))
+            filtered = ranker.rank(filtered)
+            print(f"[SCANNER] После ранжирования: {len(filtered)}")
+
+            # 4b. Перепроверка коэффициентов
+            recheck_engine = RecheckEngine(session=session)
+            rechecked: list[dict[str, Any]] = []
+            for opp_dict in filtered:
+                try:
+                    alive = await recheck_engine.recheck_opportunity(session, opp_dict)
+                    if alive:
+                        rechecked.append(opp_dict)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[SCANNER] Ошибка recheck: {exc}")
+                    rechecked.append(opp_dict)
+
+            if not rechecked:
+                print("[SCANNER] После recheck кандидатов нет")
+                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                continue
+
+            print(f"[SCANNER] Прошли recheck: {len(rechecked)}")
+            filtered = rechecked
 
             # 5. Аллокация банкролла
             bankroll = state.get("bankroll", 1000.0)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 import aiohttp
@@ -31,6 +32,10 @@ class OddsAPIClient:
         self._session: Optional[aiohttp.ClientSession] = session
         self._semaphore: asyncio.Semaphore = asyncio.Semaphore(1)
         self._owns_session: bool = False
+        # Health monitoring
+        self._remaining_quota: Optional[int] = None
+        self._used_quota: Optional[int] = None
+        self._last_latency_ms: float = 0.0
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Возвращает (или создаёт) aiohttp-сессию."""
@@ -44,6 +49,33 @@ class OddsAPIClient:
         if self._owns_session and self._session and not self._session.closed:
             await self._session.close()
 
+    @property
+    def remaining_quota(self) -> Optional[int]:
+        """Оставшееся количество запросов к API."""
+        return self._remaining_quota
+
+    @property
+    def used_quota(self) -> Optional[int]:
+        """Использованное количество запросов к API."""
+        return self._used_quota
+
+    @property
+    def last_latency_ms(self) -> float:
+        """Задержка последнего запроса в миллисекундах."""
+        return self._last_latency_ms
+
+    def get_health(self) -> dict[str, Any]:
+        """Возвращает словарь с информацией о здоровье API-клиента.
+
+        Returns:
+            dict с ключами: remaining_quota, used_quota, last_latency_ms
+        """
+        return {
+            "remaining_quota": self._remaining_quota,
+            "used_quota": self._used_quota,
+            "last_latency_ms": round(self._last_latency_ms, 1),
+        }
+
     async def _request(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> Any:
         """Выполняет GET-запрос с rate-limiting."""
         async with self._semaphore:
@@ -54,16 +86,35 @@ class OddsAPIClient:
                 request_params.update(params)
 
             logger.debug("OddsAPI запрос: %s params=%s", url, request_params)
+            t_start: float = time.monotonic()
             async with session.get(url, params=request_params) as resp:
+                t_end: float = time.monotonic()
+                self._last_latency_ms = (t_end - t_start) * 1000.0
+
+                # Захват квоты из заголовков
+                remaining_hdr = resp.headers.get("x-requests-remaining")
+                used_hdr = resp.headers.get("x-requests-used")
+                if remaining_hdr is not None:
+                    try:
+                        self._remaining_quota = int(remaining_hdr)
+                    except (ValueError, TypeError):
+                        pass
+                if used_hdr is not None:
+                    try:
+                        self._used_quota = int(used_hdr)
+                    except (ValueError, TypeError):
+                        pass
+
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error("OddsAPI ошибка %d: %s", resp.status, text)
                     return []
                 data: Any = await resp.json()
                 logger.debug(
-                    "OddsAPI ответ: remaining=%s, used=%s",
+                    "OddsAPI ответ: remaining=%s, used=%s, latency=%.0fms",
                     resp.headers.get("x-requests-remaining", "?"),
                     resp.headers.get("x-requests-used", "?"),
+                    self._last_latency_ms,
                 )
                 return data
 
