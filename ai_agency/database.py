@@ -114,6 +114,42 @@ async def init_db() -> None:
             )
         except Exception:
             pass  # Колонка уже существует
+        # Миграция: добавляем ab_variant_id к orders
+        try:
+            await db.execute(
+                "ALTER TABLE orders ADD COLUMN ab_variant_id INTEGER"
+            )
+        except Exception:
+            pass  # Колонка уже существует
+        # Миграция: добавляем case_posted к orders
+        try:
+            await db.execute(
+                "ALTER TABLE orders ADD COLUMN case_posted INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass  # Колонка уже существует
+        # Таблица ab_variants для A/B тестирования
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ab_variants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_type TEXT NOT NULL,
+                variant_name TEXT NOT NULL,
+                system_prompt TEXT NOT NULL,
+                total_uses INTEGER NOT NULL DEFAULT 0,
+                total_score REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица parsed_leads для парсера лидов
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS parsed_leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                external_id TEXT UNIQUE NOT NULL,
+                title TEXT,
+                url TEXT,
+                parsed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
         await db.commit()
 
 
@@ -233,6 +269,16 @@ async def update_order_rating(order_id: int, rating: int) -> None:
         await db.execute(
             "UPDATE orders SET rating = ? WHERE id = ?",
             (rating, order_id),
+        )
+        await db.commit()
+
+
+async def update_order_ab_variant(order_id: int, variant_id: int) -> None:
+    """Сохранить ID A/B варианта, использованного для заказа."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE orders SET ab_variant_id = ? WHERE id = ?",
+            (variant_id, order_id),
         )
         await db.commit()
 

@@ -24,6 +24,7 @@ class ServiceDefinition:
     system_prompt: str
     user_prompt_template: str
     quality_checks: QualityCheck = field(default_factory=QualityCheck)
+    ab_enabled: bool = False
 
 
 # Определения всех услуг

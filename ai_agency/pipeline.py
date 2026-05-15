@@ -1,7 +1,7 @@
 """Пайплайн обработки заказов: мульти-агентная цепочка Writer->Editor->QA с Groq-фолбэком."""
 
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 from openai import AsyncOpenAI
 from groq import AsyncGroq
@@ -9,11 +9,15 @@ from groq import AsyncGroq
 import config
 from models import ServiceType
 from services import get_service
+import ab_testing
 
 logger = logging.getLogger(__name__)
 
 # Услуги, которые обрабатываются в простом режиме (без Editor/QA)
 SIMPLE_SERVICES = {ServiceType.REWRITE, ServiceType.SUMMARY}
+
+# Хранилище variant_id для заказов (ключ: (service_type, input_text_hash))
+_last_variant_ids: Dict[int, int] = {}
 
 # Lazy-singleton LLM клиенты (создаются при первом использовании)
 _openai_client: Optional[AsyncOpenAI] = None
@@ -148,7 +152,7 @@ async def _qa_agent(original_task: str, text: str) -> Optional[str]:
     return await _call_llm(messages, temperature=0.3)
 
 
-async def process_order(service_type: ServiceType, input_text: str) -> Optional[str]:
+async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Optional[str], Optional[int]]:
     """
     Обработать заказ через мульти-агентную цепочку.
 
@@ -159,26 +163,38 @@ async def process_order(service_type: ServiceType, input_text: str) -> Optional[
     - Для rewrite и summary (дешевле, быстрее)
 
     При неудаче проверки качества повторяет Writer один раз.
+
+    Возвращает (result_text, variant_id). variant_id = None если A/B тест не использовался.
     """
     service = get_service(service_type)
     quality = service.quality_checks
     simple_mode = service_type in SIMPLE_SERVICES
+
+    # A/B тестирование: пробуем получить вариант промпта
+    variant_id = None
+    system_prompt = service.system_prompt
+    try:
+        variant = await ab_testing.select_variant(service_type.value)
+        if variant:
+            variant_id, system_prompt = variant
+    except Exception as e:
+        logger.warning("Ошибка A/B тестирования: %s", e)
 
     user_prompt = service.user_prompt_template.format(input_text=input_text)
     max_attempts = quality.max_retry + 1
 
     for attempt in range(max_attempts):
         # 1. Writer agent
-        result_text = await _writer_agent(service.system_prompt, user_prompt)
+        result_text = await _writer_agent(system_prompt, user_prompt)
         if not result_text:
             if attempt < max_attempts - 1:
                 continue
-            return None
+            return (None, variant_id)
 
         # Простой режим - пропускаем Editor и QA
         if simple_mode:
             if _check_quality(result_text, quality.min_words, quality.required_keywords):
-                return result_text
+                return (result_text, variant_id)
             if attempt < max_attempts - 1:
                 logger.warning(
                     "Проверка качества не пройдена для %s (простой режим), попытка %d/%d",
@@ -189,7 +205,7 @@ async def process_order(service_type: ServiceType, input_text: str) -> Optional[
                     f"Расширь ответ, минимум {quality.min_words} слов."
                 )
                 continue
-            return result_text
+            return (result_text, variant_id)
 
         # 2. Editor agent
         edited_text = await _editor_agent(result_text)
@@ -203,7 +219,7 @@ async def process_order(service_type: ServiceType, input_text: str) -> Optional[
 
         # Проверка качества
         if _check_quality(final_text, quality.min_words, quality.required_keywords):
-            return final_text
+            return (final_text, variant_id)
 
         if attempt < max_attempts - 1:
             logger.warning(
@@ -215,6 +231,6 @@ async def process_order(service_type: ServiceType, input_text: str) -> Optional[
                 f"Расширь ответ, минимум {quality.min_words} слов."
             )
         else:
-            return final_text
+            return (final_text, variant_id)
 
-    return None
+    return (None, variant_id)

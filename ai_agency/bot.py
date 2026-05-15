@@ -30,6 +30,7 @@ import scheduler
 import pricing
 import i18n
 import document_generator
+import ab_testing
 from models import ServiceType, OrderStatus
 from services import SERVICES, get_service
 from utils import _card, format_number, progress_bar, status_indicator
@@ -360,12 +361,15 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await database.update_order_status(order_id, OrderStatus.PROCESSING.value)
 
     # Обрабатываем через AI
-    result = await pipeline.process_order(service_type, input_text)
+    result, variant_id = await pipeline.process_order(service_type, input_text)
 
     if result:
         await database.update_order_status(
             order_id, OrderStatus.COMPLETED.value, output_text=result
         )
+        # Сохраняем variant_id если был A/B тест
+        if variant_id is not None:
+            await database.update_order_ab_variant(order_id, variant_id)
         # Отправляем результат
         result_body = [
             f"<b>Заказ #{order_id}</b> {status_indicator('completed')}",
@@ -475,6 +479,14 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Сохраняем оценку
     await database.update_order_rating(order_id, rating)
 
+    # Записываем результат A/B теста если был использован вариант
+    order = await database.get_order_by_id(order_id)
+    if order and order.get("ab_variant_id"):
+        try:
+            await ab_testing.record_result(order["ab_variant_id"], rating)
+        except Exception as e:
+            logger.warning("Ошибка записи результата A/B теста: %s", e)
+
     user = update.effective_user
 
     if rating >= 3:
@@ -506,7 +518,7 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         improved_input = (
             "Предыдущий результат неудовлетворительный. Пожалуйста, улучшите текст: " + input_text
         )
-        new_result = await pipeline.process_order(service_type, improved_input)
+        new_result, _ = await pipeline.process_order(service_type, improved_input)
 
         if new_result:
             await database.update_order_status(

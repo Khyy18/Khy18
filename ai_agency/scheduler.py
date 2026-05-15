@@ -1,4 +1,4 @@
-"""Планировщик фоновых задач AI-агентства: retention, upsell, подписки."""
+"""Планировщик фоновых задач AI-агентства: retention, upsell, подписки, лиды, автопостинг."""
 
 import asyncio
 import logging
@@ -8,6 +8,8 @@ from telegram import Bot
 import config
 import database
 import subscriptions
+import lead_parser
+import auto_posting
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +112,34 @@ async def subscription_expiry_check() -> None:
         await asyncio.sleep(3600)  # 1 час
 
 
+async def lead_parser_check(bot: Bot) -> None:
+    """
+    Задача парсинга лидов: каждые 15 минут проверяет
+    новые заказы на Kwork по ключевым словам.
+    """
+    while True:
+        try:
+            await lead_parser.check_new_leads(bot)
+        except Exception as e:
+            logger.error("Ошибка lead_parser_check: %s", e)
+
+        await asyncio.sleep(900)  # 15 минут
+
+
+async def auto_posting_check(bot: Bot) -> None:
+    """
+    Задача автопостинга: каждый час публикует кейсы
+    завершённых заказов с высокой оценкой в канал.
+    """
+    while True:
+        try:
+            await auto_posting.check_and_post_cases(bot)
+        except Exception as e:
+            logger.error("Ошибка auto_posting_check: %s", e)
+
+        await asyncio.sleep(3600)  # 1 час
+
+
 def start_scheduler(bot: Bot) -> None:
     """
     Запустить все фоновые задачи в текущем event loop.
@@ -120,4 +150,6 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(retention_check(bot))
     loop.create_task(upsell_check(bot))
     loop.create_task(subscription_expiry_check())
-    logger.info("Планировщик задач запущен (retention, upsell, subscription_expiry)")
+    loop.create_task(lead_parser_check(bot))
+    loop.create_task(auto_posting_check(bot))
+    logger.info("Планировщик задач запущен (retention, upsell, subscription_expiry, lead_parser, auto_posting)")
