@@ -1,4 +1,11 @@
-"""Dashboard HTML page views served via Jinja2 templates."""
+"""Dashboard HTML page views served via Jinja2 templates.
+
+Design note: These view routes intentionally do NOT require server-side authentication.
+Templates are HTML shells that contain no sensitive data. All data is fetched from
+protected API endpoints (/api/*) which enforce JWT auth. The client-side app.js handles
+auth gating by redirecting unauthenticated users to /login. This pattern keeps the
+views layer simple and stateless while the API layer enforces the security boundary.
+"""
 
 import os
 

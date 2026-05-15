@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 # ---------- Auth Schemas ----------
@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr
 
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8)
     tenant_name: str
 
 

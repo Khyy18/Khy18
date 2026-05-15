@@ -136,21 +136,36 @@ async def update_lead(
     return lead
 
 
+MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
 @router.post("/import", response_model=LeadImportResponse)
 async def import_leads(
     file: UploadFile,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(_get_session),
 ) -> dict:
+    # Check file size (read and enforce 10 MB limit)
     content = await file.read()
+    if len(content) > MAX_IMPORT_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File too large. Maximum allowed size is 10 MB.",
+        )
+
     text = content.decode("utf-8")
     reader = csv.DictReader(io.StringIO(text))
 
     count = 0
     for row in reader:
+        # Skip rows with empty or missing email
+        email = (row.get("email") or "").strip()
+        if not email:
+            continue
+
         lead = Lead(
             tenant_id=current_user.tenant_id,
-            email=row.get("email", ""),
+            email=email,
             first_name=row.get("first_name", ""),
             last_name=row.get("last_name", ""),
             company=row.get("company", ""),

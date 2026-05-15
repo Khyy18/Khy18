@@ -13,7 +13,7 @@ from core.config import settings
 from core.models import Tenant, User, UserRole
 from dashboard.schemas import TokenResponse, UserCreate, UserLogin, UserResponse
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
@@ -89,6 +89,8 @@ async def tenant_scope(
     return current_user.tenant_id
 
 
+# NOTE: Open registration is intentional for MVP/development. In production,
+# this endpoint should be gated with an invite code, rate limiting, or admin approval.
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     data: UserCreate, session: AsyncSession = Depends(_get_session)

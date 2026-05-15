@@ -30,6 +30,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application lifespan: startup and shutdown."""
     global _scheduler, _inbox_task
 
+    # Warn if JWT secret key is still the default insecure value
+    if settings.jwt_secret_key == "change-me-in-production":
+        logger.warning(
+            "JWT_SECRET_KEY is set to the default value 'change-me-in-production'. "
+            "This is insecure and must be changed before deploying to production."
+        )
+
     # Startup: initialize scheduler if SMTP domains are configured
     smtp_domains_raw = settings.smtp_domains
     try:

@@ -201,43 +201,32 @@ async def get_top_sequences(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(_get_session),
 ) -> dict:
-    # Get sequences for this tenant with their message counts and reply counts
-    sequences_result = await session.execute(
-        select(Sequence).where(Sequence.tenant_id == current_user.tenant_id)
+    # Single aggregated query to avoid N+1 per sequence
+    result = await session.execute(
+        select(
+            Sequence.id,
+            Sequence.name,
+            func.count(Message.id).label("total_messages"),
+            func.count(
+                case((Event.event_type == EventType.reply, Event.id))
+            ).label("reply_count"),
+        )
+        .join(Campaign, Campaign.sequence_id == Sequence.id)
+        .join(Message, Message.campaign_id == Campaign.id)
+        .outerjoin(Event, Event.message_id == Message.id)
+        .where(Sequence.tenant_id == current_user.tenant_id)
+        .group_by(Sequence.id, Sequence.name)
+        .having(func.count(Message.id) > 0)
     )
-    sequences = sequences_result.scalars().all()
 
     items = []
-    for seq in sequences:
-        # Count total messages for campaigns using this sequence
-        total_msg_result = await session.execute(
-            select(func.count())
-            .select_from(Message)
-            .join(Campaign, Message.campaign_id == Campaign.id)
-            .where(Campaign.sequence_id == seq.id)
-        )
-        total_messages = total_msg_result.scalar() or 0
-
-        if total_messages == 0:
-            continue
-
-        # Count reply events
-        reply_count_result = await session.execute(
-            select(func.count())
-            .select_from(Event)
-            .join(Message, Event.message_id == Message.id)
-            .join(Campaign, Message.campaign_id == Campaign.id)
-            .where(
-                Campaign.sequence_id == seq.id,
-                Event.event_type == EventType.reply,
-            )
-        )
-        reply_count = reply_count_result.scalar() or 0
-
+    for row in result.all():
+        total_messages = row.total_messages
+        reply_count = row.reply_count
         items.append(
             TopSequenceItem(
-                id=seq.id,
-                name=seq.name,
+                id=row.id,
+                name=row.name,
                 reply_rate=round(reply_count / total_messages, 4),
                 total_messages=total_messages,
             )
