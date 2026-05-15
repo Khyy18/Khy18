@@ -23,3 +23,11 @@ email-validator
 playwright
 scipy
 stripe
+
+# Test dependencies
+pytest
+pytest-asyncio
+pytest-cov
+factory-boy
+aiosqlite
+
