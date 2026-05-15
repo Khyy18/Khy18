@@ -19,6 +19,31 @@ from core.models import (
 
 logger = logging.getLogger(__name__)
 
+# Scoring weights - shared between score_lead and predict_score
+ENGAGEMENT_WEIGHTS = {
+    "open": 5,
+    "click": 10,
+    "reply": 20,
+    "positive_reply": 50,
+    "linkedin_connection": 15,
+    "meeting_booked": 100,
+}
+ENGAGEMENT_CAPS = {"open": 3, "click": 3}  # max events counted
+ICP_WEIGHTS = {
+    "company_size_match": 20,
+    "industry_match": 15,
+    "title_seniority_match": 25,
+    "tech_stack_match": 10,
+    "trigger_events": 15,
+}
+MAX_ENGAGEMENT_SCORE = (
+    sum(ENGAGEMENT_WEIGHTS.values())
+    + (ENGAGEMENT_WEIGHTS["open"] * (ENGAGEMENT_CAPS["open"] - 1))
+    + (ENGAGEMENT_WEIGHTS["click"] * (ENGAGEMENT_CAPS["click"] - 1))
+)
+MAX_ICP_SCORE = sum(ICP_WEIGHTS.values())
+MAX_TOTAL_SCORE = MAX_ENGAGEMENT_SCORE + MAX_ICP_SCORE
+
 
 class LeadScorer:
     """Scores leads based on engagement signals and ICP fit."""
@@ -118,7 +143,7 @@ class LeadScorer:
                 .where(
                     Message.lead_id == lead.id,
                     Message.channel == ChannelType.linkedin,
-                    Message.status == MessageStatus.sent,
+                    Message.status.in_([MessageStatus.sent, MessageStatus.draft]),
                 )
             )
             linkedin_count = linkedin_result.scalar() or 0
@@ -198,35 +223,33 @@ class LeadScorer:
         """
         engagement_score = 0.0
 
-        opens = min(engagement_data.get("opens", 0), 3)
-        clicks = min(engagement_data.get("clicks", 0), 3)
-        engagement_score += opens * 5
-        engagement_score += clicks * 10
+        opens = min(engagement_data.get("opens", 0), ENGAGEMENT_CAPS["open"])
+        clicks = min(engagement_data.get("clicks", 0), ENGAGEMENT_CAPS["click"])
+        engagement_score += opens * ENGAGEMENT_WEIGHTS["open"]
+        engagement_score += clicks * ENGAGEMENT_WEIGHTS["click"]
         if engagement_data.get("replied"):
-            engagement_score += 20
+            engagement_score += ENGAGEMENT_WEIGHTS["reply"]
         if engagement_data.get("positive_reply"):
-            engagement_score += 50
+            engagement_score += ENGAGEMENT_WEIGHTS["positive_reply"]
         if engagement_data.get("linkedin_connected"):
-            engagement_score += 15
+            engagement_score += ENGAGEMENT_WEIGHTS["linkedin_connection"]
         if engagement_data.get("booked"):
-            engagement_score += 100
+            engagement_score += ENGAGEMENT_WEIGHTS["meeting_booked"]
 
         icp_score = 0.0
         if lead_data.get("company_size_match"):
-            icp_score += 20
+            icp_score += ICP_WEIGHTS["company_size_match"]
         if lead_data.get("industry_match"):
-            icp_score += 15
+            icp_score += ICP_WEIGHTS["industry_match"]
         if lead_data.get("title_seniority_match"):
-            icp_score += 25
+            icp_score += ICP_WEIGHTS["title_seniority_match"]
         if lead_data.get("tech_stack_match"):
-            icp_score += 10
+            icp_score += ICP_WEIGHTS["tech_stack_match"]
         if lead_data.get("trigger_events"):
-            icp_score += 15
+            icp_score += ICP_WEIGHTS["trigger_events"]
 
-        # Max possible: engagement=200 + icp=85 = 285
-        max_score = 285.0
         total = engagement_score + icp_score
-        return min(round((total / max_score) * 100, 1), 100.0)
+        return min(round((total / MAX_TOTAL_SCORE) * 100, 1), 100.0)
 
 
 async def trigger_score_update(lead_id: UUID, session_factory) -> None:

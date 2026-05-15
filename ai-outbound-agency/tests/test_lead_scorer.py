@@ -238,8 +238,8 @@ async def test_predict_score():
     result = LeadScorer.predict_score(lead_data, engagement_data)
     # engagement: 2*5 + 1*10 + 20 = 40
     # ICP: 20 + 15 = 35
-    # total = 75, max = 285, percentage = 75/285*100 = 26.3
-    assert result == 26.3
+    # total = 75, max = 315 (MAX_TOTAL_SCORE), percentage = 75/315*100 = 23.8
+    assert result == 23.8
 
 
 @pytest.mark.asyncio

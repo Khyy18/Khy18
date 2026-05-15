@@ -7,7 +7,7 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.models import (
@@ -169,7 +169,7 @@ class ChannelRouter:
                 .where(Message.lead_id == lead_id)
                 .where(Message.channel == ChannelType.linkedin)
                 .where(Message.direction == MessageDirection.outbound)
-                .where(Message.status == MessageStatus.sent)
+                .where(Message.status.in_([MessageStatus.sent, MessageStatus.draft]))
                 .where(Message.meta["linkedin_task"].as_string() == "linkedin_connect_task")
                 .limit(1)
             )
