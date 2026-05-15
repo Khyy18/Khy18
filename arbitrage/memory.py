@@ -109,6 +109,38 @@ def init_db() -> None:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bookmaker TEXT NOT NULL UNIQUE,
+                    balance REAL NOT NULL DEFAULT 0,
+                    last_updated TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bankroll_state (
+                    id INTEGER PRIMARY KEY,
+                    total_bankroll REAL NOT NULL,
+                    last_updated TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    arb_id INTEGER,
+                    ai_score INTEGER,
+                    actual_outcome TEXT,
+                    ttl_predicted_sec INTEGER,
+                    ttl_actual_sec INTEGER
+                )
+                """
+            )
             conn.commit()
         print(f"[ARB_MEMORY] База данных инициализирована: {DB_PATH}")
     except sqlite3.Error as exc:
@@ -508,3 +540,139 @@ def update_daily_pnl(date: str, staked: float, won: float, pnl: float, roi: floa
             conn.commit()
     except sqlite3.Error as exc:
         print(f"[ARB_MEMORY] Ошибка обновления daily_pnl: {exc}")
+
+
+# --- Bankroll State ---
+
+
+def save_bankroll_state(total: float) -> None:
+    """Сохранить текущее состояние банкролла."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO bankroll_state (id, total_bankroll, last_updated)
+                VALUES (1, ?, ?)
+                """,
+                (float(total), _now_iso()),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка сохранения банкролла: {exc}")
+
+
+def load_bankroll_state() -> Optional[float]:
+    """Загрузить банкролл из БД. None если нет записи."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT total_bankroll FROM bankroll_state WHERE id = 1"
+            ).fetchone()
+            if row:
+                return float(row["total_bankroll"])
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка загрузки банкролла: {exc}")
+    return None
+
+
+# --- Account Balances ---
+
+
+def get_account_balance(bookmaker: str) -> float:
+    """Получить баланс букмекера. 0.0 если нет записи."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT balance FROM accounts WHERE bookmaker = ?",
+                (str(bookmaker),),
+            ).fetchone()
+            if row:
+                return float(row["balance"])
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения баланса {bookmaker}: {exc}")
+    return 0.0
+
+
+def set_account_balance(bookmaker: str, amount: float) -> None:
+    """Установить баланс букмекера (INSERT OR REPLACE)."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO accounts (bookmaker, balance, last_updated)
+                VALUES (?, ?, ?)
+                ON CONFLICT(bookmaker) DO UPDATE SET
+                    balance = excluded.balance,
+                    last_updated = excluded.last_updated
+                """,
+                (str(bookmaker), float(amount), _now_iso()),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка установки баланса {bookmaker}: {exc}")
+
+
+def get_all_account_balances() -> list[dict[str, Any]]:
+    """Получить все балансы букмекеров."""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT bookmaker, balance, last_updated FROM accounts ORDER BY bookmaker"
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения балансов: {exc}")
+        return []
+
+
+# --- AI Feedback ---
+
+
+def save_ai_feedback(
+    arb_id: Optional[int],
+    ai_score: int,
+    actual_outcome: str,
+    ttl_predicted_sec: Optional[int] = None,
+    ttl_actual_sec: Optional[int] = None,
+) -> None:
+    """Сохранить AI feedback запись."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_feedback (ts, arb_id, ai_score, actual_outcome,
+                                         ttl_predicted_sec, ttl_actual_sec)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _now_iso(),
+                    arb_id,
+                    int(ai_score),
+                    str(actual_outcome),
+                    ttl_predicted_sec,
+                    ttl_actual_sec,
+                ),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка сохранения AI feedback: {exc}")
+
+
+def get_recent_ai_feedback(limit: int = 5) -> list[dict[str, Any]]:
+    """Получить последние N записей AI feedback."""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, ts, arb_id, ai_score, actual_outcome,
+                       ttl_predicted_sec, ttl_actual_sec
+                FROM ai_feedback
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения AI feedback: {exc}")
+        return []

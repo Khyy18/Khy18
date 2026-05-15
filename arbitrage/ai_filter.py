@@ -191,6 +191,22 @@ class ArbFilter:
         score = max(0, min(100, score))
         reasoning = str(resp.get("reasoning", "нет обоснования"))
 
+        # Калибровка по фидбеку: корректировка на основе прошлых DIED исходов
+        feedbacks = memory.get_recent_ai_feedback(5)
+        calibration_offset = 0
+        if feedbacks:
+            died_scores = [
+                fb["ai_score"] for fb in feedbacks
+                if fb.get("actual_outcome") and "DIED" in str(fb["actual_outcome"])
+                and fb.get("ai_score") is not None
+            ]
+            if died_scores:
+                avg_died_score = sum(died_scores) / len(died_scores)
+                calibration_offset = int(avg_died_score - 50)
+
+        score = score - calibration_offset
+        score = max(0, min(100, score))
+
         result = {
             "score": score,
             "reasoning": reasoning,
@@ -265,6 +281,19 @@ class ArbFilter:
                     f"{rule.get('rule_text', '')} "
                     f"(уверенность: {rule.get('confidence', 0):.2f})\n"
                 )
+
+        # Последние AI feedback записи
+        recent_feedback = memory.get_recent_ai_feedback(5)
+        if recent_feedback:
+            prompt += "\nТвои последние оценки:\n"
+            for fb in recent_feedback:
+                fb_score = fb.get("ai_score", 0)
+                outcome = fb.get("actual_outcome", "?")
+                ttl_actual = fb.get("ttl_actual_sec")
+                if ttl_actual is not None:
+                    prompt += f"  score={fb_score} -> {outcome}, жил {ttl_actual}с\n"
+                else:
+                    prompt += f"  score={fb_score} -> {outcome}\n"
 
         prompt += (
             "\nУчитывай:\n"

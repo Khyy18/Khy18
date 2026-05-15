@@ -311,6 +311,14 @@ class RecheckEngine:
             ai_score=opportunity.get("ai_score", 0),
             status="DIED_BEFORE_EXEC",
         )
+        # AI Feedback: сохраняем данные для калибровки
+        memory.save_ai_feedback(
+            arb_id=None,
+            ai_score=opportunity.get("ai_score", 0),
+            actual_outcome="DIED_BEFORE_EXEC",
+            ttl_predicted_sec=opportunity.get("predicted_ttl_sec"),
+            ttl_actual_sec=None,
+        )
 
     async def _predict_ttl(
         self, session: aiohttp.ClientSession, opportunity: dict[str, Any]

@@ -82,6 +82,13 @@ class BankrollAllocator:
                 profit_pct = float(opp.get("profit_pct", 0.0))
                 stake = bankroll * (MAX_BET_PCT / 100.0) * min(profit_pct / 10.0, 1.0)
                 kf = 0.0  # Kelly не применяется
+
+                # Рассчитываем ставки на каждую ногу пропорционально обратным коэфф.
+                odds_list = opp.get("odds", [])
+                bookmakers_list = opp.get("bookmakers", [])
+                outcome_names = opp.get("details", {}).get("outcomes", [])
+                if not outcome_names:
+                    outcome_names = [f"Outcome {i+1}" for i in range(len(odds_list))]
             else:
                 # Value bets - стандартный Kelly
                 odds = float(opp.get("best_odds", opp.get("odds", 2.0)))
@@ -95,12 +102,33 @@ class BankrollAllocator:
             # Ограничение максимальной ставки
             stake = min(stake, max_stake)
 
-            allocations.append({
+            alloc_entry: dict[str, Any] = {
                 "opportunity": opp,
                 "stake_amount": round(stake, 2),
                 "kelly_fraction": round(kf, 4),
                 "ai_adjustment_reason": "",
-            })
+            }
+
+            # Для surebets добавляем список ног с пропорциональными ставками
+            if sizing_mode == "surebet" and odds_list:
+                inv_sum = sum(1.0 / o for o in odds_list if o > 0)
+                if inv_sum > 0:
+                    legs: list[dict[str, Any]] = []
+                    for idx, o in enumerate(odds_list):
+                        if o <= 0:
+                            continue
+                        leg_stake = stake * (1.0 / o) / inv_sum
+                        bm = bookmakers_list[idx] if idx < len(bookmakers_list) else "unknown"
+                        outcome = outcome_names[idx] if idx < len(outcome_names) else f"Outcome {idx+1}"
+                        legs.append({
+                            "bookmaker": bm,
+                            "outcome": outcome,
+                            "odds": o,
+                            "stake": round(leg_stake, 2),
+                        })
+                    alloc_entry["legs"] = legs
+
+            allocations.append(alloc_entry)
 
         # AI-коррекция портфеля
         ai_adjustments = await self._get_ai_adjustments(allocations, bankroll)

@@ -382,6 +382,12 @@ async def settlement_loop(state: dict[str, Any], session: aiohttp.ClientSession)
             # Расчёт ставок
             try:
                 await engine.settle_bets(session)
+                # Обновление банкролла после расчёта
+                stats = memory.get_stats()
+                total_pnl = stats.get("total_pnl", 0.0)
+                new_bankroll = 1000.0 + total_pnl
+                state["bankroll"] = new_bankroll
+                memory.save_bankroll_state(new_bankroll)
             except Exception as exc:  # noqa: BLE001
                 print(f"[SETTLEMENT] Ошибка расчёта: {exc}")
 
@@ -421,6 +427,14 @@ async def main() -> None:
         "exposure": 0.0,
         "start_time": datetime.now(timezone.utc).isoformat(),
     }
+
+    # Загрузка банкролла из БД (persistent)
+    saved_bankroll = memory.load_bankroll_state()
+    if saved_bankroll is not None:
+        state["bankroll"] = saved_bankroll
+        print(f"[MAIN] Банкролл загружен из БД: {saved_bankroll:.2f}")
+    else:
+        print("[MAIN] Банкролл по умолчанию: 1000.0")
 
     # Создание HTTP-сессии
     session = aiohttp.ClientSession()

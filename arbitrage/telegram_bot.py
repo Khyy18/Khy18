@@ -241,6 +241,15 @@ async def _handle_bank(
         f"\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e: <code>{format_number(available)}</code>",
         f"\u041c\u0430\u043a\u0441. \u044d\u043a\u0441\u043f\u043e\u0437\u0438\u0446\u0438\u044f: <code>{config.MAX_BANKROLL_EXPOSURE}%</code>",
     ]
+
+    # Балансы БК
+    balances = memory.get_all_account_balances()
+    if balances:
+        body.append("")
+        body.append("<b>Балансы БК:</b>")
+        for acc in balances:
+            body.append(f"  {acc['bookmaker']}: <code>{format_number(acc['balance'])}</code>")
+
     return _card("\u0411\u0430\u043d\u043a", "\ud83d\udcb0", body)
 
 
@@ -498,6 +507,25 @@ async def _process_message(
     if text == "/settings":
         reply = await _handle_settings(session, state)
         await send_message(session, reply, reply_markup=set_keyboard())
+        return
+    if text.startswith("/set_balance"):
+        # Формат: /set_balance pinnacle 500.0
+        raw_text = (msg.get("text") or "").strip()
+        parts = raw_text.split()
+        if len(parts) >= 3:
+            bk_name = parts[1].strip()
+            try:
+                amount = float(parts[2])
+                memory.set_account_balance(bk_name, amount)
+                reply_text = (
+                    f"\u2705 Баланс <code>{bk_name}</code> установлен: "
+                    f"<code>{format_number(amount)}</code>"
+                )
+            except (ValueError, TypeError):
+                reply_text = "\u274c Неверный формат суммы. Пример: /set_balance pinnacle 500.0"
+        else:
+            reply_text = "\u274c Формат: /set_balance {букмекер} {сумма}"
+        await send_message(session, reply_text, reply_markup=set_keyboard())
         return
     # Любое другое сообщение - показываем меню
     await send_message(
