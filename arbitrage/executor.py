@@ -117,27 +117,86 @@ class BetExecutor:
                 elif config.BETFAIR_APP_KEY:
                     for sleg in successful_legs:
                         if sleg.get("bookmaker") == "betfair" and sleg.get("bet_id"):
-                            # Place LAY hedge on same selection
-                            hedge_result = await self._place_bet(
-                                bookmaker="betfair",
-                                event=event,
-                                outcome=sleg.get("outcome", ""),
-                                stake=sleg.get("stake", 0.0),
-                                odds=sleg.get("odds", 0.0),
-                                selection_id=sleg.get("selection_id"),
-                                market_id=sleg.get("market_id"),
-                                side="LAY",
-                            )
-                            if hedge_result.get("status") == STATUS_PLACED:
-                                logger.info(
-                                    "[EXECUTOR] Betfair LAY hedge успешен: %s",
-                                    hedge_result.get("bet_id"),
+                            market_id = sleg.get("market_id")
+                            selection_id = sleg.get("selection_id")
+                            if not market_id or not selection_id:
+                                logger.warning(
+                                    "[EXECUTOR] Hedge: нет market_id/selection_id для %s", event
                                 )
-                            else:
-                                logger.error(
-                                    "[EXECUTOR] Betfair LAY hedge неудачен: %s",
-                                    hedge_result.get("error", "unknown"),
+                                continue
+
+                            # Get current market book for best lay price
+                            hedge_client = BetfairClient()
+                            try:
+                                market_books = await hedge_client.list_market_book([market_id])
+                                current_lay_price = None
+                                if market_books:
+                                    for runner in market_books[0].get("runners", []):
+                                        if str(runner.get("selectionId")) == str(selection_id):
+                                            lay_prices = runner.get("ex", {}).get("availableToLay", [])
+                                            if lay_prices:
+                                                current_lay_price = lay_prices[0].get("price")
+                                            break
+
+                                if current_lay_price is None:
+                                    logger.warning(
+                                        "[EXECUTOR] Hedge: не удалось получить текущую lay цену для %s",
+                                        event,
+                                    )
+                                    continue
+
+                                # Check if hedge loss exceeds 5% of stake
+                                original_back_odds = sleg.get("odds", 0.0)
+                                hedge_stake = sleg.get("stake", 0.0)
+                                potential_loss_pct = (
+                                    abs(1.0 - original_back_odds / current_lay_price) * 100.0
+                                    if current_lay_price > 0
+                                    else 0.0
                                 )
+
+                                if potential_loss_pct > 5.0:
+                                    logger.warning(
+                                        "[EXECUTOR] Hedge: убыток %.2f%% > 5%%, ручной хедж нужен для %s",
+                                        potential_loss_pct, event,
+                                    )
+                                    try:
+                                        import aiohttp as _aiohttp
+                                        async with _aiohttp.ClientSession() as _sess:
+                                            alert_text = (
+                                                f"<b>HEDGE ALERT</b>\n"
+                                                f"Event: {event}\n"
+                                                f"Потенц. убыток: {potential_loss_pct:.2f}%\n"
+                                                f"Текущая lay цена: {current_lay_price}\n"
+                                                f"Ручной хедж нужен!"
+                                            )
+                                            await telegram_bot.send_message(_sess, alert_text)
+                                    except Exception:
+                                        pass
+                                    continue
+
+                                # Loss acceptable - place hedge at current market price
+                                hedge_result = await self._place_bet(
+                                    bookmaker="betfair",
+                                    event=event,
+                                    outcome=sleg.get("outcome", ""),
+                                    stake=hedge_stake,
+                                    odds=current_lay_price,
+                                    selection_id=selection_id,
+                                    market_id=market_id,
+                                    side="LAY",
+                                )
+                                if hedge_result.get("status") == STATUS_PLACED:
+                                    logger.info(
+                                        "[EXECUTOR] Betfair LAY hedge успешен: %s @ %.2f",
+                                        hedge_result.get("bet_id"), current_lay_price,
+                                    )
+                                else:
+                                    logger.error(
+                                        "[EXECUTOR] Betfair LAY hedge неудачен: %s",
+                                        hedge_result.get("error", "unknown"),
+                                    )
+                            finally:
+                                await hedge_client.close()
                 else:
                     logger.warning(
                         "[EXECUTOR] PARTIAL_FILL: Betfair hedge невозможен (нет APP_KEY) для %s",

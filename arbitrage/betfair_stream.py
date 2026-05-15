@@ -14,22 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
-import sys
+import math
 from typing import Any, Callable, Optional
 
 import aiohttp
 
 from arbitrage import config
-
-# Импорт ai_router из корневого проекта
-_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _parent not in sys.path:
-    sys.path.insert(0, _parent)
-try:
-    import ai_router
-except ImportError:
-    ai_router = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +27,36 @@ STREAM_URL: str = "wss://stream-api.betfair.com/stream"
 RECONNECT_BASE_DELAY: float = 1.0
 RECONNECT_MAX_DELAY: float = 30.0
 HEARTBEAT_TIMEOUT: float = 60.0
+
+# Betfair tick size increments
+BETFAIR_TICKS: list[tuple[float, float, float]] = [
+    # (min_price, max_price, increment)
+    (1.01, 2.0, 0.01),
+    (2.0, 3.0, 0.02),
+    (3.0, 4.0, 0.05),
+    (4.0, 6.0, 0.1),
+    (6.0, 10.0, 0.2),
+    (10.0, 20.0, 0.5),
+    (20.0, 30.0, 1.0),
+    (30.0, 50.0, 2.0),
+    (50.0, 100.0, 5.0),
+    (100.0, 1001.0, 10.0),
+]
+
+
+def round_to_tick(price: float, side: str = "back") -> float:
+    """Округлить цену до ближайшего Betfair tick.
+
+    side='back': округляем вниз (в пользу матчера)
+    side='lay': округляем вверх (в пользу матчера)
+    """
+    for min_p, max_p, inc in BETFAIR_TICKS:
+        if min_p <= price < max_p:
+            if side == "back":
+                return math.floor(price / inc) * inc
+            else:
+                return math.ceil(price / inc) * inc
+    return round(price, 2)
 
 
 class BetfairStreamClient:
@@ -335,6 +355,41 @@ class BetfairStreamClient:
 class MarketMaker:
     """Стратегия маркет-мейкинга на Betfair Exchange (только DRY RUN)."""
 
+    def calculate_spread(self, best_back: float, best_lay: float, volume: float) -> dict[str, Any]:
+        """Рассчитать оптимальный spread для маркетмейкинга.
+
+        Алгоритм:
+        1. mid_price = (best_back + best_lay) / 2
+        2. spread = max(0.02, 1 / sqrt(volume) * 0.1) if volume > 0 else 0.02
+        3. our_back = mid_price - spread/2
+        4. our_lay = mid_price + spread/2
+        5. Округлить до Betfair tick sizes
+
+        Returns: {back_price, lay_price, expected_profit_per_match}
+        """
+        mid_price = (best_back + best_lay) / 2.0
+        if volume > 0:
+            spread = max(0.02, 1.0 / math.sqrt(volume) * 0.1)
+        else:
+            spread = 0.02
+
+        our_back = round_to_tick(mid_price - spread / 2.0, side="back")
+        our_lay = round_to_tick(mid_price + spread / 2.0, side="lay")
+
+        # Ensure back < lay
+        if our_back >= our_lay:
+            our_back = round_to_tick(mid_price - 0.01, side="back")
+            our_lay = round_to_tick(mid_price + 0.01, side="lay")
+
+        # Expected profit per matched bet (ignoring commission)
+        expected_profit = our_lay - our_back
+
+        return {
+            "back_price": our_back,
+            "lay_price": our_lay,
+            "expected_profit_per_match": round(expected_profit, 4),
+        }
+
     async def analyze_spread(
         self,
         session: aiohttp.ClientSession,
@@ -343,88 +398,47 @@ class MarketMaker:
         volume: float,
         event_name: str,
     ) -> dict[str, Any]:
-        """Проанализировать спред и рекомендовать позиции.
+        """Проанализировать спред и рекомендовать позиции (числовой алгоритм).
 
-        Всегда работает в DRY_RUN режиме (только логирование, без реальных ордеров).
-
-        Args:
-            session: aiohttp сессия.
-            back_price: текущая цена back.
-            lay_price: текущая цена lay.
-            volume: объем торгов на рынке.
-            event_name: название события.
-
-        Returns:
-            dict с ключами: recommended_back, recommended_lay,
-                           stake_back, stake_lay, confidence, dry_run.
+        Не использует LLM. Чисто математический расчёт.
+        Всегда работает в DRY_RUN режиме.
         """
-        default: dict[str, Any] = {
-            "recommended_back": back_price,
-            "recommended_lay": lay_price,
-            "stake_back": 0.0,
-            "stake_lay": 0.0,
-            "confidence": 0,
-            "dry_run": True,
-        }
+        if back_price <= 1.0 or lay_price <= 1.0 or back_price >= lay_price:
+            return {
+                "recommended_back": back_price,
+                "recommended_lay": lay_price,
+                "stake_back": 0.0,
+                "stake_lay": 0.0,
+                "confidence": 0,
+                "dry_run": True,
+            }
 
-        if ai_router is None:
-            logger.debug("ai_router недоступен, MarketMaker возвращает default")
-            return default
+        calc = self.calculate_spread(back_price, lay_price, volume)
 
-        spread = lay_price - back_price
-        spread_pct = (spread / back_price * 100.0) if back_price > 0 else 0.0
+        # Confidence based on volume and spread tightness
+        spread_pct = (lay_price - back_price) / back_price * 100.0
+        if volume > 10000 and spread_pct < 5.0:
+            confidence = 80
+        elif volume > 1000:
+            confidence = 60
+        else:
+            confidence = 30
 
-        prompt = (
-            "Ты - эксперт по маркет-мейкингу на биржевых ставках. "
-            "Проанализируй текущий спред и рекомендуй оптимальные позиции.\n\n"
-            f"Событие: {event_name}\n"
-            f"Back цена: {back_price}\n"
-            f"Lay цена: {lay_price}\n"
-            f"Спред: {spread:.3f} ({spread_pct:.2f}%)\n"
-            f"Объем: {volume:.0f}\n\n"
-            "Рекомендуй back и lay цены внутри спреда для получения прибыли.\n"
-            "Учитывай: комиссия биржи ~2-5%, ликвидность, волатильность.\n\n"
-            "Ответь строго в формате JSON:\n"
-            '{"recommended_back": <цена back>, '
-            '"recommended_lay": <цена lay>, '
-            '"stake_back": <размер ставки back>, '
-            '"stake_lay": <размер ставки lay>, '
-            '"confidence": <0-100>}'
-        )
+        # Stake sizing: proportional to confidence, capped
+        base_stake = 10.0
+        stake = base_stake * (confidence / 100.0)
 
-        try:
-            resp = await ai_router.call_llm_json(
-                session,
-                prompt,
-                max_output_tokens=256,
-                temperature=0.2,
-                timeout=25,
-            )
-        except Exception as exc:
-            logger.warning("Ошибка LLM в MarketMaker: %s", exc)
-            return default
-
-        if resp is None:
-            return default
-
-        recommended_back = float(resp.get("recommended_back", back_price))
-        recommended_lay = float(resp.get("recommended_lay", lay_price))
-        stake_back = float(resp.get("stake_back", 0.0))
-        stake_lay = float(resp.get("stake_lay", 0.0))
-        confidence = int(resp.get("confidence", 0))
-        confidence = max(0, min(100, confidence))
-
-        result: dict[str, Any] = {
-            "recommended_back": recommended_back,
-            "recommended_lay": recommended_lay,
-            "stake_back": stake_back,
-            "stake_lay": stake_lay,
+        result = {
+            "recommended_back": calc["back_price"],
+            "recommended_lay": calc["lay_price"],
+            "stake_back": round(stake, 2),
+            "stake_lay": round(stake, 2),
             "confidence": confidence,
             "dry_run": True,
         }
         logger.info(
-            "MarketMaker DRY RUN: %s back=%.2f lay=%.2f conf=%d",
-            event_name, recommended_back, recommended_lay, confidence,
+            "MarketMaker DRY RUN: %s back=%.2f lay=%.2f conf=%d (числовой алгоритм)",
+            event_name, calc["back_price"], calc["lay_price"], confidence,
         )
         return result
 
