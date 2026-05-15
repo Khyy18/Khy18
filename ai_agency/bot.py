@@ -9,6 +9,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
+    WebAppInfo,
 )
 from telegram.ext import (
     Application,
@@ -41,6 +42,18 @@ try:
     import promo as promo_module
 except ImportError:
     promo_module = None
+
+# Интеграция reviews (graceful)
+try:
+    import reviews as reviews_module
+except ImportError:
+    reviews_module = None
+
+# Интеграция ad_manager (graceful)
+try:
+    import ad_manager
+except ImportError:
+    ad_manager = None
 
 # Интеграция rate_limiter и telegram_payments (graceful)
 try:
@@ -105,6 +118,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         except (ValueError, TypeError):
             pass
 
+    # Обработка рекламной deep link (ad_SOURCE)
+    if context.args and context.args[0].startswith("ad_"):
+        source = context.args[0][3:]
+        if ad_manager:
+            try:
+                await ad_manager.track_utm(user.id, source)
+            except Exception as e:
+                logger.debug("Ошибка трекинга UTM: %s", e)
+
     # Проверка бесплатного триала
     trial_available = await billing.check_free_trial(user.id)
 
@@ -142,6 +164,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard.append([
         InlineKeyboardButton("\U0001f4cb Мои заказы", callback_data="my_orders"),
     ])
+
+    # WebAppInfo button for Mini App
+    if config.MINI_APP_URL:
+        keyboard.append([
+            InlineKeyboardButton(
+                "\U0001f4f1 Open App",
+                web_app=WebAppInfo(url=config.MINI_APP_URL),
+            ),
+        ])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -596,6 +627,20 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"\u2b50 Спасибо за оценку ({rating}/5)! Рады, что вам понравилось.",
             parse_mode=ParseMode.HTML,
         )
+        # Prompt for text review after high rating (4-5)
+        if rating >= 4 and reviews_module:
+            review_keyboard = [
+                [InlineKeyboardButton(
+                    "\U0001f4dd Оставить отзыв",
+                    callback_data=f"review:{order_id}",
+                )],
+            ]
+            await context.bot.send_message(
+                chat_id=user.id,
+                text="\U0001f4ac Хотите оставить текстовый отзыв? Это поможет другим клиентам!",
+                reply_markup=InlineKeyboardMarkup(review_keyboard),
+                parse_mode=ParseMode.HTML,
+            )
     else:
         # Оценка низкая - автоматическая переделка
         await query.edit_message_text(
@@ -1068,6 +1113,65 @@ async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
 
+# --- Обработка запроса на отзыв ---
+
+async def handle_review_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle review prompt button click - ask user to type review text."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # review:{order_id}
+    parts = data.split(":")
+    if len(parts) != 2:
+        return
+
+    try:
+        order_id = int(parts[1])
+    except (ValueError, IndexError):
+        return
+
+    context.user_data["review_order_id"] = order_id
+    await query.edit_message_text(
+        "\U0001f4dd Напишите ваш отзыв (одним сообщением):",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def handle_review_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle review text submission."""
+    order_id = context.user_data.get("review_order_id")
+    if not order_id:
+        return
+
+    user = update.effective_user
+    text = update.message.text
+
+    if reviews_module:
+        # Get order rating
+        order = await database.get_order_by_id(order_id)
+        rating = order.get("rating", 5) if order else 5
+
+        review_id = await reviews_module.submit_review(
+            client_id=user.id,
+            order_id=order_id,
+            text=text,
+            rating=rating,
+        )
+        if review_id:
+            await update.message.reply_text(
+                "\u2705 Спасибо за отзыв! Он будет опубликован после модерации.",
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await update.message.reply_text(
+                "\u274c Отзыв не прошёл модерацию. Попробуйте другой текст.",
+                parse_mode=ParseMode.HTML,
+            )
+
+    # Clear the state
+    context.user_data.pop("review_order_id", None)
+
+
 # --- Отмена ---
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1127,6 +1231,20 @@ def create_application() -> Application:
     # Обработчик скачивания документов
     application.add_handler(
         CallbackQueryHandler(handle_download, pattern=r"^download:\d+:(docx|pdf)$")
+    )
+
+    # Обработчик запроса на отзыв
+    application.add_handler(
+        CallbackQueryHandler(handle_review_prompt, pattern=r"^review:\d+$")
+    )
+
+    # Обработчик текста отзыва (фильтруем только когда есть review_order_id)
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_review_text,
+        ),
+        group=1,
     )
 
     # Команда /lang

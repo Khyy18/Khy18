@@ -236,6 +236,57 @@ async def init_db() -> None:
                 FOREIGN KEY (client_id) REFERENCES clients(telegram_id)
             )
         """)
+        # Таблица reviews для системы отзывов
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                order_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                rating INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                approved_at TEXT,
+                FOREIGN KEY (client_id) REFERENCES clients(telegram_id),
+                FOREIGN KEY (order_id) REFERENCES orders(id)
+            )
+        """)
+        # Таблица ad_campaigns для рекламного менеджера
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS ad_campaigns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_name TEXT NOT NULL,
+                budget REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                conversions INTEGER NOT NULL DEFAULT 0,
+                roi REAL NOT NULL DEFAULT 0,
+                source TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица webhook_endpoints для B2B вебхуков
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS webhook_endpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                secret TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица webhook_deliveries для доставки вебхуков
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                webhook_id INTEGER NOT NULL,
+                order_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TEXT,
+                FOREIGN KEY (webhook_id) REFERENCES webhook_endpoints(id)
+            )
+        """)
         await db.commit()
 
 

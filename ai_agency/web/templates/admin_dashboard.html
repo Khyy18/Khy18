@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - AI Agency</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: #2563eb; color: white; padding: 20px; border-radius: 12px; margin-bottom: 24px; }
+        .header h1 { font-size: 24px; }
+        .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .metric-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+        .metric-card .label { font-size: 14px; color: #666; margin-bottom: 4px; }
+        .metric-card .value { font-size: 28px; font-weight: 700; color: #2563eb; }
+        .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+        .chart-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+        .chart-card h3 { margin-bottom: 12px; font-size: 16px; }
+        .section { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 24px; }
+        .section h3 { margin-bottom: 12px; font-size: 16px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eee; font-size: 14px; }
+        th { font-weight: 600; color: #666; }
+        .status { padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+        .status-completed { background: #d1fae5; color: #065f46; }
+        .status-pending { background: #fef3c7; color: #92400e; }
+        .status-failed { background: #fee2e2; color: #991b1b; }
+        @media (max-width: 768px) { .charts { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Admin Dashboard</h1>
+            <p>AI Agency Management Panel</p>
+        </div>
+
+        <!-- Metrics -->
+        <div class="metrics">
+            <div class="metric-card">
+                <div class="label">Orders Today</div>
+                <div class="value" id="metric-orders">-</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Revenue Today</div>
+                <div class="value" id="metric-revenue">-</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Total Clients</div>
+                <div class="value" id="metric-clients">-</div>
+            </div>
+            <div class="metric-card">
+                <div class="label">Avg Rating</div>
+                <div class="value" id="metric-rating">-</div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts">
+            <div class="chart-card">
+                <h3>Revenue by Day</h3>
+                <canvas id="chart-revenue"></canvas>
+            </div>
+            <div class="chart-card">
+                <h3>Orders by Service</h3>
+                <canvas id="chart-services"></canvas>
+            </div>
+        </div>
+
+        <!-- Recent Orders -->
+        <div class="section">
+            <h3>Recent Orders</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Client</th>
+                        <th>Service</th>
+                        <th>Price</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody id="orders-table">
+                    <tr><td colspan="6">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Promos -->
+        <div class="section">
+            <h3>Active Promos</h3>
+            <div id="promos-list">Loading...</div>
+        </div>
+
+        <!-- Expenses -->
+        <div class="section">
+            <h3>Recent Expenses</h3>
+            <div id="expenses-list">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        const BASE = '/api/admin';
+
+        async function loadMetrics() {
+            try {
+                const resp = await fetch(BASE + '/metrics');
+                const data = await resp.json();
+                document.getElementById('metric-orders').textContent = data.orders_today || 0;
+                document.getElementById('metric-revenue').textContent = (data.revenue_today || 0) + ' \u20BD';
+                document.getElementById('metric-clients').textContent = data.total_clients || 0;
+                document.getElementById('metric-rating').textContent = data.avg_rating || '-';
+
+                // Revenue chart
+                if (data.revenue_by_day) {
+                    new Chart(document.getElementById('chart-revenue'), {
+                        type: 'line',
+                        data: {
+                            labels: data.revenue_by_day.map(d => d[0]),
+                            datasets: [{
+                                label: 'Revenue',
+                                data: data.revenue_by_day.map(d => d[1]),
+                                borderColor: '#2563eb',
+                                tension: 0.3,
+                                fill: true,
+                                backgroundColor: 'rgba(37,99,235,0.1)',
+                            }]
+                        },
+                        options: { responsive: true, plugins: { legend: { display: false } } }
+                    });
+                }
+
+                // Services chart
+                if (data.orders_by_service) {
+                    new Chart(document.getElementById('chart-services'), {
+                        type: 'bar',
+                        data: {
+                            labels: data.orders_by_service.map(d => d[0]),
+                            datasets: [{
+                                label: 'Orders',
+                                data: data.orders_by_service.map(d => d[1]),
+                                backgroundColor: '#2563eb',
+                            }]
+                        },
+                        options: { responsive: true, plugins: { legend: { display: false } } }
+                    });
+                }
+            } catch (e) {
+                console.error('Failed to load metrics:', e);
+            }
+        }
+
+        async function loadOrders() {
+            try {
+                const resp = await fetch(BASE + '/orders');
+                const orders = await resp.json();
+                const tbody = document.getElementById('orders-table');
+                if (orders.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6">No orders yet</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = orders.map(o => `
+                    <tr>
+                        <td>#${o.id}</td>
+                        <td>${o.client_id}</td>
+                        <td>${o.service_type}</td>
+                        <td>${o.price} \u20BD</td>
+                        <td><span class="status status-${o.status}">${o.status}</span></td>
+                        <td>${o.created_at ? o.created_at.slice(0, 16) : ''}</td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to load orders:', e);
+            }
+        }
+
+        async function loadPromos() {
+            try {
+                const resp = await fetch(BASE + '/promos');
+                const promos = await resp.json();
+                const container = document.getElementById('promos-list');
+                if (promos.length === 0) {
+                    container.textContent = 'No active promos';
+                    return;
+                }
+                container.innerHTML = promos.map(p =>
+                    `<div style="padding:8px 0;border-bottom:1px solid #eee">
+                        <b>${p.code}</b> - ${p.discount_value}${p.discount_type === 'percentage' ? '%' : ' \u20BD'}
+                        (used: ${p.used_count}/${p.max_uses || '\u221E'})
+                    </div>`
+                ).join('');
+            } catch (e) {
+                console.error('Failed to load promos:', e);
+            }
+        }
+
+        async function loadExpenses() {
+            try {
+                const resp = await fetch(BASE + '/expenses');
+                const expenses = await resp.json();
+                const container = document.getElementById('expenses-list');
+                if (expenses.length === 0) {
+                    container.textContent = 'No expenses recorded';
+                    return;
+                }
+                container.innerHTML = expenses.map(e =>
+                    `<div style="padding:8px 0;border-bottom:1px solid #eee">
+                        <b>${e.category}</b>: ${e.amount} \u20BD - ${e.description || ''}
+                        <span style="color:#999;font-size:12px">${e.created_at ? e.created_at.slice(0, 10) : ''}</span>
+                    </div>`
+                ).join('');
+            } catch (e) {
+                console.error('Failed to load expenses:', e);
+            }
+        }
+
+        // Load all data
+        loadMetrics();
+        loadOrders();
+        loadPromos();
+        loadExpenses();
+
+        // Auto-refresh every 30 seconds
+        setInterval(() => { loadMetrics(); loadOrders(); }, 30000);
+    </script>
+</body>
+</html>

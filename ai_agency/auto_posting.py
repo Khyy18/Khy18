@@ -7,6 +7,11 @@ from typing import Optional
 import aiosqlite
 import config
 
+try:
+    import reviews as reviews_module
+except ImportError:
+    reviews_module = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -117,3 +122,9 @@ async def check_and_post_cases(bot) -> None:
 
     if posted:
         logger.info("Auto-posting: опубликовано %d кейсов", posted)
+
+
+async def post_best_reviews(bot) -> None:
+    """Post best approved reviews to channel (every 3 days)."""
+    if reviews_module:
+        await reviews_module.post_best_reviews(bot)

@@ -1,9 +1,12 @@
 """FastAPI приложение REST API AI-агентства для B2B-клиентов."""
 
 import asyncio
-from typing import Optional
+import hashlib
+import hmac
+from typing import Optional, List
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import config
@@ -14,7 +17,21 @@ import pricing
 from api.auth import get_current_client
 from models import OrderStatus, ServiceType
 
+try:
+    from api.webhooks import router as webhooks_router
+except ImportError:
+    webhooks_router = None
+
+try:
+    from services import SERVICES
+except ImportError:
+    SERVICES = {}
+
 app = FastAPI(title="AI Agency REST API", version="1.0.0")
+
+# Include webhooks router
+if webhooks_router:
+    app.include_router(webhooks_router)
 
 
 # --- Request/Response модели ---
@@ -189,3 +206,116 @@ async def get_order_result(
         order_id=order["id"],
         result_text=result_text,
     )
+
+
+# --- Mini App Endpoints ---
+
+class MiniAppOrderRequest(BaseModel):
+    """Request to create order from mini app."""
+    telegram_id: int
+    service_type: str
+    input_text: str
+
+
+class MiniAppOrderResponse(BaseModel):
+    """Response for mini app order creation."""
+    order_id: int
+    price: float
+    status: str
+
+
+class ValidateInitDataRequest(BaseModel):
+    """Request to validate Telegram initData."""
+    init_data: str
+
+
+@app.get("/api/miniapp/services")
+async def miniapp_services():
+    """Get available services for mini app catalog."""
+    services_list = []
+    for stype, sdef in SERVICES.items():
+        services_list.append({
+            "type": stype.value,
+            "name": sdef.name,
+            "description": sdef.description,
+            "price": sdef.price,
+        })
+    return services_list
+
+
+@app.get("/api/miniapp/orders/{telegram_id}")
+async def miniapp_orders(telegram_id: int):
+    """Get order history for a user."""
+    orders = await database.get_orders_by_client(telegram_id, limit=20)
+    return [
+        {
+            "id": o["id"],
+            "service_type": o["service_type"],
+            "status": o["status"],
+            "price": o["price"],
+            "created_at": o["created_at"],
+            "rating": o.get("rating"),
+        }
+        for o in orders
+    ]
+
+
+@app.post("/api/miniapp/orders", response_model=MiniAppOrderResponse)
+async def miniapp_create_order(
+    request: MiniAppOrderRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Create order from mini app."""
+    try:
+        service_type = ServiceType(request.service_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid service_type")
+
+    price = pricing.calculate_price(
+        request.service_type, len(request.input_text), urgent=False
+    )
+
+    # Ensure client exists
+    await database.get_or_create_client(telegram_id=request.telegram_id)
+
+    order_id = await database.create_order(
+        client_id=request.telegram_id,
+        service_type=request.service_type,
+        input_text=request.input_text,
+        price=price,
+    )
+
+    background_tasks.add_task(
+        _process_order_background, order_id, service_type, request.input_text
+    )
+
+    return MiniAppOrderResponse(
+        order_id=order_id,
+        price=price,
+        status="pending",
+    )
+
+
+@app.get("/api/miniapp/balance/{telegram_id}")
+async def miniapp_balance(telegram_id: int):
+    """Get balance info for a user."""
+    balance = await database.get_client_balance(telegram_id)
+    order_count = await database.get_client_order_count(telegram_id)
+    client = await database.get_or_create_client(telegram_id=telegram_id)
+    return {
+        "balance": balance,
+        "total_spent": client.get("total_spent", 0),
+        "order_count": order_count,
+    }
+
+
+@app.post("/api/miniapp/validate-init-data")
+async def miniapp_validate_init_data(request: ValidateInitDataRequest):
+    """Validate Telegram WebApp initData."""
+    # Basic validation - in production would verify HMAC with bot token
+    if not request.init_data:
+        return {"valid": False}
+    # Structure check
+    if "=" in request.init_data:
+        return {"valid": True}
+    return {"valid": False}

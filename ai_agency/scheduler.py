@@ -32,6 +32,21 @@ try:
 except ImportError:
     sales_funnel = None
 
+try:
+    import reviews as reviews_module
+except ImportError:
+    reviews_module = None
+
+try:
+    import service_discovery
+except ImportError:
+    service_discovery = None
+
+try:
+    import ad_manager
+except ImportError:
+    ad_manager = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -289,6 +304,65 @@ async def funnel_check(bot: Bot) -> None:
         await asyncio.sleep(300)  # 5 минут
 
 
+async def review_posting_check(bot: Bot) -> None:
+    """
+    Задача публикации отзывов: каждые 3 дня публикует лучшие
+    одобренные отзывы в канал.
+    """
+    while True:
+        try:
+            if reviews_module:
+                await reviews_module.post_best_reviews(bot)
+        except Exception as e:
+            logger.error("Ошибка review_posting_check: %s", e)
+
+        await asyncio.sleep(259200)  # 3 дня
+
+
+async def service_discovery_check(bot: Bot) -> None:
+    """
+    Задача обнаружения трендов: ежедневно анализирует
+    нераспознанные запросы и уведомляет админа о трендах.
+    """
+    while True:
+        try:
+            if service_discovery:
+                await service_discovery.notify_admin_trends(bot)
+        except Exception as e:
+            logger.error("Ошибка service_discovery_check: %s", e)
+
+        await asyncio.sleep(86400)  # 24 часа
+
+
+async def ad_budget_check(bot: Bot) -> None:
+    """
+    Задача рекламного бюджета: еженедельно рассчитывает
+    рекламный бюджет и уведомляет админа.
+    """
+    while True:
+        try:
+            if ad_manager:
+                budget = await ad_manager.calculate_ad_budget(7)
+                if budget > 0:
+                    text = (
+                        f"\U0001f4b0 <b>Рекламный бюджет на неделю</b>\n\n"
+                        f"Бюджет: {budget:.0f} \u20bd "
+                        f"({config.AD_BUDGET_PERCENT}% от выручки за 7 дней)"
+                    )
+                    try:
+                        await bot.send_message(
+                            chat_id=config.ADMIN_TELEGRAM_ID,
+                            text=text,
+                            parse_mode="HTML",
+                        )
+                    except Exception as e:
+                        logger.debug("Не удалось отправить бюджет админу: %s", e)
+        except Exception as e:
+            logger.error("Ошибка ad_budget_check: %s", e)
+
+        await asyncio.sleep(604800)  # 7 дней
+
+
 def start_scheduler(bot: Bot) -> None:
     """
     Запустить все фоновые задачи в текущем event loop.
@@ -315,8 +389,11 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(_staggered_start(crm_send_offers(bot), 150))
     loop.create_task(_staggered_start(monitoring_watchdog(), 180))
     loop.create_task(_staggered_start(funnel_check(bot), 200))
+    loop.create_task(_staggered_start(review_posting_check(bot), 220))
+    loop.create_task(_staggered_start(service_discovery_check(bot), 240))
+    loop.create_task(_staggered_start(ad_budget_check(bot), 260))
     logger.info(
         "Планировщик задач запущен (retention, upsell, subscription_expiry, "
         "lead_parser, auto_posting, backup, crm_segment_update, crm_send_offers, "
-        "monitoring_watchdog, funnel_check)"
+        "monitoring_watchdog, funnel_check, review_posting, service_discovery, ad_budget)"
     )

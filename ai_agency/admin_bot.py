@@ -47,6 +47,21 @@ try:
 except ImportError:
     promo_module = None
 
+try:
+    import ad_manager
+except ImportError:
+    ad_manager = None
+
+try:
+    import reviews as reviews_module
+except ImportError:
+    reviews_module = None
+
+try:
+    import service_discovery
+except ImportError:
+    service_discovery = None
+
 logger = logging.getLogger(__name__)
 
 # Состояния для пополнения баланса и CRM
@@ -98,6 +113,8 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         [InlineKeyboardButton("\U0001f4c8 Аналитика", callback_data="analytics")],
         [InlineKeyboardButton("\U0001f4b0 Финансы", callback_data="finance")],
         [InlineKeyboardButton("\U0001f3ab Промокоды", callback_data="promo_list")],
+        [InlineKeyboardButton("\U0001f4e3 Реклама", callback_data="ads")],
+        [InlineKeyboardButton("\U0001f4ac Отзывы", callback_data="reviews")],
         [InlineKeyboardButton("\U0001f4cb Последние заказы", callback_data="recent_orders")],
         [InlineKeyboardButton("\U0001f465 Клиенты", callback_data="clients")],
         [InlineKeyboardButton("\U0001f4b3 Пополнить баланс", callback_data="topup")],
@@ -167,6 +184,26 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             parse_mode=ParseMode.HTML,
         )
         return TOPUP_CLIENT_ID
+    elif action == "ads":
+        return await show_ads(update, context)
+    elif action == "reviews":
+        return await show_reviews(update, context)
+    elif action.startswith("review_approve:"):
+        review_id = int(action.replace("review_approve:", ""))
+        if reviews_module:
+            await reviews_module.approve_review(review_id)
+        await query.edit_message_text(
+            f"\u2705 Отзыв #{review_id} одобрен.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+    elif action.startswith("review_reject:"):
+        review_id = int(action.replace("review_reject:", ""))
+        if reviews_module:
+            await reviews_module.reject_review(review_id)
+        await query.edit_message_text(
+            f"\u274c Отзыв #{review_id} отклонён.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
 
     return ConversationHandler.END
 
@@ -557,6 +594,87 @@ async def promo_create_value(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
     return ConversationHandler.END
+
+
+# --- Реклама ---
+
+async def show_ads(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показать статистику рекламы."""
+    query = update.callback_query
+
+    if ad_manager is None:
+        await query.edit_message_text(
+            "\u274c Модуль рекламы недоступен.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+
+    stats = await ad_manager.get_ad_stats()
+    body = [
+        f"<b>Недельный бюджет:</b> {format_number(stats['weekly_budget'])} \u20bd",
+        f"<b>Кликов:</b> {stats['total_clicks']}",
+        f"<b>Конверсий:</b> {stats['total_conversions']}",
+        f"<b>Конверсия:</b> {stats['conversion_rate']:.1f}%",
+        "",
+        "<b>Кампании:</b>",
+    ]
+    for c in stats.get("campaigns", [])[:5]:
+        body.append(
+            f"  {c['channel_name']} | {format_number(c['budget'])} \u20bd | "
+            f"Клики: {c['clicks']} | ROI: {c['roi']}"
+        )
+
+    text = _card("Реклама", "\U0001f4e3", body)
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+# --- Отзывы ---
+
+async def show_reviews(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показать отзывы на модерации."""
+    query = update.callback_query
+
+    if reviews_module is None:
+        await query.edit_message_text(
+            "\u274c Модуль отзывов недоступен.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+
+    pending = await reviews_module.get_pending_reviews()
+    count = await reviews_module.get_review_count()
+
+    body = [
+        f"<b>Всего одобренных:</b> {count}",
+        f"<b>На модерации:</b> {len(pending)}",
+        "",
+    ]
+
+    if not pending:
+        body.append("Нет отзывов на модерации.")
+        text = _card("Отзывы", "\U0001f4ac", body)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+        return ConversationHandler.END
+
+    keyboard = []
+    for review in pending[:5]:
+        body.append(
+            f"#{review['id']} | {'\u2b50' * review['rating']} | "
+            f"\"{review['text'][:50]}...\""
+        )
+        keyboard.append([
+            InlineKeyboardButton(
+                f"\u2705 #{review['id']}", callback_data=f"review_approve:{review['id']}"
+            ),
+            InlineKeyboardButton(
+                f"\u274c #{review['id']}", callback_data=f"review_reject:{review['id']}"
+            ),
+        ])
+
+    text = _card("Отзывы на модерации", "\U0001f4ac", body)
+    await query.edit_message_text(
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+    )
+    return SELECT_ACTION
 
 
 # --- Отмена ---
