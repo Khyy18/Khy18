@@ -26,10 +26,10 @@ app = FastAPI(
 )
 
 # CORS для Mini App (разрешаем все origins)
+# NOTE: Аутентификация намеренно пропущена для MVP - будет добавлена позже
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

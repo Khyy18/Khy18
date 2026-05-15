@@ -2,7 +2,9 @@
 
 from pyrogram import Client
 from pyrogram.types import Message
+from langchain_core.messages import AIMessage, HumanMessage
 
+from ai_office.agents.orchestrator import build_graph
 from ai_office.telegram.utils import format_agent_message
 
 
@@ -68,11 +70,38 @@ async def handle_message(client: Client, message: Message) -> None:
     # Отправляем typing статус
     await client.send_chat_action(message.chat.id, "typing")
 
-    # Формируем ответ от агента по умолчанию (Alice)
-    # В реальной имплементации здесь вызывается оркестратор
-    response_text = format_agent_message(
-        "Alice",
-        "Персональный ассистент",
-        f"Получено сообщение: {text}\nОбработка через оркестратор..."
-    )
+    try:
+        # Вызываем граф оркестратора
+        graph = build_graph()
+        initial_state = {
+            "messages": [HumanMessage(content=text)],
+            "current_agent": "",
+            "task_context": {},
+            "chat_history": [],
+        }
+        result = await graph.ainvoke(initial_state)
+
+        # Извлекаем последний ответ AI из состояния
+        ai_response = ""
+        for msg in reversed(result["messages"]):
+            if isinstance(msg, AIMessage) and msg.content:
+                ai_response = msg.content
+                break
+
+        if ai_response:
+            agent_name = result.get("current_agent", "alice").capitalize()
+            role = "Персональный ассистент" if agent_name == "Alice" else "Разработчик"
+            response_text = format_agent_message(agent_name, role, ai_response)
+        else:
+            response_text = format_agent_message(
+                "Alice", "Персональный ассистент",
+                "Не удалось обработать сообщение. Попробуйте ещё раз."
+            )
+
+    except Exception as e:
+        response_text = format_agent_message(
+            "Alice", "Персональный ассистент",
+            f"Произошла ошибка при обработке: {str(e)}"
+        )
+
     await message.reply(response_text)

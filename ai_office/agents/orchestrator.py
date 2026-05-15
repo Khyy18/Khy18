@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
@@ -72,8 +72,7 @@ def alice_node(state: AgentState) -> AgentState:
     llm_with_tools = llm.bind_tools(alice_config.tools)
 
     # Формируем сообщения с системным промптом
-    system_message = HumanMessage(content=f"[SYSTEM]: {alice_config.system_prompt}")
-    messages = [system_message] + state["messages"]
+    messages = [SystemMessage(content=alice_config.system_prompt)] + state["messages"]
 
     response = llm_with_tools.invoke(messages)
     return {**state, "messages": [response], "current_agent": "alice"}
@@ -85,8 +84,7 @@ def sam_node(state: AgentState) -> AgentState:
     llm_with_tools = llm.bind_tools(sam_config.tools)
 
     # Формируем сообщения с системным промптом
-    system_message = HumanMessage(content=f"[SYSTEM]: {sam_config.system_prompt}")
-    messages = [system_message] + state["messages"]
+    messages = [SystemMessage(content=sam_config.system_prompt)] + state["messages"]
 
     response = llm_with_tools.invoke(messages)
     return {**state, "messages": [response], "current_agent": "sam"}

@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ai_office.api.schemas import ActivityResponse, PaginatedResponse
 from ai_office.core.database import get_session
@@ -26,6 +27,7 @@ async def list_activity(
     # Результаты с пагинацией, сортировка по времени (новые первые)
     query = (
         select(ActivityLog)
+        .options(selectinload(ActivityLog.agent))
         .order_by(ActivityLog.timestamp.desc())
         .offset(offset)
         .limit(limit)

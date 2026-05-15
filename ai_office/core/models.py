@@ -20,7 +20,7 @@ class Agent(Base):
     system_prompt: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(50), default="idle")
     current_task_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey("tasks.id"), nullable=True
+        ForeignKey("tasks.id", use_alter=True), nullable=True
     )
 
     # Связи
@@ -69,7 +69,7 @@ class ActivityLog(Base):
     timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
 
     # Связи
-    agent: Mapped["Agent"] = relationship(back_populates="activity_logs")
+    agent: Mapped["Agent"] = relationship(back_populates="activity_logs", lazy="selectin")
 
     def __repr__(self) -> str:
         return f"<ActivityLog(id={self.id}, agent_id={self.agent_id}, action='{self.action_type}')>"
