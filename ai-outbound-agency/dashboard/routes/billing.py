@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
+# Redis key prefix for storing processed Stripe event IDs (idempotency)
+_WEBHOOK_EVENT_TTL = 60 * 60 * 24 * 3  # 3 days
+
 
 async def _get_session():
     from core.db import get_session as _gs
@@ -39,6 +42,20 @@ async def _get_session():
 
 def _get_stripe_client() -> StripeClient:
     return StripeClient(secret_key=settings.stripe_secret_key)
+
+
+async def _propagate_plan_limits(tenant_id: str, plan: Plan) -> None:
+    """Propagate plan limits to Redis after a plan change."""
+    from compliance.usage_limiter import get_usage_limiter
+
+    limiter = get_usage_limiter(settings.redis_url)
+    limits = {
+        "leads_limit": plan.leads_limit,
+        "emails_limit": plan.emails_limit,
+        "linkedin_limit": plan.linkedin_limit,
+        "campaigns_limit": plan.campaigns_limit,
+    }
+    await limiter.set_tenant_limits(tenant_id, limits)
 
 
 @router.get("/plans", response_model=list[PlanResponse])
@@ -96,11 +113,28 @@ async def subscribe(
         .limit(1)
     )
     subscription = sub_result.scalar_one_or_none()
-    if subscription is None or not subscription.stripe_customer_id:
+
+    # Fix #6: If no stripe_customer_id, attempt to create one on the fly
+    if subscription is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No Stripe customer found. Please contact support.",
+            detail="No subscription record found. Please contact support.",
         )
+
+    if not subscription.stripe_customer_id:
+        stripe_client = _get_stripe_client()
+        customer = await stripe_client.create_customer(
+            email=current_user.email,
+            name=current_user.email,
+            metadata={"tenant_id": str(current_user.tenant_id)},
+        )
+        if "error" in customer:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to create Stripe customer. Please try again later.",
+            )
+        subscription.stripe_customer_id = customer.get("id")
+        await session.flush()
 
     stripe_client = _get_stripe_client()
     checkout = await stripe_client.create_checkout_session(
@@ -165,6 +199,10 @@ async def change_plan(
     subscription.plan_id = new_plan.id
     await session.flush()
     await session.refresh(subscription)
+
+    # Fix #4: Propagate new plan limits to Redis
+    await _propagate_plan_limits(str(current_user.tenant_id), new_plan)
+
     return subscription
 
 
@@ -211,24 +249,21 @@ async def get_usage(
     session: AsyncSession = Depends(_get_session),
 ) -> dict:
     """Get current usage for the tenant."""
-    from compliance.usage_limiter import UsageLimiter
+    from compliance.usage_limiter import get_usage_limiter
 
-    limiter = UsageLimiter(redis_url=settings.redis_url)
-    try:
-        usage = await limiter.get_usage(str(current_user.tenant_id))
-        return {
-            "leads_used": usage["leads"]["current"],
-            "leads_limit": usage["leads"]["limit"],
-            "emails_used": usage["emails"]["current"],
-            "emails_limit": usage["emails"]["limit"],
-            "linkedin_used": usage["linkedin"]["current"],
-            "linkedin_limit": usage["linkedin"]["limit"],
-            "campaigns_active": usage["campaigns"]["current"],
-            "campaigns_limit": usage["campaigns"]["limit"],
-            "period_start": datetime.now(timezone.utc).strftime("%Y-%m-01"),
-        }
-    finally:
-        await limiter.close()
+    limiter = get_usage_limiter(settings.redis_url)
+    usage = await limiter.get_usage(str(current_user.tenant_id))
+    return {
+        "leads_used": usage["leads"]["current"],
+        "leads_limit": usage["leads"]["limit"],
+        "emails_used": usage["emails"]["current"],
+        "emails_limit": usage["emails"]["limit"],
+        "linkedin_used": usage["linkedin"]["current"],
+        "linkedin_limit": usage["linkedin"]["limit"],
+        "campaigns_active": usage["campaigns"]["current"],
+        "campaigns_limit": usage["campaigns"]["limit"],
+        "period_start": datetime.now(timezone.utc).strftime("%Y-%m-01"),
+    }
 
 
 @router.get("/invoices", response_model=list[InvoiceResponse])
@@ -271,7 +306,10 @@ async def get_invoices(
 
 @router.post("/webhook")
 async def stripe_webhook(request: Request) -> dict:
-    """Handle Stripe webhook events. No auth - verified via Stripe signature."""
+    """Handle Stripe webhook events. No auth - verified via Stripe signature.
+
+    Uses Redis-based event ID deduplication to ensure idempotency under retries.
+    """
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature", "")
 
@@ -287,6 +325,24 @@ async def stripe_webhook(request: Request) -> dict:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Webhook signature verification failed",
         )
+
+    # Fix #1: Idempotency - check if we already processed this event
+    event_id = event.get("id", "")
+    if event_id:
+        import redis.asyncio as aioredis
+
+        redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            dedup_key = f"stripe_event:{event_id}"
+            already_processed = await redis_client.set(
+                dedup_key, "1", nx=True, ex=_WEBHOOK_EVENT_TTL
+            )
+            if not already_processed:
+                # Event was already processed (key already existed)
+                logger.info("Skipping duplicate Stripe event: %s", event_id)
+                return {"status": "ok", "duplicate": True}
+        finally:
+            await redis_client.close()
 
     event_type = event.get("type", "")
     data_object = event.get("data", {}).get("object", {})
@@ -347,7 +403,9 @@ async def _handle_webhook_event(
         stripe_sub_id = data_object.get("id")
         if stripe_sub_id:
             result = await session.execute(
-                select(Subscription).where(
+                select(Subscription)
+                .options(selectinload(Subscription.plan))
+                .where(
                     Subscription.stripe_subscription_id == stripe_sub_id
                 )
             )
@@ -366,6 +424,7 @@ async def _handle_webhook_event(
                     )
 
                 # Update plan if price changed
+                new_plan: Plan | None = None
                 items = data_object.get("items", {}).get("data", [])
                 if items:
                     new_price_id = items[0].get("price", {}).get("id")
@@ -378,5 +437,10 @@ async def _handle_webhook_event(
                             sub.plan_id = new_plan.id
 
                 await session.commit()
+
+                # Fix #4: Propagate new limits to Redis after subscription update
+                resolved_plan = new_plan if new_plan else sub.plan
+                if resolved_plan and sub.tenant_id:
+                    await _propagate_plan_limits(str(sub.tenant_id), resolved_plan)
     else:
         logger.debug("Unhandled webhook event type: %s", event_type)

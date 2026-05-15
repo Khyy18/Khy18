@@ -30,6 +30,20 @@ else
 end
 """
 
+# Module-level singleton instance (lazy initialization)
+_shared_instance: "UsageLimiter | None" = None
+
+
+def get_usage_limiter(redis_url: str) -> "UsageLimiter":
+    """Get the shared UsageLimiter singleton instance.
+
+    Reuses a single Redis connection pool across the application.
+    """
+    global _shared_instance
+    if _shared_instance is None:
+        _shared_instance = UsageLimiter(redis_url=redis_url)
+    return _shared_instance
+
 
 class UsageLimiter:
     """Redis-based usage limiter for tenant resource consumption."""

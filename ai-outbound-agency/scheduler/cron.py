@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, TYPE_CHECKING
 
 from scheduler.sequence_runner import SequenceRunner
@@ -155,16 +155,23 @@ class Scheduler:
 
 
 async def monthly_usage_reset(redis_url: str) -> None:
-    """Reset usage counters for all tenants. Called on the 1st of each month.
+    """Reset usage counters for the previous month. Called on the 1st of each month.
 
-    Scans Redis for all usage keys and deletes them to start a fresh period.
+    Only deletes keys for the previous billing period, not the current month.
     """
     from compliance.usage_limiter import UsageLimiter
 
+    # Calculate previous month's period string
+    now = datetime.now(timezone.utc)
+    # Go back to the last day of the previous month
+    first_of_current = now.replace(day=1)
+    last_of_previous = first_of_current - timedelta(days=1)
+    previous_period = last_of_previous.strftime("%Y-%m")
+
     limiter = UsageLimiter(redis_url=redis_url)
     try:
-        # Scan for all usage keys and delete them
-        pattern = "usage:*"
+        # Scan for only the previous month's usage keys
+        pattern = f"usage:*:{previous_period}:*"
         cursor = 0
         deleted_count = 0
         while True:
@@ -174,6 +181,10 @@ async def monthly_usage_reset(redis_url: str) -> None:
                 deleted_count += len(keys)
             if cursor == 0:
                 break
-        logger.info("Monthly usage reset complete: deleted %d usage keys", deleted_count)
+        logger.info(
+            "Monthly usage reset complete: deleted %d usage keys for period %s",
+            deleted_count,
+            previous_period,
+        )
     finally:
         await limiter.close()

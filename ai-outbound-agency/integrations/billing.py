@@ -8,11 +8,13 @@ logger = logging.getLogger(__name__)
 
 
 class StripeClient:
-    """Wrapper around the Stripe Python SDK with async support."""
+    """Wrapper around the Stripe Python SDK with async support.
+
+    Uses per-call api_key parameter instead of setting stripe.api_key globally.
+    """
 
     def __init__(self, secret_key: str) -> None:
         self._secret_key = secret_key
-        stripe.api_key = secret_key
 
     async def create_customer(
         self, email: str, name: str, metadata: dict[str, Any]
@@ -24,6 +26,7 @@ class StripeClient:
                 email=email,
                 name=name,
                 metadata=metadata,
+                api_key=self._secret_key,
             )
             return dict(customer)
         except stripe.StripeError as e:
@@ -39,6 +42,7 @@ class StripeClient:
                 stripe.Subscription.create,
                 customer=customer_id,
                 items=[{"price": price_id}],
+                api_key=self._secret_key,
             )
             return dict(subscription)
         except stripe.StripeError as e:
@@ -53,6 +57,7 @@ class StripeClient:
             subscription = await asyncio.to_thread(
                 stripe.Subscription.cancel,
                 subscription_id,
+                api_key=self._secret_key,
             )
             return dict(subscription)
         except stripe.StripeError as e:
@@ -67,12 +72,14 @@ class StripeClient:
             subscription = await asyncio.to_thread(
                 stripe.Subscription.retrieve,
                 subscription_id,
+                api_key=self._secret_key,
             )
             item_id = subscription["items"]["data"][0]["id"]
             updated = await asyncio.to_thread(
                 stripe.Subscription.modify,
                 subscription_id,
                 items=[{"id": item_id, "price": new_price_id}],
+                api_key=self._secret_key,
             )
             return dict(updated)
         except stripe.StripeError as e:
@@ -95,6 +102,7 @@ class StripeClient:
                 mode="subscription",
                 success_url=success_url,
                 cancel_url=cancel_url,
+                api_key=self._secret_key,
             )
             return dict(session)
         except stripe.StripeError as e:
@@ -110,6 +118,7 @@ class StripeClient:
                 stripe.Invoice.list,
                 customer=customer_id,
                 limit=limit,
+                api_key=self._secret_key,
             )
             return [dict(inv) for inv in invoices.data]
         except stripe.StripeError as e:
