@@ -1,0 +1,486 @@
+"""Momentum-стратегия: trend-following с EMA cross и leverage 3x.
+
+Логика:
+  1. Получаем свечи (15m по умолчанию).
+  2. Считаем EMA fast (9) и EMA slow (21).
+  3. Сигнал LONG: fast пересекает slow снизу вверх.
+  4. Сигнал SHORT: fast пересекает slow сверху вниз.
+  5. Входим с плечом MOMENTUM_LEVERAGE (default 3x).
+  6. Выход: обратный crossover, стоп-лосс или тейк-профит.
+
+Зарабатывает на трендовых движениях. Проигрывает в боковике.
+Комбинация с grid (боковик) даёт диверсификацию.
+
+Особенности:
+  - Максимум MOMENTUM_MAX_POSITIONS одновременных позиций.
+  - Стоп-лосс обязателен (MOMENTUM_STOP_LOSS_PCT).
+  - НЕ торгует если global_kill_switch активен.
+  - EMA считается на stdlib (без numpy/pandas).
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Optional
+
+import aiohttp
+
+import capital_allocator
+import combo_config as cfg
+import global_kill_switch
+from exchanges import get_adapter
+from exchanges.base import ExchangeAdapter
+
+
+# ─── EMA расчёт (без numpy) ──────────────────────────────────────────
+
+def calc_ema(prices: list[float], period: int) -> list[float]:
+    """Exponential Moving Average. Возвращает список той же длины.
+
+    Первые (period - 1) значений = SMA за доступные данные.
+    """
+    if not prices or period < 1:
+        return []
+
+    ema: list[float] = []
+    multiplier = 2.0 / (period + 1)
+
+    # Первое значение = SMA первых period точек (или сколько есть)
+    initial_window = prices[:period]
+    sma = sum(initial_window) / len(initial_window)
+    ema.append(sma)
+
+    for i in range(1, len(prices)):
+        if i < period:
+            # До набора полного окна — простое среднее
+            window = prices[:i + 1]
+            ema.append(sum(window) / len(window))
+        else:
+            prev = ema[-1]
+            current = prices[i] * multiplier + prev * (1 - multiplier)
+            ema.append(current)
+
+    return ema
+
+
+def detect_crossover(
+    fast_ema: list[float],
+    slow_ema: list[float],
+) -> Optional[str]:
+    """Определить направление последнего пересечения EMA.
+
+    Возвращает:
+      "LONG"  — fast пересёк slow снизу вверх (бычий сигнал).
+      "SHORT" — fast пересёк slow сверху вниз (медвежий сигнал).
+      None    — пересечения нет.
+    """
+    if len(fast_ema) < 2 or len(slow_ema) < 2:
+        return None
+
+    # Предыдущий бар
+    prev_fast = fast_ema[-2]
+    prev_slow = slow_ema[-2]
+    # Текущий бар
+    curr_fast = fast_ema[-1]
+    curr_slow = slow_ema[-1]
+
+    # Бычье пересечение: fast был ниже slow, стал выше
+    if prev_fast <= prev_slow and curr_fast > curr_slow:
+        return "LONG"
+
+    # Медвежье пересечение: fast был выше slow, стал ниже
+    if prev_fast >= prev_slow and curr_fast < curr_slow:
+        return "SHORT"
+
+    return None
+
+
+# ─── Вспомогательные ──────────────────────────────────────────────────
+
+def _get_adapter() -> ExchangeAdapter:
+    """Адаптер биржи для momentum."""
+    return get_adapter(cfg.MOMENTUM_EXCHANGE)
+
+
+def _calc_position_size(state: dict[str, Any], price: float) -> float:
+    """Размер позиции в base-монете.
+
+    position_usdt = allocated_capital / max_positions * leverage
+    qty = position_usdt / price
+    """
+    allocated = capital_allocator.get_strategy_capital(state, "momentum")
+    per_position = allocated / max(1, cfg.MOMENTUM_MAX_POSITIONS)
+    notional = per_position * cfg.MOMENTUM_LEVERAGE
+    return notional / price if price > 0 else 0.0
+
+
+# ─── Инициализация state ──────────────────────────────────────────────
+
+def init_momentum_state(state: dict[str, Any]) -> None:
+    """Инициализировать секцию momentum в state."""
+    state.setdefault("momentum", {})
+    mom = state["momentum"]
+    mom.setdefault("enabled", cfg.MOMENTUM_ENABLED)
+    mom.setdefault("positions", [])
+    mom.setdefault("total_trades", 0)
+    mom.setdefault("total_profit_usdt", 0.0)
+    mom.setdefault("last_tick_epoch", 0.0)
+    mom.setdefault("signals_history", [])
+
+
+# ─── Основной тик ─────────────────────────────────────────────────────
+
+async def momentum_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Основной тик momentum-стратегии.
+
+    Вызывается из main loop раз в MOMENTUM_TICK_INTERVAL_SEC.
+    Возвращает dict с результатами.
+    """
+    # Проверяем global kill-switch
+    if global_kill_switch.is_kill_active(state):
+        return {"skipped": "global_kill_active"}
+
+    mom_state = state.get("momentum", {})
+    if not mom_state.get("enabled", False):
+        return {"skipped": "momentum_disabled"}
+
+    # Rate-limit
+    last_tick = float(mom_state.get("last_tick_epoch", 0))
+    now = time.time()
+    if (now - last_tick) < cfg.MOMENTUM_TICK_INTERVAL_SEC:
+        return {"skipped": "cooldown"}
+
+    mom_state["last_tick_epoch"] = now
+
+    adapter = _get_adapter()
+    results: list[str] = []
+    errors: list[str] = []
+
+    for symbol in cfg.MOMENTUM_SYMBOLS:
+        try:
+            result = await _process_symbol(session, state, adapter, symbol)
+            results.append(f"{symbol}: {result}")
+        except Exception as exc:  # noqa: BLE001
+            err_msg = f"{symbol}: {exc}"
+            errors.append(err_msg)
+            print(f"[MOMENTUM] Ошибка тика {symbol}: {exc}")
+
+    return {"processed": results, "errors": errors}
+
+
+async def _process_symbol(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    adapter: ExchangeAdapter,
+    symbol: str,
+) -> str:
+    """Обработать один символ: сигнал + управление позицией."""
+    mom_state = state["momentum"]
+
+    # Получаем свечи
+    klines = await adapter.get_klines(
+        session, symbol, cfg.MOMENTUM_TIMEFRAME, limit=100
+    )
+    if not klines or len(klines) < cfg.MOMENTUM_EMA_SLOW + 5:
+        return "недостаточно свечей"
+
+    # Извлекаем close-цены
+    closes = [float(k["close"]) for k in klines]
+
+    # Считаем EMA
+    fast_ema = calc_ema(closes, cfg.MOMENTUM_EMA_FAST)
+    slow_ema = calc_ema(closes, cfg.MOMENTUM_EMA_SLOW)
+
+    # Текущая цена
+    current_price = closes[-1]
+
+    # Проверяем существующую позицию по символу
+    existing = _find_position(mom_state, symbol)
+
+    if existing:
+        # Управляем открытой позицией
+        return await _manage_position(
+            session, state, adapter, symbol, existing, fast_ema, slow_ema, current_price
+        )
+
+    # Нет позиции — ищем сигнал
+    signal = detect_crossover(fast_ema, slow_ema)
+    if signal is None:
+        return "нет сигнала"
+
+    # Проверяем лимит позиций
+    positions = mom_state.get("positions", [])
+    if len(positions) >= cfg.MOMENTUM_MAX_POSITIONS:
+        return f"сигнал {signal}, но макс. позиций ({cfg.MOMENTUM_MAX_POSITIONS})"
+
+    # Открываем позицию
+    return await _open_position(
+        session, state, adapter, symbol, signal, current_price
+    )
+
+
+def _find_position(mom_state: dict[str, Any], symbol: str) -> Optional[dict[str, Any]]:
+    """Найти открытую позицию по символу."""
+    positions = mom_state.get("positions", [])
+    for pos in positions:
+        if pos.get("symbol") == symbol and pos.get("status") == "OPEN":
+            return pos
+    return None
+
+
+async def _open_position(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    adapter: ExchangeAdapter,
+    symbol: str,
+    signal: str,
+    price: float,
+) -> str:
+    """Открыть позицию по сигналу."""
+    mom_state = state["momentum"]
+
+    # Размер позиции
+    qty = _calc_position_size(state, price)
+    info = await adapter.get_instrument_info(session, symbol)
+    if info is None:
+        return "instrument_info недоступен"
+
+    qty = adapter.validate_and_round_qty(qty, info, price)
+    if qty <= 0:
+        return "qty слишком мал"
+
+    # Определяем side
+    side = "Buy" if signal == "LONG" else "Sell"
+
+    # Стоп-лосс
+    if signal == "LONG":
+        stop_loss = price * (1 - cfg.MOMENTUM_STOP_LOSS_PCT)
+        take_profit = price * (1 + cfg.MOMENTUM_TAKE_PROFIT_PCT) if cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 else None
+    else:
+        stop_loss = price * (1 + cfg.MOMENTUM_STOP_LOSS_PCT)
+        take_profit = price * (1 - cfg.MOMENTUM_TAKE_PROFIT_PCT) if cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 else None
+
+    # Размещаем ордер
+    result = await adapter.place_order_with_fallback(
+        session,
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        reduce_only=False,
+    )
+
+    if not result:
+        return f"ордер {side} не исполнен"
+
+    fill_price = float(result.get("fill_price", price))
+
+    # Записываем позицию
+    position = {
+        "symbol": symbol,
+        "side": signal,
+        "entry_price": fill_price,
+        "qty": qty,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "opened_epoch": time.time(),
+        "status": "OPEN",
+        "notional_usdt": qty * fill_price,
+    }
+    mom_state.setdefault("positions", []).append(position)
+
+    # Записываем сигнал в историю
+    mom_state.setdefault("signals_history", []).append({
+        "symbol": symbol,
+        "signal": signal,
+        "price": fill_price,
+        "epoch": time.time(),
+    })
+    # Лимитируем историю
+    if len(mom_state["signals_history"]) > 50:
+        mom_state["signals_history"] = mom_state["signals_history"][-50:]
+
+    direction = "LONG ↗" if signal == "LONG" else "SHORT ↘"
+    return f"ОТКРЫТО {direction} @{fill_price:.2f}, qty={qty}, SL={stop_loss:.2f}"
+
+
+async def _manage_position(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    adapter: ExchangeAdapter,
+    symbol: str,
+    position: dict[str, Any],
+    fast_ema: list[float],
+    slow_ema: list[float],
+    current_price: float,
+) -> str:
+    """Управление открытой позицией: проверка выхода."""
+    signal = detect_crossover(fast_ema, slow_ema)
+    pos_side = position["side"]  # "LONG" или "SHORT"
+
+    # Выход по обратному сигналу
+    should_close = False
+    close_reason = ""
+
+    if pos_side == "LONG" and signal == "SHORT":
+        should_close = True
+        close_reason = "обратный сигнал (SHORT cross)"
+    elif pos_side == "SHORT" and signal == "LONG":
+        should_close = True
+        close_reason = "обратный сигнал (LONG cross)"
+
+    # Проверка SL/TP (на случай если биржа не сработала)
+    entry = float(position["entry_price"])
+    if pos_side == "LONG":
+        pnl_pct = (current_price - entry) / entry
+        if pnl_pct <= -cfg.MOMENTUM_STOP_LOSS_PCT:
+            should_close = True
+            close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
+        elif cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 and pnl_pct >= cfg.MOMENTUM_TAKE_PROFIT_PCT:
+            should_close = True
+            close_reason = f"тейк-профит ({pnl_pct*100:.1f}%)"
+    else:
+        pnl_pct = (entry - current_price) / entry
+        if pnl_pct <= -cfg.MOMENTUM_STOP_LOSS_PCT:
+            should_close = True
+            close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
+        elif cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 and pnl_pct >= cfg.MOMENTUM_TAKE_PROFIT_PCT:
+            should_close = True
+            close_reason = f"тейк-профит ({pnl_pct*100:.1f}%)"
+
+    if not should_close:
+        held_h = (time.time() - float(position.get("opened_epoch", 0))) / 3600
+        return f"держим {pos_side} ({held_h:.1f}ч, PnL {pnl_pct*100:+.1f}%)"
+
+    # Закрываем позицию
+    return await _close_position(
+        session, state, adapter, symbol, position, current_price, close_reason
+    )
+
+
+async def _close_position(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    adapter: ExchangeAdapter,
+    symbol: str,
+    position: dict[str, Any],
+    current_price: float,
+    reason: str,
+) -> str:
+    """Закрыть позицию."""
+    mom_state = state["momentum"]
+    pos_side = position["side"]
+    qty = float(position["qty"])
+
+    # Закрывающий ордер — противоположная сторона
+    close_side = "Sell" if pos_side == "LONG" else "Buy"
+
+    result = await adapter.place_order_with_fallback(
+        session,
+        symbol=symbol,
+        side=close_side,
+        qty=qty,
+        reduce_only=True,
+    )
+
+    fill_price = current_price
+    if result and result.get("fill_price"):
+        fill_price = float(result["fill_price"])
+
+    # PnL
+    entry = float(position["entry_price"])
+    if pos_side == "LONG":
+        pnl_usdt = (fill_price - entry) * qty
+    else:
+        pnl_usdt = (entry - fill_price) * qty
+
+    # С учётом leverage — PnL уже рассчитан правильно (qty масштабирован)
+    capital_allocator.record_pnl(state, "momentum", pnl_usdt)
+
+    # Обновляем позицию
+    position["status"] = "CLOSED"
+    position["exit_price"] = fill_price
+    position["closed_epoch"] = time.time()
+    position["pnl_usdt"] = pnl_usdt
+    position["close_reason"] = reason
+
+    # Счётчики
+    mom_state["total_trades"] = int(mom_state.get("total_trades", 0)) + 1
+    mom_state["total_profit_usdt"] = (
+        float(mom_state.get("total_profit_usdt", 0.0)) + pnl_usdt
+    )
+
+    # Чистим закрытые позиции (оставляем последние 20 для истории)
+    positions = mom_state.get("positions", [])
+    closed = [p for p in positions if p.get("status") == "CLOSED"]
+    if len(closed) > 20:
+        # Удаляем самые старые закрытые
+        closed_sorted = sorted(closed, key=lambda p: float(p.get("closed_epoch", 0)))
+        to_remove = closed_sorted[:-20]
+        mom_state["positions"] = [p for p in positions if p not in to_remove]
+
+    arrow = "▲" if pnl_usdt >= 0 else "▼"
+    return f"ЗАКРЫТО {pos_side} {arrow} {pnl_usdt:+.2f} USDT ({reason})"
+
+
+# ─── Управление ───────────────────────────────────────────────────────
+
+async def stop_momentum(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+) -> str:
+    """Остановить momentum: закрыть все позиции."""
+    mom_state = state.get("momentum", {})
+    adapter = _get_adapter()
+    closed_count = 0
+
+    positions = mom_state.get("positions", [])
+    for pos in positions:
+        if pos.get("status") != "OPEN":
+            continue
+        symbol = pos["symbol"]
+        try:
+            top = await adapter.get_orderbook_top(session, symbol)
+            price = (top[0] + top[1]) / 2 if top else float(pos["entry_price"])
+            await _close_position(
+                session, state, adapter, symbol, pos, price, "manual_stop"
+            )
+            closed_count += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"[MOMENTUM] stop close {symbol}: {exc}")
+
+    mom_state["enabled"] = False
+    return f"Momentum остановлен. Закрыто позиций: {closed_count}."
+
+
+async def start_momentum(state: dict[str, Any]) -> str:
+    """Включить momentum-стратегию."""
+    mom_state = state.setdefault("momentum", {})
+    mom_state["enabled"] = True
+    mom_state["last_tick_epoch"] = 0.0
+    return "Momentum включен. Сигналы проверятся на следующем тике."
+
+
+def get_momentum_status(state: dict[str, Any]) -> dict[str, Any]:
+    """Статус momentum для UI."""
+    mom_state = state.get("momentum", {})
+    positions = mom_state.get("positions", [])
+    open_positions = [p for p in positions if p.get("status") == "OPEN"]
+
+    return {
+        "enabled": mom_state.get("enabled", False),
+        "open_positions": open_positions,
+        "total_trades": int(mom_state.get("total_trades", 0)),
+        "total_profit_usdt": float(mom_state.get("total_profit_usdt", 0.0)),
+        "exchange": cfg.MOMENTUM_EXCHANGE,
+        "ema_fast": cfg.MOMENTUM_EMA_FAST,
+        "ema_slow": cfg.MOMENTUM_EMA_SLOW,
+        "leverage": cfg.MOMENTUM_LEVERAGE,
+        "timeframe": cfg.MOMENTUM_TIMEFRAME,
+        "max_positions": cfg.MOMENTUM_MAX_POSITIONS,
+        "signals_history": mom_state.get("signals_history", [])[-10:],
+    }

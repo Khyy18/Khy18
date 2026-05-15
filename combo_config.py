@@ -1,0 +1,135 @@
+"""Конфигурация КОМБО-бота (funding + grid + momentum).
+
+Расширяет config.py дополнительными параметрами для grid и momentum
+стратегий. Глобальные параметры (Telegram, биржи) берутся из config.py.
+"""
+
+from __future__ import annotations
+
+import os
+
+import config  # noqa: F401 — base config, все ключи доступны через config.*
+
+
+# ─── Аллокация капитала ───────────────────────────────────────────────
+# Доли от общего equity. Сумма должна быть <= 1.0.
+ALLOC_FUNDING_PCT = float(os.getenv("ALLOC_FUNDING_PCT", "0.50") or 0.50)
+ALLOC_GRID_PCT = float(os.getenv("ALLOC_GRID_PCT", "0.30") or 0.30)
+ALLOC_MOMENTUM_PCT = float(os.getenv("ALLOC_MOMENTUM_PCT", "0.20") or 0.20)
+
+# Стартовый капитал (USDT). Если 0 — берётся из суммы балансов на биржах.
+TOTAL_CAPITAL_USDT = float(os.getenv("TOTAL_CAPITAL_USDT", "550") or 550)
+
+
+# ─── Глобальный kill-switch ───────────────────────────────────────────
+# Если суммарный drawdown по ВСЕМ стратегиям > порога — ВСЕ стратегии
+# останавливаются. Снимается только вручную через Telegram.
+GLOBAL_MAX_DRAWDOWN_PCT = float(os.getenv("GLOBAL_MAX_DRAWDOWN_PCT", "0.15") or 0.15)
+
+
+# ─── Grid-бот ─────────────────────────────────────────────────────────
+# Символы для grid-торговли.
+GRID_SYMBOLS: list[str] = [
+    s.strip() for s in os.getenv("GRID_SYMBOLS", "BTCUSDT,ETHUSDT").split(",") if s.strip()
+]
+
+# Биржа для grid (одна). По умолчанию bybit.
+GRID_EXCHANGE = os.getenv("GRID_EXCHANGE", "bybit").strip().lower()
+
+# Количество уровней сетки (buy + sell ордера).
+GRID_LEVELS = int(os.getenv("GRID_LEVELS", "10") or 10)
+
+# Шаг сетки в процентах от текущей цены.
+# 0.003 = 0.3% между уровнями. При 10 уровнях покрываем ±1.5%.
+GRID_STEP_PCT = float(os.getenv("GRID_STEP_PCT", "0.003") or 0.003)
+
+# Размер одного ордера в USDT (notional). Рассчитывается автоматически
+# из аллокации, но можно задать вручную.
+GRID_ORDER_USDT = float(os.getenv("GRID_ORDER_USDT", "0") or 0)
+
+# Плечо для grid. Spot-like = 1, perp с плечом = 2-5.
+GRID_LEVERAGE = int(os.getenv("GRID_LEVERAGE", "1") or 1)
+
+# Период пересчёта сетки (секунды). Если цена ушла за пределы сетки —
+# пересоздаём ордера.
+GRID_REBALANCE_INTERVAL_SEC = float(os.getenv("GRID_REBALANCE_INTERVAL_SEC", "300") or 300)
+
+# Включен ли grid-модуль.
+GRID_ENABLED = os.getenv("GRID_ENABLED", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
+
+# ─── Momentum-стратегия ───────────────────────────────────────────────
+# Символы для momentum.
+MOMENTUM_SYMBOLS: list[str] = [
+    s.strip() for s in os.getenv("MOMENTUM_SYMBOLS", "BTCUSDT,ETHUSDT").split(",") if s.strip()
+]
+
+# Биржа для momentum.
+MOMENTUM_EXCHANGE = os.getenv("MOMENTUM_EXCHANGE", "bybit").strip().lower()
+
+# EMA параметры.
+MOMENTUM_EMA_FAST = int(os.getenv("MOMENTUM_EMA_FAST", "9") or 9)
+MOMENTUM_EMA_SLOW = int(os.getenv("MOMENTUM_EMA_SLOW", "21") or 21)
+
+# Плечо.
+MOMENTUM_LEVERAGE = int(os.getenv("MOMENTUM_LEVERAGE", "3") or 3)
+
+# Таймфрейм для свечей.
+MOMENTUM_TIMEFRAME = os.getenv("MOMENTUM_TIMEFRAME", "15").strip()  # минуты
+
+# Стоп-лосс в процентах от входа.
+MOMENTUM_STOP_LOSS_PCT = float(os.getenv("MOMENTUM_STOP_LOSS_PCT", "0.02") or 0.02)
+
+# Тейк-профит в процентах от входа (0 = без TP, только по обратному сигналу).
+MOMENTUM_TAKE_PROFIT_PCT = float(os.getenv("MOMENTUM_TAKE_PROFIT_PCT", "0.04") or 0.04)
+
+# Период проверки сигналов (секунды).
+MOMENTUM_TICK_INTERVAL_SEC = float(os.getenv("MOMENTUM_TICK_INTERVAL_SEC", "60") or 60)
+
+# Максимум одновременных позиций по momentum.
+MOMENTUM_MAX_POSITIONS = int(os.getenv("MOMENTUM_MAX_POSITIONS", "2") or 2)
+
+# Включена ли momentum-стратегия.
+MOMENTUM_ENABLED = os.getenv("MOMENTUM_ENABLED", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
+
+# ─── Валидация ────────────────────────────────────────────────────────
+
+def validate_combo_config() -> list[str]:
+    """Проверка конфигурации combo-бота. Возвращает список ошибок."""
+    errors: list[str] = []
+
+    # Базовая валидация из config.py
+    base_errors = config.validate_config()
+    errors.extend(base_errors)
+
+    # Проверка аллокации
+    total_alloc = ALLOC_FUNDING_PCT + ALLOC_GRID_PCT + ALLOC_MOMENTUM_PCT
+    if total_alloc > 1.01:
+        errors.append(
+            f"Сумма аллокаций ({total_alloc:.2f}) превышает 100%"
+        )
+
+    # Проверка grid
+    if GRID_ENABLED:
+        if not GRID_SYMBOLS:
+            errors.append("GRID_SYMBOLS пусто, но GRID_ENABLED=true")
+        if GRID_LEVELS < 2:
+            errors.append("GRID_LEVELS должен быть >= 2")
+        if GRID_STEP_PCT <= 0 or GRID_STEP_PCT > 0.05:
+            errors.append("GRID_STEP_PCT должен быть в (0, 0.05]")
+
+    # Проверка momentum
+    if MOMENTUM_ENABLED:
+        if not MOMENTUM_SYMBOLS:
+            errors.append("MOMENTUM_SYMBOLS пусто, но MOMENTUM_ENABLED=true")
+        if MOMENTUM_EMA_FAST >= MOMENTUM_EMA_SLOW:
+            errors.append("MOMENTUM_EMA_FAST должен быть < MOMENTUM_EMA_SLOW")
+        if MOMENTUM_LEVERAGE < 1 or MOMENTUM_LEVERAGE > 10:
+            errors.append("MOMENTUM_LEVERAGE должен быть в [1, 10]")
+
+    return errors

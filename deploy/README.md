@@ -1,258 +1,139 @@
 # Zenith-Control Ultimate: deploy-kit
 
-Набор артефактов для развёртывания торгового бота v2 на VPS. Поддерживаются
-два пути: нативный systemd-сервис под Ubuntu 22.04/24.04/26.04 и Debian 12/13,
-либо запуск через Docker Compose на любом современном Linux с установленными
-`docker` и `docker compose`.
+Набор артефактов для развёртывания funding-арбитражного бота на VPS.
+Поддерживаются два пути: нативный **systemd** под Ubuntu 22/24/26 и Debian 12/13,
+либо **Docker Compose** на любом Linux с установленным Docker.
 
-## Обзор
+## Возможности
 
-Структура директории `deploy/`:
+- **8 бирж**: Bybit, OKX, Binance, Gate.io, Bitget, MEXC, HTX, BingX
+- **20 символов** в скане фандинга (BTCUSDT … JUPUSDT)
+- **До 3 одновременных арб-пар** (управляется `ARB_MAX_POSITIONS`)
+- Панель управления через Telegram-бота: позиции, биржи, kill-switch
 
-- `install.sh` - идемпотентный bash-установщик под systemd.
-- `zenith.service` - unit-файл systemd (`User=zenith`, автозапуск, Restart=always).
-- `Dockerfile` - образ на базе `python:3.11-slim` с системным пользователем `zenith`.
-- `docker-compose.yml` - сервис `zenith` с монтированием `trades.db` и `env_file`.
-- `README.md` - этот файл.
+## Структура deploy/
 
-Бот ставится в `/opt/zenith`, работает от имени пользователя `zenith`,
-читает секреты из `/opt/zenith/.env`, хранит SQLite в `/opt/zenith/data/trades.db`
-(переживает `git pull`/переустановки) и пишет журнал в `journalctl -u zenith`.
+| Файл | Назначение |
+|---|---|
+| `install.sh` | Идемпотентный bash-установщик (systemd) |
+| `zenith.service` | Unit-файл systemd (автозапуск, `User=zenith`) |
+| `Dockerfile` | Образ `python:3.11-slim` с пользователем `zenith` |
+| `docker-compose.yml` | Сервис `zenith` + volume для SQLite |
+| `.env.example` | Шаблон переменных окружения для всех 8 бирж |
 
-## Быстрый старт на Ubuntu VPS (рекомендовано)
-
-Проверено на Ubuntu 22.04 / 24.04 / 26.04 и Debian 12 / 13.
-Перед началом убедитесь что на этом `TELEGRAM_TOKEN` нигде не запущен
-второй бот (локально, в старой сессии, на другом хостинге). Telegram
-отдаёт `getUpdates` только одному клиенту - иначе будет HTTP 409 и
-потеря команд из чата.
+## Быстрый старт: Ubuntu VPS (рекомендовано)
 
 ```bash
-# 1. Подключиться к серверу по SSH (под root или через sudo su).
-#    IP, логин и пароль - из письма от хостинг-провайдера.
+# 1. Подключиться по SSH
 ssh root@<ваш-IP>
 
-# 2. Запустить установщик одной командой.
-curl -fsSL https://raw.githubusercontent.com/Khyy18/Khy18/feat/zenith-control-ultimate/deploy/install.sh | sudo bash
+# 2. Скопировать папку zenith-bot/ на сервер через scp или rsync
+scp -r zenith-bot/ root@<ваш-IP>:/opt/zenith
 
-# 3. Заполнить .env реальными ключами.
-sudo -u zenith cp /opt/zenith/.env.example /opt/zenith/.env
-sudo -u zenith nano /opt/zenith/.env
+# 3. Установить зависимости
+apt-get update && apt-get install -y python3 python3-venv
+python3 -m venv /opt/zenith/.venv
+/opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
+
+# 4. Заполнить .env (все ключи нужных бирж + Telegram)
+cp /opt/zenith/deploy/.env.example /opt/zenith/.env
+nano /opt/zenith/.env
+
+# 5. Установить systemd-сервис
+cp /opt/zenith/deploy/zenith.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now zenith
+journalctl -u zenith -f
 ```
 
-В `.env` обязательно (для EXCHANGE=okx):
+## Обязательные переменные .env
 
 ```env
-OKX_API_KEY=...
-OKX_API_SECRET=...
-OKX_PASSPHRASE=...
-TELEGRAM_TOKEN=...
+TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
-GROQ_API_KEY=...
-NEWS_API_KEY=...
 
-# Путь к persistent SQLite (каталог создаётся install.sh).
+IS_TESTNET=true          # true = testnet (безопасно), false = mainnet
+ARB_EXECUTOR_ENABLED=0   # 0 = только сканирование; 1 = авто-арбитраж
+
+# Хотя бы одна пара ключей для биржи:
+BYBIT_API_KEY=...
+BYBIT_API_SECRET=...
+
+# Остальные биржи — по желанию (полный список в .env.example)
 TRADES_DB_PATH=/opt/zenith/data/trades.db
-
-# Paper-trading: сигналы считаются, ордера НЕ отправляются.
-# Держите true хотя бы 24 часа для наблюдения.
-DRY_RUN=true
 ```
+
+## Мульти-позиция (ARB_MAX_POSITIONS)
+
+По умолчанию бот одновременно держит до **3** арб-пар на разных символах.
+Чтобы изменить лимит, добавьте в `.env` или установите в `config.py`:
+
+```env
+ARB_MAX_POSITIONS=2   # меньше капитала
+ARB_MAX_POSITIONS=5   # больше пар (нужно больше свободной маржи)
+```
+
+При `N` парах по `ARB_NOTIONAL_USDT=200` нужно ~200 USDT margin
+**на каждой задействованной бирже**.
+
+## Включение авто-арбитража
 
 ```bash
-# 4. Запустить сервис.
-sudo systemctl start zenith
-
-# 5. Смотреть журнал в реальном времени (Ctrl+C для выхода).
-sudo journalctl -u zenith -f
+# Убедитесь: бот ≥24ч работает без ошибок, Telegram принимает команды.
+sed -i 's/ARB_EXECUTOR_ENABLED=0/ARB_EXECUTOR_ENABLED=1/' /opt/zenith/.env
+systemctl restart zenith
 ```
 
-В норме за первую минуту в логе появятся:
-
-```
-[MEMORY] База данных trades.db инициализирована: /opt/zenith/data/trades.db
-[MAIN] Zenith-Control Ultimate v2 запущен
-[MAIN] Успех авторизации на OKX (TESTNET). Баланс USDT: 5000.0000
-[MAIN] Telegram-бот запущен в режиме Long Polling
-[LOOP] Торговый цикл v2 запущен
-[AI] macro-sentinel: blackout=OFF ...
-[AI] regime BTCUSDT: TRENDING conf=80 ...
-[AI] regime ETHUSDT: ...
-[AI] regime SOLUSDT: ...
-```
-
-Если вместо успешного баланса OKX - сетевая ошибка, значит IP сервера
-попал в OKX-блоклист. Решается сменой VPS или использованием другого
-региона у того же провайдера.
-
-## Переход из DRY_RUN в боевой режим
-
-После 24+ часов наблюдений, когда убедились, что:
-
-- бот не падает (нет `[LOOP] Транзиентная ошибка тика`),
-- Telegram принимает команды (попробуйте кнопки СТАТИСТИКА / РЕЖИМЫ),
-- heartbeat приходит каждые 6 часов,
-- регайм-апдейты по всем трём символам идут каждый час без ошибок Groq,
-
-можно перевести бот в боевой режим:
+## Управление через systemd
 
 ```bash
-sudo -u zenith sed -i 's/^DRY_RUN=true/DRY_RUN=false/' /opt/zenith/.env
-sudo systemctl restart zenith
+systemctl status zenith
+journalctl -u zenith -f          # логи в реальном времени
+journalctl -u zenith -n 200      # последние 200 строк
+systemctl restart zenith
+systemctl stop zenith
 ```
 
-По умолчанию `config.py::IS_TESTNET = True` - бот торгует на OKX Demo
-(5000 USDT виртуально). Переход на mainnet требует отдельного правки
-`IS_TESTNET = False` и только после полноценной обкатки.
-
-## Ручная установка через systemd
-
-Полезно, если `install.sh` не удаётся запустить одной командой.
+## Docker Compose
 
 ```bash
-# 1. Базовые пакеты.
-sudo apt-get update
-sudo apt-get install -y git curl ca-certificates software-properties-common
-
-# 2. Python 3.11+. На Ubuntu 24.04/26.04 и Debian 13 системный python3
-#    уже подходит - ставим только venv-модуль:
-sudo apt-get install -y python3 python3-venv
-#    На Ubuntu 22.04 - через deadsnakes PPA:
-# sudo add-apt-repository -y ppa:deadsnakes/ppa
-# sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv
-#    На Debian 12:
-# sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
-
-# 3. Системный пользователь и каталоги.
-sudo useradd --system --create-home --home-dir /home/zenith --shell /bin/bash zenith
-sudo install -d -o zenith -g zenith /opt/zenith
-sudo install -d -o zenith -g zenith /opt/zenith/data
-
-# 4. Код (ветка feat/zenith-control-ultimate - актуальная).
-sudo -u zenith git clone --branch feat/zenith-control-ultimate \
-    https://github.com/Khyy18/Khy18.git /opt/zenith
-
-# 5. venv и зависимости.
-sudo -u zenith python3 -m venv /opt/zenith/.venv
-sudo -u zenith /opt/zenith/.venv/bin/pip install --upgrade pip
-sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
-
-# 6. .env (заполните реальными ключами).
-sudo -u zenith cp /opt/zenith/.env.example /opt/zenith/.env
-sudo -u zenith nano /opt/zenith/.env
-
-# 7. systemd unit.
-sudo install -m 644 /opt/zenith/deploy/zenith.service /etc/systemd/system/zenith.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now zenith.service
-```
-
-## Запуск через Docker Compose
-
-Простая альтернатива, если systemd недоступен или хочется изоляции.
-
-```bash
-# 1. Клонируем и заполняем .env.
-git clone --branch feat/zenith-control-ultimate https://github.com/Khyy18/Khy18.git
-cd Khy18
-cp .env.example .env
-nano .env
-
-# 2. Собираем образ и поднимаем сервис.
+cp deploy/.env.example .env && nano .env
 docker compose -f deploy/docker-compose.yml up -d --build
-```
-
-`docker-compose.yml` монтирует `../trades.db` наружу контейнера, чтобы
-SQLite-журнал переживал пересборки. Файл `../.env` читается через
-`env_file` и не попадает в образ.
-
-## Мониторинг и управление
-
-Systemd-путь:
-
-```bash
-sudo systemctl status zenith            # коротко жив/мёртв
-sudo journalctl -u zenith -f            # полный лог в реальном времени
-sudo journalctl -u zenith -n 200        # последние 200 строк
-sudo journalctl -u zenith --since "1 hour ago" | grep -E "ERROR|ошибка"
-sudo systemctl restart zenith           # рестарт (при правке .env, обновлении)
-sudo systemctl stop zenith              # остановка
-```
-
-Docker-путь:
-
-```bash
-docker compose -f deploy/docker-compose.yml ps
 docker compose -f deploy/docker-compose.yml logs -f
 docker compose -f deploy/docker-compose.yml restart
 ```
 
-Русскоязычные логи бота снабжены тегами `[MAIN]`, `[LOOP]`, `[KILL]`,
-`[TG]`, `[AI]`, `[API]`, `[MEMORY]`, `[NEWS]` - удобно грепать по ним.
-
 ## Обновление
 
-Systemd:
-
 ```bash
-sudo -u zenith git -C /opt/zenith pull --ff-only
-sudo -u zenith /opt/zenith/.venv/bin/pip install -r /opt/zenith/requirements.txt
-sudo systemctl restart zenith
-```
-
-Docker:
-
-```bash
-git pull --ff-only
-docker compose -f deploy/docker-compose.yml up -d --build
+# Скопировать новые файлы на сервер и перезапустить:
+rsync -av --exclude='*.pyc' --exclude='trades.db' --exclude='.env' \
+      zenith-bot/ root@<IP>:/opt/zenith/
+systemctl restart zenith
 ```
 
 ## Откат
 
-Systemd-путь:
-
+Сохраните базу перед откатом:
 ```bash
-# Посмотреть последние коммиты:
-sudo -u zenith git -C /opt/zenith log --oneline -20
-# Откатиться на заведомо рабочий коммит:
-sudo -u zenith git -C /opt/zenith reset --hard <commit-sha>
-sudo systemctl restart zenith
+cp /opt/zenith/data/trades.db /opt/zenith/data/trades.db.bak
+```
+Затем замените файлы предыдущей версией и перезапустите.
+
+## Частые проблемы
+
+**HTTP 409 от Telegram** — два инстанса бота с одним токеном. Остановите лишний.
+
+**`Отсутствуют обязательные переменные`** — `.env` не заполнен или не виден systemd.
+Проверьте: `systemctl show zenith -p EnvironmentFile`
+
+**Нет сделок за сутки** — нормально. Арбитраж открывается только когда
+`net_edge_apr ≥ ARB_OPEN_MIN_NET_APR` (по умолчанию 20% годовых).
+
+**`unable to open database file`** — каталог для `TRADES_DB_PATH` не создан.
+```bash
+mkdir -p /opt/zenith/data && chown zenith:zenith /opt/zenith/data
 ```
 
-Docker-путь:
-
-```bash
-git reset --hard <commit-sha>
-docker compose -f deploy/docker-compose.yml up -d --build
-```
-
-Если подозреваете повреждение базы сделок, сохраните копию до отката:
-
-```bash
-sudo -u zenith cp /opt/zenith/data/trades.db /opt/zenith/data/trades.db.bak
-```
-
-Таблицы создаются идемпотентно, бот не удаляет существующие записи.
-
-## Траблшутинг
-
-**`[TG] getUpdates статус 409: Conflict`** - на этом же `TELEGRAM_TOKEN`
-где-то ещё работает `getUpdates` (второй инстанс бота). Найдите и
-остановите второй процесс, иначе часть команд будет улетать не сюда.
-
-**`[MAIN] Отсутствуют обязательные переменные окружения: ...`** - .env не
-заполнен или файл не видится systemd. Проверьте:
-`sudo systemctl show zenith -p EnvironmentFile` и содержимое `/opt/zenith/.env`.
-
-**Бот молчит, в логе только `[LOOP] Торговый цикл v2 запущен`** - это норма.
-Стратегия пишет `[LOOP] {symbol}: ...` только на ошибках или при открытии/
-закрытии позиции. На «happy path» тики молчат. Regime-обновления каждые
-60 минут и heartbeat каждые 6 часов - те события, которых стоит ждать.
-
-**Нет открытых сделок за сутки** - это тоже норма для Donchian-стратегии.
-Ожидаемая частота - 0.3-1.5 сделки в день на 3 символа суммарно. Тест
-имеет смысл вести минимум 72 часа.
-
-**`[MEMORY] Ошибка инициализации БД: unable to open database file`** -
-`TRADES_DB_PATH` указывает в несуществующий каталог или без прав записи.
-Проверьте `ls -ld /opt/zenith/data` - должен быть `zenith:zenith` с `rwx`.
+**Биржа не сканируется** — API-ключи не заданы или неверны. Бот логирует
+ошибку аутентификации с тегом `[БИРЖА]` и пропускает её; остальные работают.
