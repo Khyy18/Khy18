@@ -27,7 +27,109 @@ import momentum_engine
 import combo_config as cfg
 
 
-# ─── Загрузка исторических свечей с Bybit ─────────────────────────────
+# ─── Маппинг символа для OKX ───────────────────────────────────────────
+
+def _bybit_symbol_to_okx(symbol: str) -> str:
+    """Конвертировать символ Bybit -> OKX instId.
+
+    BTCUSDT -> BTC-USDT-SWAP
+    ETHUSDT -> ETH-USDT-SWAP
+    """
+    base = symbol.replace("USDT", "")
+    return f"{base}-USDT-SWAP"
+
+
+# ─── Загрузка свечей с OKX ─────────────────────────────────────────────
+
+async def _fetch_klines_okx(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    interval: str,
+    days: int,
+) -> list[dict[str, Any]]:
+    """Загрузить свечи с OKX публичного API (fallback).
+
+    OKX отдаёт max 100 свечей за запрос. Используем пагинацию через after.
+    """
+    url = "https://www.okx.com/api/v5/market/history-candles"
+    inst_id = _bybit_symbol_to_okx(symbol)
+    bar = f"{interval}m"
+    all_klines: list[dict[str, Any]] = []
+
+    # Сколько свечей нужно
+    interval_min = int(interval)
+    candles_needed = (days * 24 * 60) // interval_min
+    batch_size = 100
+
+    after: str | None = None
+
+    while len(all_klines) < candles_needed:
+        params: dict[str, str] = {
+            "instId": inst_id,
+            "bar": bar,
+            "limit": str(batch_size),
+        }
+        if after is not None:
+            params["after"] = after
+
+        try:
+            async with session.get(url, params=params, timeout=15) as resp:
+                if resp.status != 200:
+                    print(f"[BT][OKX] HTTP {resp.status}")
+                    break
+                data = await resp.json()
+        except Exception as exc:
+            print(f"[BT][OKX] Ошибка загрузки: {exc}")
+            break
+
+        if data.get("code") != "0":
+            print(f"[BT][OKX] API ошибка: {data.get('msg')}")
+            break
+
+        raw_list = data.get("data") or []
+        if not raw_list:
+            break
+
+        batch: list[dict[str, Any]] = []
+        for k in raw_list:
+            try:
+                batch.append({
+                    "ts": int(k[0]),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5]),
+                })
+            except (IndexError, TypeError, ValueError):
+                continue
+
+        if not batch:
+            break
+
+        all_klines.extend(batch)
+        # OKX возвращает от новых к старым - берём самый ранний ts для пагинации
+        earliest_ts = min(k["ts"] for k in batch)
+        after = str(earliest_ts)
+
+        # Rate-limit
+        await asyncio.sleep(0.2)
+
+    # Сортируем по времени (старые первыми)
+    all_klines.sort(key=lambda k: k["ts"])
+
+    # Убираем дубликаты по ts
+    seen: set[int] = set()
+    unique: list[dict[str, Any]] = []
+    for k in all_klines:
+        if k["ts"] not in seen:
+            seen.add(k["ts"])
+            unique.append(k)
+
+    return unique[-candles_needed:]
+
+
+# ─── Загрузка исторических свечей с Bybit (с fallback на OKX) ──────────
 
 async def fetch_klines(
     session: aiohttp.ClientSession,
@@ -38,6 +140,7 @@ async def fetch_klines(
     """Загрузить свечи с Bybit V5 публичного API.
 
     Bybit отдаёт max 200 свечей за запрос. Делаем несколько запросов.
+    Если Bybit недоступен (не-200), переключаемся на OKX.
     """
     url = "https://api.bybit.com/v5/market/kline"
     all_klines: list[dict[str, Any]] = []
@@ -48,6 +151,8 @@ async def fetch_klines(
     batch_size = 200
 
     end_ts = int(time.time() * 1000)
+
+    first_request = True
 
     while len(all_klines) < candles_needed:
         params = {
@@ -60,12 +165,17 @@ async def fetch_klines(
         try:
             async with session.get(url, params=params, timeout=15) as resp:
                 if resp.status != 200:
+                    if first_request:
+                        print(f"[BT] Bybit недоступен (HTTP {resp.status}), пробую OKX...")
+                        return await _fetch_klines_okx(session, symbol, interval, days)
                     print(f"[BT] HTTP {resp.status}")
                     break
                 data = await resp.json()
         except Exception as exc:
             print(f"[BT] Ошибка загрузки: {exc}")
             break
+
+        first_request = False
 
         if data.get("retCode") != 0:
             print(f"[BT] API ошибка: {data.get('retMsg')}")
