@@ -115,6 +115,34 @@ async def _request(
         return None
 
 
+async def _request_with_retry(
+    session: aiohttp.ClientSession,
+    method: str,
+    path: str,
+    *,
+    params: Optional[dict[str, Any]] = None,
+    body: Optional[dict[str, Any]] = None,
+    auth: bool = False,
+    max_retries: int = 3,
+    backoff_base: float = 1.0,
+) -> Optional[dict[str, Any]]:
+    """Обёртка над _request с retry + exponential backoff.
+
+    Используется для order-critical вызовов (place_order, cancel_order).
+    Для scan-вызовов (get_klines, get_funding_info) retry не нужен —
+    next scan через 5 минут.
+    """
+    for attempt in range(max_retries):
+        resp = await _request(session, method, path, params=params, body=body, auth=auth)
+        if resp is not None:
+            return resp
+        if attempt < max_retries - 1:
+            wait = backoff_base * (2 ** attempt)
+            print(f"[API] Retry {attempt+1}/{max_retries} для {path} через {wait}с")
+            await asyncio.sleep(wait)
+    return None
+
+
 # --- Публичные методы API ---
 
 async def get_server_time(session: aiohttp.ClientSession) -> Optional[dict[str, Any]]:
@@ -383,6 +411,47 @@ async def get_closed_pnl(
     return items
 
 
+async def get_funding_history(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    since_ms: Optional[int] = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Реальные funding-выплаты по символу с Bybit.
+
+    GET /v5/account/transaction-log?type=SETTLEMENT
+    Возвращает список словарей с полями: symbol, ts (ms), funding (USDT).
+    """
+    params: dict[str, Any] = {
+        "category": "linear",
+        "symbol": symbol,
+        "type": "SETTLEMENT",
+        "limit": min(50, max(1, int(limit))),
+    }
+    if since_ms is not None and since_ms > 0:
+        params["startTime"] = int(since_ms)
+    resp = await _request(
+        session, "GET", "/v5/account/transaction-log",
+        params=params, auth=True,
+    )
+    if not resp or resp.get("retCode") != 0:
+        if resp:
+            print(f"[API] Ошибка get_funding_history: {resp.get('retMsg')}")
+        return []
+    rows = (resp.get("result") or {}).get("list") or []
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        try:
+            out.append({
+                "symbol": r.get("symbol"),
+                "ts": int(r.get("transactionTime") or 0),
+                "funding": float(r.get("funding") or r.get("change") or 0.0),
+            })
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 async def cancel_order(
     session: aiohttp.ClientSession,
     symbol: str,
@@ -394,7 +463,7 @@ async def cancel_order(
         "symbol": symbol,
         "orderId": str(order_id),
     }
-    resp = await _request(session, "POST", "/v5/order/cancel", body=body, auth=True)
+    resp = await _request_with_retry(session, "POST", "/v5/order/cancel", body=body, auth=True)
     if resp and resp.get("retCode") != 0:
         print(f"[API] Ошибка cancel_order: {resp.get('retMsg')}")
     return resp
@@ -426,7 +495,7 @@ async def place_market_order(
         body["stopLoss"] = str(stop_loss)
     if take_profit is not None:
         body["takeProfit"] = str(take_profit)
-    resp = await _request(
+    resp = await _request_with_retry(
         session, "POST", "/v5/order/create", body=body, auth=True
     )
     if not resp or resp.get("retCode") != 0:
@@ -499,6 +568,7 @@ async def place_order_with_fallback(
     stop_loss: Optional[float] = None,
     take_profit: Optional[float] = None,
     reduce_only: bool = False,
+    post_only_timeout_sec: Optional[int] = None,
 ) -> Optional[dict[str, Any]]:
     """Сначала PostOnly-лимит на одном tick от вершины стакана; если за
     POST_ONLY_TIMEOUT_SEC ордер не ушёл - отменяем и добиваем Market IOC
@@ -507,7 +577,15 @@ async def place_order_with_fallback(
     Для Buy ставим на best_bid - tickSize, для Sell на best_ask + tickSize -
     гарантирует, что ордер сидит в стакане как maker и не станет taker.
     Если стакан/инструмент недоступны - сразу идём в market, логируя причину.
+
+    post_only_timeout_sec - локальный override глобального POST_ONLY_TIMEOUT_SEC
+    (полезно когда вызов хочет дать больше/меньше времени на fill).
     """
+    timeout_sec = float(
+        post_only_timeout_sec
+        if post_only_timeout_sec is not None
+        else config.POST_ONLY_TIMEOUT_SEC
+    )
     info = await instrument_info_cached(session, symbol)
     top = await get_orderbook_top(session, symbol)
 
@@ -546,11 +624,11 @@ async def place_order_with_fallback(
             print("[API] PostOnly не прошёл, переходим к Market IOC")
 
         if order_id:
-            # Ждём до POST_ONLY_TIMEOUT_SEC, периодически опрашивая стакан ордеров.
-            deadline = time.time() + float(config.POST_ONLY_TIMEOUT_SEC)
+            # Ждём до timeout_sec, периодически опрашивая стакан ордеров.
+            deadline = time.time() + timeout_sec
             poll_interval = max(
                 1.0,
-                float(config.POST_ONLY_TIMEOUT_SEC) / 6.0,
+                timeout_sec / 6.0,
             )
             filled = False
             while time.time() < deadline:
@@ -607,7 +685,7 @@ async def place_order_with_fallback(
             # Timeout: отменяем лимит и идём в market.
             print(
                 f"[API] PostOnly-лимит {order_id} не исполнен за "
-                f"{config.POST_ONLY_TIMEOUT_SEC}с, отменяем и падаем в Market"
+                f"{timeout_sec}с, отменяем и падаем в Market"
             )
             await cancel_order(session, symbol, order_id)
     else:
@@ -647,6 +725,164 @@ async def place_order_with_fallback(
                 market_resp["fill_qty"] = m_total_qty
 
     return market_resp
+
+
+async def place_maker_only_with_repeg(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    side: str,
+    qty: float,
+    stop_loss: Optional[float] = None,
+    take_profit: Optional[float] = None,
+    reduce_only: bool = False,
+) -> Optional[dict[str, Any]]:
+    """Maker-only вход с пеггингом цены к лучшему bid/ask.
+
+    Поведение:
+      - Каждые ARB_MAKER_PEG_INTERVAL_SEC проверяем вершину стакана.
+      - Желаемая лимитная цена: для Buy = best_bid - tick, для Sell =
+        best_ask + tick (гарантированно maker, не taker).
+      - Если активный ордер уже стоит, но его цена отстала от желаемой
+        больше чем на ARB_MAKER_REPEG_THRESHOLD_TICKS тиков -
+        отменяем и переразмещаем (re-peg).
+      - Если ордер исполнен (исчез из open_orders + есть execution
+        history) - возвращаем result в том же формате, что
+        place_order_with_fallback.
+      - Если за ARB_MAKER_ONLY_TIMEOUT_SEC ордер так и не исполнен -
+        отменяем последний живой и возвращаем None. Никаких Market IOC.
+
+    Возврат None означает «сделка не исполнена за окно maker-only»,
+    caller должен пропустить кандидата (не пытаться taker'ом).
+    """
+    info = await instrument_info_cached(session, symbol)
+    if not info:
+        print(f"[API] maker_only: нет данных инструмента для {symbol}")
+        return None
+    tick = float(info.get("tickSize") or 0.0)
+    if tick <= 0:
+        print(f"[API] maker_only: tickSize={tick}, не можем peg-ить")
+        return None
+
+    timeout_sec = float(getattr(config, "ARB_MAKER_ONLY_TIMEOUT_SEC", 120) or 120)
+    interval_sec = float(getattr(config, "ARB_MAKER_PEG_INTERVAL_SEC", 5) or 5)
+    repeg_ticks = int(getattr(config, "ARB_MAKER_REPEG_THRESHOLD_TICKS", 5) or 5)
+
+    deadline = time.time() + timeout_sec
+    current_order_id: Optional[str] = None
+    current_limit_price: Optional[float] = None
+    desired_price: Optional[float] = None
+
+    while time.time() < deadline:
+        top = await get_orderbook_top(session, symbol)
+        if not top:
+            print(f"[API] maker_only: нет стакана для {symbol}, sleep")
+            await asyncio.sleep(interval_sec)
+            continue
+        best_bid, best_ask = top
+        if side == "Buy":
+            desired_price = best_bid - tick
+        elif side == "Sell":
+            desired_price = best_ask + tick
+        else:
+            print(f"[API] maker_only: неизвестный side={side}")
+            return None
+        # Сетка tickSize.
+        desired_price = round(desired_price / tick) * tick
+
+        if current_order_id is not None and current_limit_price is not None:
+            # Проверяем сначала, не исполнен ли уже ордер.
+            open_orders = await get_open_orders(session, symbol)
+            still_open = any(
+                (o or {}).get("orderId") == current_order_id for o in open_orders
+            )
+            if not still_open:
+                # Подтверждаем через execution history.
+                execs = await get_execution_history(
+                    session, symbol, current_order_id, limit=10,
+                )
+                if execs:
+                    total_qty = 0.0
+                    total_cost = 0.0
+                    for ex in execs:
+                        try:
+                            eq = float(ex.get("execQty") or 0)
+                            ep = float(ex.get("execPrice") or 0)
+                            total_qty += eq
+                            total_cost += eq * ep
+                        except (TypeError, ValueError):
+                            continue
+                    if total_qty > 0:
+                        avg = total_cost / total_qty
+                        print(
+                            f"[API] maker_only: {current_order_id} filled "
+                            f"@ {avg} qty={total_qty}"
+                        )
+                        if stop_loss is not None or take_profit is not None:
+                            await set_trading_stop(
+                                session, symbol=symbol,
+                                stop_loss=stop_loss, take_profit=take_profit,
+                            )
+                        return {
+                            "retCode": 0,
+                            "retMsg": "OK",
+                            "result": {"orderId": current_order_id},
+                            "fill_price": avg,
+                            "fill_qty": total_qty,
+                        }
+                # Ордер исчез без fills (cancel/reject) - забываем и
+                # размещаем новый на следующей итерации.
+                print(
+                    f"[API] maker_only: {current_order_id} исчез без "
+                    f"исполнений, разместим новый"
+                )
+                current_order_id = None
+                current_limit_price = None
+            else:
+                # Ордер ещё в стакане. Решаем, нужен ли re-peg.
+                drift_ticks = abs(desired_price - current_limit_price) / tick
+                if drift_ticks > repeg_ticks:
+                    print(
+                        f"[API] maker_only: re-peg {current_order_id} "
+                        f"price={current_limit_price}->{desired_price} "
+                        f"(drift={drift_ticks:.1f} ticks)"
+                    )
+                    await cancel_order(session, symbol, current_order_id)
+                    current_order_id = None
+                    current_limit_price = None
+                else:
+                    # Цена ещё актуальна, ждём дальше.
+                    await asyncio.sleep(interval_sec)
+                    continue
+
+        # Если активного ордера нет - размещаем новый PostOnly.
+        if current_order_id is None:
+            limit_resp = await place_post_only_limit(
+                session, symbol=symbol, side=side, qty=qty,
+                limit_price=desired_price, reduce_only=reduce_only,
+            )
+            if limit_resp and limit_resp.get("retCode") == 0:
+                current_order_id = (limit_resp.get("result") or {}).get("orderId")
+                current_limit_price = float(desired_price)
+                print(
+                    f"[API] maker_only: PostOnly размещён {side} {qty} "
+                    f"{symbol} @ {desired_price} id={current_order_id}"
+                )
+            else:
+                msg = (limit_resp or {}).get("retMsg")
+                print(f"[API] maker_only: PostOnly не размещён ({msg}), retry")
+
+        await asyncio.sleep(interval_sec)
+
+    # Timeout: отменяем висящий ордер и возвращаем None - НЕ fallback в market.
+    if current_order_id is not None:
+        print(
+            f"[API] maker_only: timeout {timeout_sec}с, отменяем "
+            f"{current_order_id} и пропускаем сделку"
+        )
+        await cancel_order(session, symbol, current_order_id)
+    else:
+        print(f"[API] maker_only: timeout {timeout_sec}с без активного ордера")
+    return None
 
 
 async def set_trading_stop(
