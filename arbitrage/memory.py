@@ -546,7 +546,7 @@ def get_pending_bets_for_settlement() -> list[dict[str, Any]]:
 
 
 def get_active_bets_for_cashout() -> list[dict[str, Any]]:
-    """Получить активные ставки для проверки cashout (без фильтра по времени)."""
+    """Получить активные ставки для проверки cashout (минимум 5 минут после размещения)."""
     try:
         with _connect() as conn:
             rows = conn.execute(
@@ -557,6 +557,7 @@ def get_active_bets_for_cashout() -> list[dict[str, Any]]:
                 FROM bets b
                 LEFT JOIN arbs a ON a.id = b.arb_id
                 WHERE b.result IN ('PENDING', 'SIMULATED')
+                  AND b.ts <= datetime('now', '-5 minutes')
                 ORDER BY b.id DESC
                 """
             ).fetchall()

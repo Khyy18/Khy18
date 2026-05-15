@@ -373,6 +373,9 @@ class MarketMaker:
         else:
             spread = 0.02
 
+        # Ensure spread never exceeds the current book spread
+        spread = min(spread, best_lay - best_back)
+
         our_back = round_to_tick(mid_price - spread / 2.0, side="back")
         our_lay = round_to_tick(mid_price + spread / 2.0, side="lay")
 

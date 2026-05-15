@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -22,7 +23,7 @@ class HealthcheckServer:
 
     def __init__(self, state: dict[str, Any], port: int = 8080) -> None:
         self._state = state
-        self._port = port
+        self._port = int(os.getenv("ARB_HEALTHCHECK_PORT", str(port)))
         self._start_time = time.time()
         self._app: web.Application | None = None
         self._runner: web.AppRunner | None = None

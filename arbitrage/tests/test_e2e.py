@@ -136,7 +136,18 @@ async def test_e2e_pipeline_surebet(isolated_db) -> None:
     assert stats["total_arbs"] >= 1
     assert stats["total_bets"] >= 1
 
-    # 7. Verify active bets
+    # 7. Verify active bets (use get_pending_bets_for_settlement with 3h filter
+    # for old bets; for cashout, bets must be >= 5 min old)
+    # Insert a bet with old timestamp to test cashout query
+    import sqlite3
+    conn = sqlite3.connect(isolated_db)
+    conn.execute(
+        "UPDATE bets SET ts = datetime('now', '-10 minutes') WHERE id = ?",
+        (bet_id,),
+    )
+    conn.commit()
+    conn.close()
+
     active_bets = memory.get_active_bets_for_cashout()
     assert len(active_bets) >= 1
     assert active_bets[0]["outcome"] == "E2E_Home"

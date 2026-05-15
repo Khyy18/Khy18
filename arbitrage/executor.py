@@ -115,19 +115,19 @@ class BetExecutor:
                         "[EXECUTOR] PARTIAL_FILL: would attempt Betfair hedge for %s", event
                     )
                 elif config.BETFAIR_APP_KEY:
-                    for sleg in successful_legs:
-                        if sleg.get("bookmaker") == "betfair" and sleg.get("bet_id"):
-                            market_id = sleg.get("market_id")
-                            selection_id = sleg.get("selection_id")
-                            if not market_id or not selection_id:
-                                logger.warning(
-                                    "[EXECUTOR] Hedge: нет market_id/selection_id для %s", event
-                                )
-                                continue
+                    hedge_client = BetfairClient()
+                    try:
+                        for sleg in successful_legs:
+                            if sleg.get("bookmaker") == "betfair" and sleg.get("bet_id"):
+                                market_id = sleg.get("market_id")
+                                selection_id = sleg.get("selection_id")
+                                if not market_id or not selection_id:
+                                    logger.warning(
+                                        "[EXECUTOR] Hedge: нет market_id/selection_id для %s", event
+                                    )
+                                    continue
 
-                            # Get current market book for best lay price
-                            hedge_client = BetfairClient()
-                            try:
+                                # Get current market book for best lay price
                                 market_books = await hedge_client.list_market_book([market_id])
                                 current_lay_price = None
                                 if market_books:
@@ -148,11 +148,15 @@ class BetExecutor:
                                 # Check if hedge loss exceeds 5% of stake
                                 original_back_odds = sleg.get("odds", 0.0)
                                 hedge_stake = sleg.get("stake", 0.0)
-                                potential_loss_pct = (
-                                    abs(1.0 - original_back_odds / current_lay_price) * 100.0
-                                    if current_lay_price > 0
-                                    else 0.0
-                                )
+
+                                # Proper P&L: when lay > back, loss = (lay - back) / back * 100
+                                # When back >= lay, hedge is profitable (no loss)
+                                if original_back_odds > 0 and current_lay_price > original_back_odds:
+                                    potential_loss_pct = (
+                                        (current_lay_price - original_back_odds) / original_back_odds * 100.0
+                                    )
+                                else:
+                                    potential_loss_pct = 0.0
 
                                 if potential_loss_pct > 5.0:
                                     logger.warning(
@@ -195,8 +199,8 @@ class BetExecutor:
                                         "[EXECUTOR] Betfair LAY hedge неудачен: %s",
                                         hedge_result.get("error", "unknown"),
                                     )
-                            finally:
-                                await hedge_client.close()
+                    finally:
+                        await hedge_client.close()
                 else:
                     logger.warning(
                         "[EXECUTOR] PARTIAL_FILL: Betfair hedge невозможен (нет APP_KEY) для %s",
