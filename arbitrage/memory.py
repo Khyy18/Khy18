@@ -446,7 +446,7 @@ def get_pending_bets_for_settlement() -> list[dict[str, Any]]:
                 """
                 SELECT b.id, b.arb_id, b.ts, b.bookmaker, b.event,
                        b.outcome, b.stake, b.odds, b.result, b.pnl,
-                       a.arb_type, a.commence_time
+                       a.arb_type, a.commence_time, a.sport
                 FROM bets b
                 LEFT JOIN arbs a ON a.id = b.arb_id
                 WHERE b.result IN ('PENDING', 'SIMULATED')
@@ -458,6 +458,35 @@ def get_pending_bets_for_settlement() -> list[dict[str, Any]]:
     except sqlite3.Error as exc:
         print(f"[ARB_MEMORY] Ошибка чтения ставок для settlement: {exc}")
         return []
+
+
+def get_arb_by_id(arb_id: int) -> Optional[dict[str, Any]]:
+    """Получить запись арбитража по id."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, ts, sport, event, arb_type, bookmakers_json,
+                       odds_json, profit_pct, edge_pct, ai_score, status
+                FROM arbs
+                WHERE id = ?
+                """,
+                (int(arb_id),),
+            ).fetchone()
+            if row:
+                data = dict(row)
+                try:
+                    data["bookmakers"] = json.loads(data.pop("bookmakers_json") or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    data["bookmakers"] = []
+                try:
+                    data["odds"] = json.loads(data.pop("odds_json") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    data["odds"] = {}
+                return data
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения арбитража #{arb_id}: {exc}")
+    return None
 
 
 def update_daily_pnl(date: str, staked: float, won: float, pnl: float, roi: float) -> None:

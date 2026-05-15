@@ -1,14 +1,14 @@
 """Модуль расчёта ставок и самообучения AI-фильтра.
 
 SettlementEngine:
-  - settle_bets: расчёт PENDING/SIMULATED ставок (WON/LOST на основе implied probability)
+  - settle_bets: расчёт PENDING/SIMULATED ставок (WON/LOST на основе реальных результатов)
   - learn: анализ 7 дней данных, генерация правил через LLM, сохранение в БД
 """
 
 from __future__ import annotations
 
 import os
-import random
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -17,6 +17,7 @@ from typing import Any
 import aiohttp
 
 from arbitrage import config, memory
+from arbitrage.odds_api import OddsAPIClient
 
 # Импорт ai_router из корневого проекта
 _parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,21 +32,29 @@ except ImportError:
 class SettlementEngine:
     """Движок расчёта ставок и самообучения."""
 
-    def __init__(self) -> None:
-        pass
+    def __init__(self, session: aiohttp.ClientSession | None = None) -> None:
+        self._session: aiohttp.ClientSession | None = session
 
     async def settle_bets(self, session: aiohttp.ClientSession) -> None:
-        """Расчёт PENDING/SIMULATED ставок старше 3 часов.
+        """Расчёт PENDING/SIMULATED ставок на основе реальных результатов.
 
-        Для DRY_RUN/SIMULATED ставок: результат определяется случайно
-        с вероятностью, равной implied probability (1/odds).
-        Обновляет bets.result и bets.pnl, агрегирует daily PnL.
+        Для каждой ставки запрашивает реальные результаты через OddsAPI.
+        Для h2h: сравниваем счёт и определяем победителя.
+        Для totals: сумма голов vs линия.
+        Если матч не завершён - оставляем PENDING.
+        Если нет данных - ставим UNRESOLVED.
+        Для DRY_RUN/SIMULATED ставок: SIMULATED_WON / SIMULATED_LOST.
         """
         pending = memory.get_pending_bets_for_settlement()
         if not pending:
             return
 
         print(f"[SETTLEMENT] Расчёт {len(pending)} ставок")
+
+        odds_client = OddsAPIClient(session=session)
+
+        # Кэш результатов по спортам (чтобы не делать повторные запросы)
+        scores_cache: dict[str, list[dict[str, Any]]] = {}
 
         # Агрегация PnL по дням
         daily_agg: dict[str, dict[str, float]] = defaultdict(
@@ -57,6 +66,7 @@ class SettlementEngine:
             odds: float = bet.get("odds", 0.0)
             stake: float = bet.get("stake", 0.0)
             ts_str: str = bet.get("ts", "")
+            outcome_name: str = bet.get("outcome", "")
 
             # Определяем дату ставки
             try:
@@ -69,24 +79,63 @@ class SettlementEngine:
                 memory.update_bet_result(bet_id, "VOID", 0.0)
                 continue
 
-            # Implied probability = 1 / odds
-            implied_prob: float = 1.0 / odds
+            # Определяем спорт из arb record
+            arb_id: int = bet.get("arb_id", 0)
+            sport = self._get_sport_for_bet(bet)
 
-            # Симуляция результата
-            if random.random() < implied_prob:
-                # WON: выигрыш = stake * (odds - 1)
+            if not sport:
+                memory.update_bet_result(bet_id, "UNRESOLVED", 0.0)
+                continue
+
+            # Получаем результаты (с кэшированием)
+            if sport not in scores_cache:
+                try:
+                    scores_cache[sport] = await odds_client.get_scores(sport)
+                except Exception as exc:
+                    print(f"[SETTLEMENT] Ошибка получения scores для {sport}: {exc}")
+                    scores_cache[sport] = []
+
+            scores = scores_cache[sport]
+
+            if not scores:
+                memory.update_bet_result(bet_id, "UNRESOLVED", 0.0)
+                continue
+
+            # Ищем событие по названиям команд
+            event_name: str = bet.get("event", "")
+            match_data = self._find_match(scores, event_name)
+
+            if match_data is None:
+                memory.update_bet_result(bet_id, "UNRESOLVED", 0.0)
+                continue
+
+            # Проверяем, завершён ли матч
+            if not match_data.get("completed", False):
+                # Матч ещё не завершён - оставляем PENDING
+                continue
+
+            # Определяем результат
+            result = self._determine_result(match_data, outcome_name, bet)
+
+            if result is None:
+                memory.update_bet_result(bet_id, "UNRESOLVED", 0.0)
+                continue
+
+            # Для DRY_RUN ставок используем SIMULATED_ префикс
+            is_simulated = config.DRY_RUN or bet.get("result", "") == "SIMULATED"
+
+            if result == "WON":
                 pnl = stake * (odds - 1.0)
-                result = "WON"
+                final_result = "SIMULATED_WON" if is_simulated else "WON"
             else:
-                # LOST: проигрыш = -stake
                 pnl = -stake
-                result = "LOST"
+                final_result = "SIMULATED_LOST" if is_simulated else "LOST"
 
-            memory.update_bet_result(bet_id, result, pnl)
+            memory.update_bet_result(bet_id, final_result, pnl)
 
             # Агрегация
             daily_agg[bet_date]["staked"] += stake
-            if result == "WON":
+            if "WON" in final_result:
                 daily_agg[bet_date]["won"] += stake * odds
             daily_agg[bet_date]["pnl"] += pnl
 
@@ -97,6 +146,138 @@ class SettlementEngine:
             memory.update_daily_pnl(date_str, staked, agg["won"], agg["pnl"], roi)
 
         print(f"[SETTLEMENT] Расчёт завершён. Дней обновлено: {len(daily_agg)}")
+
+    @staticmethod
+    def _get_sport_for_bet(bet: dict[str, Any]) -> str:
+        """Извлекает ключ спорта из записи ставки/арба."""
+        # Спорт может быть доступен напрямую из JOIN
+        sport = bet.get("sport", "")
+        if sport:
+            return sport
+        # Fallback: получаем спорт из arb record через memory
+        arb_id: int = bet.get("arb_id", 0)
+        if arb_id:
+            arb = memory.get_arb_by_id(arb_id)
+            if arb:
+                return arb.get("sport", "")
+        return ""
+
+    @staticmethod
+    def _find_match(
+        scores: list[dict[str, Any]], event_name: str
+    ) -> dict[str, Any] | None:
+        """Ищет матч в списке результатов по названию события/команд."""
+        if not event_name:
+            return None
+
+        # Разделяем event_name на команды (формат: "Team A vs Team B" или "Team A - Team B")
+        parts = re.split(r"\s+vs\.?\s+|\s+-\s+", event_name, maxsplit=1)
+        if len(parts) == 2:
+            home_search = parts[0].strip().lower()
+            away_search = parts[1].strip().lower()
+        else:
+            home_search = event_name.lower()
+            away_search = ""
+
+        for score_event in scores:
+            home_team = score_event.get("home_team", "").lower()
+            away_team = score_event.get("away_team", "").lower()
+
+            # Точное совпадение
+            if home_team == home_search and away_team == away_search:
+                return score_event
+
+            # Частичное совпадение (подстрока)
+            if (
+                home_search
+                and away_search
+                and home_search in home_team
+                and away_search in away_team
+            ):
+                return score_event
+
+            # Совпадение по полному имени события
+            event_display = f"{home_team} vs {away_team}"
+            if event_name.lower() in event_display or event_display in event_name.lower():
+                return score_event
+
+        return None
+
+    @staticmethod
+    def _determine_result(
+        match_data: dict[str, Any], outcome_name: str, bet: dict[str, Any]
+    ) -> str | None:
+        """Определяет результат ставки на основе счёта матча.
+
+        Returns:
+            'WON', 'LOST', или None если невозможно определить.
+        """
+        scores_list = match_data.get("scores", [])
+        if not scores_list:
+            return None
+
+        # Парсим счёт: [{"name": "Team A", "score": "2"}, {"name": "Team B", "score": "1"}]
+        home_team = match_data.get("home_team", "")
+        away_team = match_data.get("away_team", "")
+
+        home_score: int | None = None
+        away_score: int | None = None
+
+        for score_entry in scores_list:
+            team_name = score_entry.get("name", "")
+            score_val = score_entry.get("score", "")
+            try:
+                score_int = int(score_val)
+            except (ValueError, TypeError):
+                continue
+
+            if team_name == home_team:
+                home_score = score_int
+            elif team_name == away_team:
+                away_score = score_int
+
+        if home_score is None or away_score is None:
+            return None
+
+        # Определяем тип ставки из outcome_name
+        outcome_lower = outcome_name.lower().strip()
+
+        # Проверяем totals (Over/Under X.X)
+        over_match = re.match(r"over\s+([\d.]+)", outcome_lower)
+        under_match = re.match(r"under\s+([\d.]+)", outcome_lower)
+
+        if over_match:
+            line = float(over_match.group(1))
+            total = home_score + away_score
+            return "WON" if total > line else "LOST"
+
+        if under_match:
+            line = float(under_match.group(1))
+            total = home_score + away_score
+            return "WON" if total < line else "LOST"
+
+        # H2H: определяем победителя
+        if home_score > away_score:
+            winner = home_team
+        elif away_score > home_score:
+            winner = away_team
+        else:
+            winner = "Draw"
+
+        # Сравниваем с outcome_name
+        if outcome_lower == "draw" or outcome_lower == "ничья":
+            return "WON" if winner == "Draw" else "LOST"
+
+        if outcome_name == home_team or outcome_name == away_team:
+            return "WON" if outcome_name == winner else "LOST"
+
+        # Частичное совпадение
+        if home_team.lower() in outcome_lower or outcome_lower in home_team.lower():
+            return "WON" if winner == home_team else "LOST"
+        if away_team.lower() in outcome_lower or outcome_lower in away_team.lower():
+            return "WON" if winner == away_team else "LOST"
+
+        return None
 
     async def learn(self, session: aiohttp.ClientSession) -> None:
         """Самообучение: анализ 7 дней данных и генерация правил через LLM.

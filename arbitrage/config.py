@@ -25,7 +25,17 @@ SCAN_INTERVAL_SEC: int = 30          # интервал сканирования
 MAX_BANKROLL_EXPOSURE: float = 20.0  # максимальная экспозиция банкролла (%)
 
 # --- Спорты и букмекеры ---
-SPORTS: list[str] = ["soccer", "tennis", "basketball"]
+SPORTS: list[str] = [
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_germany_bundesliga",
+    "soccer_italy_serie_a",
+    "soccer_france_ligue_one",
+    "soccer_uefa_champs_league",
+    "tennis_atp_french_open",
+    "basketball_nba",
+    "basketball_euroleague",
+]
 BOOKMAKERS: list[str] = [
     "pinnacle",
     "betfair",
@@ -35,6 +45,10 @@ BOOKMAKERS: list[str] = [
     "marathonbet",
     "1xbet",
 ]
+
+# --- Параметры recheck ---
+RECHECK_MIN_PROFIT_PCT: float = 2.0
+RECHECK_MAX_STALENESS_SEC: float = 10.0
 
 # --- Режим работы ---
 DRY_RUN: bool = os.getenv("ARB_DRY_RUN", "true").strip().lower() in (

@@ -125,6 +125,50 @@ class OddsAPIClient:
             return []
         return result
 
+    async def get_scores(
+        self, sport_key: str, days_from: int = 3
+    ) -> list[dict[str, Any]]:
+        """Получает результаты матчей для указанного вида спорта.
+
+        Args:
+            sport_key: ключ спорта (например 'soccer_epl')
+            days_from: количество дней назад для запроса результатов
+
+        Returns:
+            Список словарей с результатами матчей или пустой список при ошибке.
+        """
+        params: dict[str, str] = {"daysFrom": str(days_from)}
+        try:
+            result = await self._request(f"/sports/{sport_key}/scores", params)
+            if not isinstance(result, list):
+                return []
+            return result
+        except Exception as exc:
+            logger.error("OddsAPI get_scores ошибка для %s: %s", sport_key, exc)
+            return []
+
+    async def discover_active_sports(self) -> list[str]:
+        """Получает список активных спортов (без outrights).
+
+        Returns:
+            Список ключей активных спортов или пустой список при ошибке.
+        """
+        try:
+            sports = await self.get_sports()
+            if not sports:
+                return []
+            active_keys: list[str] = [
+                s["key"]
+                for s in sports
+                if s.get("active") is True
+                and not s.get("has_outrights", False)
+                and s.get("group", "").lower() != "politics"
+            ]
+            return active_keys
+        except Exception as exc:
+            logger.error("OddsAPI discover_active_sports ошибка: %s", exc)
+            return []
+
     async def get_odds(
         self,
         sport_key: str,

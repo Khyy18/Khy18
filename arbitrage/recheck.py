@@ -103,6 +103,18 @@ class RecheckEngine:
         Returns:
             True если арбитраж подтверждён, False если умер
         """
+        # Проверка свежести данных: если данные свежие, recheck не нужен
+        scan_timestamp: float = opportunity.get("scan_timestamp", 0.0)
+        if scan_timestamp and time.time() - scan_timestamp < config.RECHECK_MAX_STALENESS_SEC:
+            logger.info("recheck пропущен: данные свежие")
+            return True
+
+        # Проверка минимального профита: слишком низкий profit - пропускаем recheck
+        profit_pct: float = opportunity.get("profit_pct", 0.0)
+        if profit_pct < config.RECHECK_MIN_PROFIT_PCT:
+            logger.info("recheck пропущен: profit < %.1f%%", config.RECHECK_MIN_PROFIT_PCT)
+            return True
+
         sport: str = opportunity.get("sport", "")
         event_name: str = opportunity.get("event_name", opportunity.get("event", ""))
         opp_type: str = opportunity.get("type", "surebet")

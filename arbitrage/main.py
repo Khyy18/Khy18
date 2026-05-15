@@ -22,6 +22,7 @@ from arbitrage import telegram_bot
 from arbitrage.ai_allocator import BankrollAllocator
 from arbitrage.ai_filter import ArbFilter
 from arbitrage.anti_ban import AntiBanEngine
+from arbitrage.dedup import ArbDeduplicator
 from arbitrage.executor import BetExecutor
 from arbitrage.odds_api import OddsAPIClient
 from arbitrage.pinnacle_api import PinnacleClient
@@ -31,6 +32,10 @@ from arbitrage.scanner import ArbitrageScanner
 from arbitrage.settlement import SettlementEngine
 
 logger = logging.getLogger(__name__)
+
+# Модуль-уровневые объекты для дедупликации и синхронизации
+_deduplicator: ArbDeduplicator = ArbDeduplicator()
+_execution_lock: asyncio.Lock = asyncio.Lock()
 
 BANNER = """
 ╔══════════════════════════════════════════╗
@@ -95,6 +100,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 continue
 
             print(f"[SCANNER] Сканирование начато: {datetime.now(timezone.utc).isoformat()}")
+            scan_ts: float = time.time()
 
             # 1. Получить коэффициенты для всех спортов
             all_events: list[dict[str, Any]] = []
@@ -163,6 +169,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     "event_name": opp.event_name,
                     "details": getattr(opp, "details", {}),
                     "commence_time": getattr(opp, "details", {}).get("commence_time", ""),
+                    "scan_timestamp": scan_ts,
                 }
                 try:
                     evaluation = await ai_filter.evaluate(opp_dict)
@@ -253,66 +260,82 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
 
                 valid_allocations.append(alloc)
 
-            # 7. Исполнение
+            # 7. Исполнение (с дедупликацией и блокировкой)
             if valid_allocations:
-                try:
-                    results = await executor.execute(valid_allocations)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[SCANNER] Ошибка исполнения: {exc}")
-                    results = []
+                async with _execution_lock:
+                    # Фильтрация дубликатов
+                    unique_allocations: list[dict[str, Any]] = []
+                    for alloc in valid_allocations:
+                        opp = alloc.get("opportunity", {})
+                        if _deduplicator.is_duplicate(opp):
+                            print(f"[SCANNER] Дубликат пропущен: {opp.get('event_name', opp.get('event', ''))}")
+                            continue
+                        unique_allocations.append(alloc)
 
-                # 8. Запись в память
-                for i, alloc in enumerate(valid_allocations):
-                    opp = alloc.get("opportunity", {})
-                    ai_score = opp.get("ai_score", 0)
-                    # Fix 3: Корректный статус
-                    status = "SIMULATED" if config.DRY_RUN else "PENDING"
-                    arb_id = memory.record_arb(
-                        sport=opp.get("sport", ""),
-                        event=opp.get("event", ""),
-                        arb_type=opp.get("type", "surebet"),
-                        bookmakers=opp.get("bookmakers", []),
-                        odds={"odds": opp.get("odds", [])},
-                        profit_pct=opp.get("profit_pct", 0.0),
-                        edge_pct=opp.get("edge_pct", 0.0),
-                        ai_score=ai_score,
-                        status=status,
-                    )
-
-                    if i < len(results):
-                        res = results[i]
-                        memory.record_bet(
-                            arb_id=arb_id,
-                            bookmaker=res.get("bookmaker", ""),
-                            event=res.get("event", ""),
-                            outcome=res.get("outcome", ""),
-                            stake=res.get("stake", 0.0),
-                            odds=res.get("odds", 0.0),
-                            result=res.get("status", "PENDING"),
-                        )
-
-                    # Записываем в anti-ban
-                    bookmakers = opp.get("bookmakers", [])
-                    for bm in bookmakers:
-                        anti_ban.record_bet(bm)
-                        # Фиксируем acceptance time для пре-бан детектора.
-                        # В DRY_RUN симулируем длительность приёма (0.5-2.0с);
-                        # в live-режиме executor предоставит реальную длительность.
-                        if config.DRY_RUN:
-                            simulated_duration = random.uniform(0.5, 2.0)
-                            anti_ban.record_acceptance_time(bm, simulated_duration)
-                        elif i < len(results):
-                            real_duration = results[i].get("acceptance_duration", 1.0)
-                            anti_ban.record_acceptance_time(bm, real_duration)
-
-                    # 9. Telegram-алерт
-                    if opp.get("profit_pct", 0.0) >= config.MIN_ARB_PROFIT:
+                    if not unique_allocations:
+                        print("[SCANNER] Все аллокации - дубликаты, пропуск")
+                    else:
                         try:
-                            await telegram_bot.send_arb_alert(
-                                session, opp, ai_score
-                            )
+                            results = await executor.execute(unique_allocations)
                         except Exception as exc:  # noqa: BLE001
-                            print(f"[SCANNER] Ошибка отправки алерта: {exc}")
+                            print(f"[SCANNER] Ошибка исполнения: {exc}")
+                            results = []
+
+                        # 8. Запись в память
+                        for i, alloc in enumerate(unique_allocations):
+                            opp = alloc.get("opportunity", {})
+                            ai_score = opp.get("ai_score", 0)
+                            # Fix 3: Корректный статус
+                            status = "SIMULATED" if config.DRY_RUN else "PENDING"
+                            arb_id = memory.record_arb(
+                                sport=opp.get("sport", ""),
+                                event=opp.get("event", ""),
+                                arb_type=opp.get("type", "surebet"),
+                                bookmakers=opp.get("bookmakers", []),
+                                odds={"odds": opp.get("odds", [])},
+                                profit_pct=opp.get("profit_pct", 0.0),
+                                edge_pct=opp.get("edge_pct", 0.0),
+                                ai_score=ai_score,
+                                status=status,
+                            )
+
+                            if i < len(results):
+                                res = results[i]
+                                memory.record_bet(
+                                    arb_id=arb_id,
+                                    bookmaker=res.get("bookmaker", ""),
+                                    event=res.get("event", ""),
+                                    outcome=res.get("outcome", ""),
+                                    stake=res.get("stake", 0.0),
+                                    odds=res.get("odds", 0.0),
+                                    result=res.get("status", "PENDING"),
+                                )
+
+                            # Отмечаем как исполненные в дедупликаторе
+                            _deduplicator.mark_executed(opp)
+
+                            # Записываем в anti-ban
+                            bookmakers = opp.get("bookmakers", [])
+                            for bm in bookmakers:
+                                anti_ban.record_bet(bm)
+                                # Фиксируем acceptance time для пре-бан детектора.
+                                # В DRY_RUN симулируем длительность приёма (0.5-2.0с);
+                                # в live-режиме executor предоставит реальную длительность.
+                                if config.DRY_RUN:
+                                    simulated_duration = random.uniform(0.5, 2.0)
+                                    anti_ban.record_acceptance_time(bm, simulated_duration)
+                                elif i < len(results):
+                                    real_duration = results[i].get("acceptance_duration", 1.0)
+                                    anti_ban.record_acceptance_time(bm, real_duration)
+
+                            # 9. Telegram-алерт
+                            if opp.get("profit_pct", 0.0) >= config.MIN_ARB_PROFIT:
+                                try:
+                                    await telegram_bot.send_arb_alert(
+                                        session, opp, ai_score
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    print(f"[SCANNER] Ошибка отправки алерта: {exc}")
 
             print(f"[SCANNER] Цикл завершён. Исполнено: {len(valid_allocations)}")
 
@@ -401,6 +424,18 @@ async def main() -> None:
 
     # Создание HTTP-сессии
     session = aiohttp.ClientSession()
+
+    # Auto-discovery активных спортов
+    try:
+        odds_client_tmp = OddsAPIClient(session=session)
+        discovered = await odds_client_tmp.discover_active_sports()
+        if discovered:
+            config.SPORTS = discovered
+            print(f"[MAIN] Auto-discovery: {len(discovered)} активных спортов")
+        else:
+            print(f"[MAIN] Auto-discovery не удалось, используем конфиг: {len(config.SPORTS)} спортов")
+    except Exception as exc:
+        print(f"[MAIN] Auto-discovery ошибка: {exc}, используем конфиг: {len(config.SPORTS)} спортов")
 
     # Graceful shutdown
     loop = asyncio.get_running_loop()
