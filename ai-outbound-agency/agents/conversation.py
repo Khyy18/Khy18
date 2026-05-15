@@ -23,6 +23,7 @@ from core.models import (
 from integrations.calendar import CalendarIntegration
 from integrations.notifications import notify_human
 from agents.approval_queue import ApprovalQueue
+from agents.reply_quality import ReplyQualityScorer, QUALITY_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +306,56 @@ class ConversationAgent:
                 campaign_context=campaign_context,
             )
 
+            # Quality scoring for auto-send responses
+            quality_score_value = None
+            action = response.get("action", "")
+            if action in ("send_reply", "book_meeting"):
+                quality_scorer = ReplyQualityScorer(self._llm)
+                quality_result = await quality_scorer.score_response(
+                    response_text=response.get("body", ""),
+                    prospect_message=inbound_message.content,
+                    campaign_context=campaign_context,
+                )
+                quality_score_value = quality_result.overall_score
+
+                if quality_result.overall_score < QUALITY_THRESHOLD:
+                    # Route to approval queue with quality notes
+                    response["quality_score"] = quality_result.overall_score
+                    response["quality_notes"] = quality_result.improvement_suggestions
+
+                    async with self._session_factory() as approval_session:
+                        await ApprovalQueue.create_approval(
+                            session=approval_session,
+                            lead_id=lead.id,
+                            message_id=inbound_message.id,
+                            proposed_response=response,
+                        )
+                        await approval_session.commit()
+
+                    await notify_human(
+                        lead_data=lead_data,
+                        classification=classification.get("classification", ""),
+                        proposed_response=response,
+                        settings=self._settings,
+                    )
+
+                    logger.info(
+                        "Routed reply %s to approval queue (quality_score=%d < %d)",
+                        message_id,
+                        quality_result.overall_score,
+                        QUALITY_THRESHOLD,
+                    )
+
+                    return {
+                        "message_id": message_id,
+                        "classification": classification,
+                        "response": response,
+                        "lead_status": lead.status.value if lead.status else None,
+                        "routed_to_approval": True,
+                        "response_sent": False,
+                        "quality_score": quality_score_value,
+                    }
+
             # Update lead status based on classification
             intent = classification.get("classification", "")
             if intent == "positive":
@@ -415,6 +466,7 @@ class ConversationAgent:
                 "response": response,
                 "lead_status": lead.status.value if lead.status else None,
                 "response_sent": response_sent,
+                "quality_score": quality_score_value,
             }
 
     def _requires_human_approval(

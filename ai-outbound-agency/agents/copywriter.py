@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from core.config import Settings
     from core.llm import LLMClient
+    from agents.reply_quality import ReplyQualityScorer
 
 logger = logging.getLogger(__name__)
 
@@ -130,15 +131,22 @@ SEQUENCE_STEPS = ["initial", "follow_up_1", "follow_up_2", "breakup"]
 class CopywriterAgent:
     """Generates personalized outreach emails using LLM."""
 
-    def __init__(self, llm_client: LLMClient, settings: Settings) -> None:
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        settings: Settings,
+        quality_scorer: ReplyQualityScorer | None = None,
+    ) -> None:
         self._llm = llm_client
         self._settings = settings
+        self._quality_scorer = quality_scorer
 
     async def write_message(
         self,
         lead: dict[str, Any],
         campaign_context: dict[str, Any],
         step_type: str = "initial",
+        quality_check: bool = True,
     ) -> dict[str, str]:
         """Generate a single outreach message for a lead.
 
@@ -147,9 +155,11 @@ class CopywriterAgent:
             campaign_context: Dict with keys: tone_of_voice, value_proposition,
                 company_name, sender_name, sender_title.
             step_type: One of "initial", "follow_up_1", "follow_up_2", "breakup".
+            quality_check: If True and quality_scorer is set, score and potentially
+                regenerate the message if quality is below threshold.
 
         Returns:
-            Dict with subject, body, and step_type.
+            Dict with subject, body, step_type, and optionally quality_score.
         """
         template = STEP_TEMPLATES.get(step_type)
         if template is None:
@@ -196,11 +206,64 @@ class CopywriterAgent:
             subject = ""
             body = ""
 
-        return {
+        result = {
             "subject": subject,
             "body": body,
             "step_type": step_type,
         }
+
+        # Quality check: score and regenerate if below threshold
+        if quality_check and self._quality_scorer is not None and body:
+            from agents.reply_quality import QUALITY_THRESHOLD
+
+            best_result = result
+            best_score = 0
+
+            # Score the initial attempt
+            prospect_msg = f"Outreach to {lead.get('first_name', '')} at {lead.get('company', '')}"
+            quality = await self._quality_scorer.score_response(
+                response_text=body,
+                prospect_message=prospect_msg,
+                campaign_context=campaign_context,
+            )
+            best_score = quality.overall_score
+            best_result = {**result, "quality_score": quality.overall_score}
+
+            # Regenerate up to 3 times if quality is below threshold
+            if quality.overall_score < QUALITY_THRESHOLD:
+                for _attempt in range(3):
+                    try:
+                        new_response = await self._llm.generate(
+                            messages=messages, temperature=0.8, max_tokens=512
+                        )
+                        new_subject, new_body = self._parse_response(new_response)
+                    except Exception:
+                        break
+
+                    if not new_body:
+                        continue
+
+                    new_quality = await self._quality_scorer.score_response(
+                        response_text=new_body,
+                        prospect_message=prospect_msg,
+                        campaign_context=campaign_context,
+                    )
+
+                    if new_quality.overall_score > best_score:
+                        best_score = new_quality.overall_score
+                        best_result = {
+                            "subject": new_subject,
+                            "body": new_body,
+                            "step_type": step_type,
+                            "quality_score": new_quality.overall_score,
+                        }
+
+                    if new_quality.overall_score >= QUALITY_THRESHOLD:
+                        break
+
+            return best_result
+
+        return result
 
     async def write_sequence(
         self,

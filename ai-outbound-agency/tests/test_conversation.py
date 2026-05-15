@@ -216,10 +216,11 @@ async def test_handle_reply_positive_updates_status_to_qualified(
     async_session.add(msg)
     await async_session.commit()
 
-    # Mock LLM to return positive classification, then response
+    # Mock LLM to return positive classification, then response, then quality score
     mock_llm_client.generate.side_effect = [
         json.dumps({"classification": "positive", "confidence": 0.95, "details": "interested"}),
         json.dumps({"subject": "Re: Meeting", "body": "Great! Here's my calendar link.", "action": "book_meeting", "follow_up_days": None}),
+        json.dumps({"relevance": 9, "tone": 9, "value_proposition_clarity": 8, "cta_effectiveness": 9, "length_appropriateness": 8, "no_hallucinations": 10, "improvement_suggestions": []}),
     ]
 
     result = await agent.handle_reply(str(msg.id))

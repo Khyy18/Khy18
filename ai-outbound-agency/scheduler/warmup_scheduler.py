@@ -11,6 +11,7 @@ import redis.asyncio as aioredis
 
 from channels.email.sender import AsyncEmailSender
 from channels.email.warmup import DomainWarmupManager
+from channels.email.warmup_network import WarmupNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -146,11 +147,13 @@ class WarmupScheduler:
         email_sender: AsyncEmailSender,
         redis_url: str,
         seed_addresses: list[str] | None = None,
+        warmup_network: WarmupNetwork | None = None,
     ) -> None:
         self._warmup_manager = warmup_manager
         self._email_sender = email_sender
         self._redis_url = redis_url
         self._seed_addresses = seed_addresses or []
+        self._warmup_network = warmup_network
         self._redis: aioredis.Redis | None = None
 
     async def _get_redis(self) -> aioredis.Redis:
@@ -163,7 +166,8 @@ class WarmupScheduler:
         """Execute one tick of the warmup scheduler.
 
         For each domain that is not yet fully warmed up, sends warmup
-        emails up to the remaining daily limit.
+        emails up to the remaining daily limit. After seed warmup completes,
+        runs network warmup to fill remaining quota.
         """
         logger.info("Warmup scheduler tick started")
 
@@ -188,7 +192,87 @@ class WarmupScheduler:
                     exc_info=True,
                 )
 
+        # Run network warmup after seed warmup completes
+        await self.run_network_warmup_tick()
+
         logger.info("Warmup scheduler tick completed")
+
+    async def run_network_warmup_tick(self) -> None:
+        """Run network warmup for domains that haven't met daily quota from seed warmup alone.
+
+        Gets domains needing additional warmup sends and uses WarmupNetwork
+        to create cross-domain warmup pairs for the remaining quota.
+        """
+        if self._warmup_network is None:
+            return
+
+        logger.info("Network warmup tick started")
+
+        try:
+            warmup_status = await self._warmup_manager.get_warmup_status()
+        except Exception as exc:
+            logger.error("Failed to get warmup status for network warmup: %s", exc)
+            return
+
+        # Get all available network domains
+        try:
+            network_domains = await self._warmup_network.get_network_domains()
+        except Exception as exc:
+            logger.error("Failed to get network domains: %s", exc)
+            return
+
+        if len(network_domains) < 2:
+            logger.debug("Not enough network domains for cross-domain warmup")
+            return
+
+        for domain, status in warmup_status.items():
+            if status.get("is_warmed_up"):
+                continue
+
+            daily_limit = status.get("daily_limit", 5)
+            sends_today = status.get("sends_today", 0)
+            remaining = daily_limit - sends_today
+
+            if remaining <= 0:
+                continue
+
+            # Use network warmup for remaining quota
+            for _ in range(remaining):
+                try:
+                    sender_email, receiver_email, subject, body = (
+                        self._warmup_network.generate_warmup_pair(domain, network_domains)
+                    )
+
+                    message_id = str(uuid.uuid4())
+                    result = await self._email_sender.send_email_from_domain(
+                        domain=domain,
+                        to=receiver_email,
+                        subject=subject,
+                        html_body=f"<p>{body}</p>",
+                        message_id=message_id,
+                        tracking_pixel_url=None,
+                        tracked_links=None,
+                    )
+
+                    if result.get("success"):
+                        await self._warmup_manager.record_warmup_send(domain)
+                        await self._warmup_network.record_send(
+                            domain, message_id, sender_email, receiver_email
+                        )
+                        logger.debug(
+                            "Network warmup email sent from %s to %s",
+                            sender_email,
+                            receiver_email,
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to send network warmup email for %s: %s",
+                        domain,
+                        exc,
+                    )
+                    break
+
+        logger.info("Network warmup tick completed")
 
     async def _process_domain(
         self, domain: str, status: dict[str, Any]

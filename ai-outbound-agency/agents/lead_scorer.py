@@ -16,6 +16,7 @@ from core.models import (
     Message,
     MessageStatus,
 )
+from agents.ml_scorer import MLLeadScorer
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,13 @@ MAX_TOTAL_SCORE = MAX_ENGAGEMENT_SCORE + MAX_ICP_SCORE
 class LeadScorer:
     """Scores leads based on engagement signals and ICP fit."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        ml_scorer: MLLeadScorer | None = None,
+    ) -> None:
         self._session_factory = session_factory
+        self._ml_scorer = ml_scorer
 
     async def score_lead(self, lead_id: UUID) -> float:
         """Calculate and save total score for a lead.
@@ -83,7 +89,18 @@ class LeadScorer:
             engagement_score = await self._calculate_engagement(session, lead)
             icp_fit_score = self._calculate_icp_fit(lead)
 
-            total = engagement_score + icp_fit_score
+            # Get ML prediction if ml_scorer is available
+            ml_prediction = await self.predict_with_ml(lead.id) if self._ml_scorer else None
+
+            if ml_prediction is not None:
+                # Weighted formula with ML prediction
+                engagement_normalized = engagement_score / MAX_ENGAGEMENT_SCORE if MAX_ENGAGEMENT_SCORE > 0 else 0
+                icp_normalized = icp_fit_score / MAX_ICP_SCORE if MAX_ICP_SCORE > 0 else 0
+                total = (0.4 * engagement_normalized + 0.3 * icp_normalized + 0.3 * ml_prediction) * 100
+            else:
+                # Original formula without ML
+                total = engagement_score + icp_fit_score
+
             lead.score = total
             await session.commit()
             return total
@@ -183,6 +200,71 @@ class LeadScorer:
             score += 15
 
         return score
+
+    async def predict_with_ml(self, lead_id: UUID) -> float | None:
+        """Get ML prediction for a lead.
+
+        Args:
+            lead_id: UUID of the lead to predict for.
+
+        Returns:
+            Probability float 0.0-1.0, or None if ML scorer unavailable or model not loaded.
+        """
+        if self._ml_scorer is None:
+            return None
+
+        async with self._session_factory() as session:
+            result = await session.execute(select(Lead).where(Lead.id == lead_id))
+            lead = result.scalar_one_or_none()
+            if lead is None:
+                return None
+
+            # Build lead data
+            enrichment = lead.enrichment_data or {}
+            lead_data = {
+                "company_size": enrichment.get("company_size", 50),
+                "industry": enrichment.get("industry", "unknown"),
+                "title": lead.title or "",
+                "trigger_events": enrichment.get("trigger_events", []),
+                "tech_stack_overlap_score": enrichment.get("tech_stack_overlap_score", 0.0),
+            }
+
+            # Build engagement data
+            msg_result = await session.execute(
+                select(Message.id).where(Message.lead_id == lead.id)
+            )
+            message_ids = [row[0] for row in msg_result.all()]
+
+            engagement_data = {
+                "email_open_count": 0,
+                "email_click_count": 0,
+                "time_to_first_open_hours": -1,
+                "linkedin_engagement_score": 0.0,
+                "sequence_step_reached": len(message_ids),
+                "day_of_week_sent": 0,
+                "hour_sent": 9,
+            }
+
+            if message_ids:
+                from sqlalchemy import func as sqlfunc
+                open_result = await session.execute(
+                    select(sqlfunc.count()).select_from(Event).where(
+                        Event.message_id.in_(message_ids),
+                        Event.event_type == EventType.open,
+                    )
+                )
+                engagement_data["email_open_count"] = open_result.scalar() or 0
+
+                click_result = await session.execute(
+                    select(sqlfunc.count()).select_from(Event).where(
+                        Event.message_id.in_(message_ids),
+                        Event.event_type == EventType.click,
+                    )
+                )
+                engagement_data["email_click_count"] = click_result.scalar() or 0
+
+            features = self._ml_scorer.engineer_features(lead_data, engagement_data)
+            return self._ml_scorer.predict(features)
 
     async def bulk_rescore(self, campaign_id: UUID) -> int:
         """Recalculate scores for all leads in a campaign. Returns count of leads rescored."""
