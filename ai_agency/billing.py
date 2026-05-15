@@ -1,5 +1,8 @@
 """Модуль биллинга AI-агентства: проверка баланса, списание, пополнение."""
 
+import aiosqlite
+
+import config
 import database
 
 
@@ -11,26 +14,38 @@ async def check_balance(telegram_id: int, amount: float) -> bool:
 
 async def charge_client(telegram_id: int, amount: float) -> bool:
     """
-    Списать средства с баланса клиента.
+    Атомарно списать средства с баланса клиента.
     Возвращает True если списание прошло, False если недостаточно средств.
+    Использует атомарный UPDATE с проверкой balance >= amount.
     """
-    balance = await database.get_client_balance(telegram_id)
-    if balance < amount:
-        return False
-
-    new_balance = balance - amount
-    await database.update_balance(telegram_id, new_balance)
-    await database.update_total_spent(telegram_id, amount)
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE clients SET balance = balance - ? WHERE telegram_id = ? AND balance >= ?",
+            (amount, telegram_id, amount),
+        )
+        if cursor.rowcount != 1:
+            await db.rollback()
+            return False
+        await db.execute(
+            "UPDATE clients SET total_spent = total_spent + ? WHERE telegram_id = ?",
+            (amount, telegram_id),
+        )
+        await db.commit()
     return True
 
 
 async def top_up_balance(telegram_id: int, amount: float, method: str = "manual") -> float:
     """
-    Пополнить баланс клиента.
+    Атомарно пополнить баланс клиента.
     Возвращает новый баланс.
     """
-    current_balance = await database.get_client_balance(telegram_id)
-    new_balance = current_balance + amount
-    await database.update_balance(telegram_id, new_balance)
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE clients SET balance = balance + ? WHERE telegram_id = ?",
+            (amount, telegram_id),
+        )
+        await db.commit()
+
     await database.add_payment(telegram_id, amount, method)
+    new_balance = await database.get_client_balance(telegram_id)
     return new_balance

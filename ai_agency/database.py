@@ -15,8 +15,10 @@ async def get_connection() -> aiosqlite.Connection:
 
 
 async def init_db() -> None:
-    """Инициализация базы данных: создание таблиц."""
+    """Инициализация базы данных: создание таблиц, включение WAL."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        # WAL-режим для лучшей конкурентности
+        await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS clients (
                 telegram_id INTEGER PRIMARY KEY,

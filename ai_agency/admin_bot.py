@@ -1,6 +1,8 @@
 """Админский Telegram-бот AI-агентства (python-telegram-bot v20+)."""
 
+import functools
 import logging
+import sys
 
 from telegram import (
     InlineKeyboardButton,
@@ -31,6 +33,7 @@ TOPUP_CLIENT_ID, TOPUP_AMOUNT = range(2)
 
 def admin_only(func):
     """Декоратор для проверки доступа администратора."""
+    @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if user.id != config.ADMIN_TELEGRAM_ID:
@@ -45,6 +48,7 @@ def admin_only(func):
 
 def admin_only_callback(func):
     """Декоратор для проверки доступа в callback."""
+    @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if user.id != config.ADMIN_TELEGRAM_ID:
@@ -275,25 +279,24 @@ def create_admin_application() -> Application:
 
 def main() -> None:
     """Запуск админского бота."""
-    import asyncio
+    from config import validate_config
 
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=logging.INFO,
     )
 
-    async def run():
-        await database.init_db()
-        app = create_admin_application()
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling()
-        logger.info("Админский бот запущен")
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
+    errors = validate_config()
+    if errors:
+        for err in errors:
+            logger.error(err)
+        sys.exit(1)
 
-    asyncio.run(run())
+    import asyncio
+    asyncio.run(database.init_db())
+
+    app = create_admin_application()
+    app.run_polling()
 
 
 if __name__ == "__main__":

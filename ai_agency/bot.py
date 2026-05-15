@@ -1,6 +1,8 @@
 """Клиентский Telegram-бот AI-агентства (python-telegram-bot v20+)."""
 
+import html
 import logging
+import sys
 
 from telegram import (
     InlineKeyboardButton,
@@ -132,7 +134,7 @@ async def enter_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"<b>Услуга:</b> {service.name}",
         f"<b>Стоимость:</b> {format_number(service.price)} \u20bd",
         f"<b>Ваш текст:</b>",
-        f"<pre>{preview}</pre>",
+        f"<pre>{html.escape(preview)}</pre>",
         "",
         "Подтвердите заказ:",
     ]
@@ -239,7 +241,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             chunk = result[i:i + max_len]
             await context.bot.send_message(
                 chat_id=user.id,
-                text=f"<pre>{chunk}</pre>",
+                text=f"<pre>{html.escape(chunk)}</pre>",
                 parse_mode=ParseMode.HTML,
             )
     else:
@@ -339,26 +341,24 @@ def create_application() -> Application:
 
 def main() -> None:
     """Запуск клиентского бота."""
-    import asyncio
+    from config import validate_config
 
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=logging.INFO,
     )
 
-    async def run():
-        await database.init_db()
-        app = create_application()
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling()
-        logger.info("Клиентский бот запущен")
-        # Ожидаем остановки
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
+    errors = validate_config()
+    if errors:
+        for err in errors:
+            logger.error(err)
+        sys.exit(1)
 
-    asyncio.run(run())
+    import asyncio
+    asyncio.run(database.init_db())
+
+    app = create_application()
+    app.run_polling()
 
 
 if __name__ == "__main__":
