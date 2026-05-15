@@ -80,6 +80,19 @@ async def init_db() -> None:
                 FOREIGN KEY (client_id) REFERENCES clients(telegram_id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS processed_payments (
+                payment_id TEXT PRIMARY KEY,
+                processed_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Миграция: добавляем last_notified_at если отсутствует
+        try:
+            await db.execute(
+                "ALTER TABLE clients ADD COLUMN last_notified_at TEXT"
+            )
+        except Exception:
+            pass  # Колонка уже существует
         await db.commit()
 
 
@@ -213,6 +226,17 @@ async def get_orders_by_client(client_id: int, limit: int = 10) -> List[dict]:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+async def get_order_by_id(order_id: int) -> Optional[dict]:
+    """Получить заказ по ID."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM orders WHERE id = ?", (order_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
 
 async def get_recent_orders(limit: int = 20) -> List[dict]:
@@ -446,3 +470,148 @@ async def get_all_clients_with_orders() -> List[dict]:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+
+
+# --- Идемпотентность вебхуков ---
+
+async def is_payment_processed(payment_id: str) -> bool:
+    """Проверить, был ли платёж уже обработан."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "SELECT 1 FROM processed_payments WHERE payment_id = ?",
+            (payment_id,),
+        )
+        row = await cursor.fetchone()
+        return row is not None
+
+
+async def mark_payment_processed(payment_id: str) -> None:
+    """Отметить платёж как обработанный."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO processed_payments (payment_id) VALUES (?)",
+            (payment_id,),
+        )
+        await db.commit()
+
+
+# --- Реферальный бонус (атомарная операция) ---
+
+async def credit_referral_bonus(user_id: int, order_price: float, bonus_percent: int) -> Optional[float]:
+    """
+    Начислить реферальный бонус реферреру при первом заказе.
+
+    Возвращает сумму бонуса если начислен, None иначе.
+    """
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT referrer_id FROM referrals WHERE referred_id = ? AND paid = 0",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        referrer_id = row["referrer_id"]
+        bonus = order_price * bonus_percent / 100
+        await db.execute(
+            "UPDATE clients SET balance = balance + ? WHERE telegram_id = ?",
+            (bonus, referrer_id),
+        )
+        await db.execute(
+            "UPDATE referrals SET bonus_amount = ?, paid = 1 WHERE referred_id = ? AND referrer_id = ?",
+            (bonus, user_id, referrer_id),
+        )
+        await db.commit()
+        return bonus
+
+
+# --- Планировщик: дедупликация уведомлений ---
+
+async def get_clients_inactive_days_not_notified(days: int, cooldown_hours: int = 168) -> List[dict]:
+    """
+    Получить клиентов, неактивных более N дней, которым не отправлялось
+    уведомление в течение cooldown_hours часов.
+    """
+    threshold = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    cooldown_threshold = (datetime.utcnow() - timedelta(hours=cooldown_hours)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT c.* FROM clients c
+               WHERE c.telegram_id NOT IN (
+                   SELECT DISTINCT client_id FROM orders WHERE created_at >= ?
+               )
+               AND (c.last_notified_at IS NULL OR c.last_notified_at < ?)""",
+            (threshold, cooldown_threshold),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def update_client_last_notified(telegram_id: int) -> None:
+    """Обновить время последнего уведомления клиента."""
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE clients SET last_notified_at = ? WHERE telegram_id = ?",
+            (now, telegram_id),
+        )
+        await db.commit()
+
+
+# --- Подписки: истечение через database ---
+
+async def expire_active_subscriptions() -> int:
+    """
+    Пометить истёкшие подписки как expired.
+    Возвращает количество обновлённых записей.
+    """
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            """UPDATE subscriptions SET status = 'expired'
+               WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < ?""",
+            (now,),
+        )
+        count = cursor.rowcount
+        await db.commit()
+    return count
+
+
+# --- Подписки: атомарный инкремент с проверкой лимита ---
+
+async def atomic_increment_subscription_usage(client_id: int, order_limit: int) -> bool:
+    """
+    Атомарно инкрементировать orders_used подписки с проверкой лимита.
+
+    Использует UPDATE ... WHERE orders_used < limit для атомарности.
+    Возвращает True если инкремент выполнен, False если лимит исчерпан.
+    """
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            """UPDATE subscriptions
+               SET orders_used = orders_used + 1
+               WHERE client_id = ? AND status = 'active' AND orders_used < ?""",
+            (client_id, order_limit),
+        )
+        success = cursor.rowcount > 0
+        await db.commit()
+    return success
+
+
+async def atomic_increment_subscription_usage_unlimited(client_id: int) -> bool:
+    """
+    Атомарно инкрементировать orders_used подписки (PRO, без лимита).
+    Возвращает True если инкремент выполнен.
+    """
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            """UPDATE subscriptions
+               SET orders_used = orders_used + 1
+               WHERE client_id = ? AND status = 'active'""",
+            (client_id,),
+        )
+        success = cursor.rowcount > 0
+        await db.commit()
+    return success

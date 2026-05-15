@@ -71,13 +71,13 @@ async def charge_or_use_subscription(telegram_id: int, price: float) -> bool:
     """
     Списать средства: подписка или баланс.
 
-    Если есть активная подписка с доступным лимитом - инкрементирует usage.
+    Если есть активная подписка с доступным лимитом - атомарно проверяет
+    и инкрементирует usage (исключает race condition).
     Иначе списывает с баланса.
     Возвращает True если успешно, False если недостаточно средств.
     """
-    # Пробуем использовать подписку
-    if await subscriptions.can_place_order(telegram_id):
-        await subscriptions.increment_subscription_usage(telegram_id)
+    # Пробуем атомарно использовать подписку
+    if await subscriptions.atomic_use_subscription(telegram_id):
         return True
     # Списываем с баланса
     return await charge_client(telegram_id, price)

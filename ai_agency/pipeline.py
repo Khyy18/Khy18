@@ -15,6 +15,28 @@ logger = logging.getLogger(__name__)
 # Услуги, которые обрабатываются в простом режиме (без Editor/QA)
 SIMPLE_SERVICES = {ServiceType.REWRITE, ServiceType.SUMMARY}
 
+# Lazy-singleton LLM клиенты (создаются при первом использовании)
+_openai_client: Optional[AsyncOpenAI] = None
+_groq_client: Optional[AsyncGroq] = None
+
+
+def _get_openai_client() -> AsyncOpenAI:
+    """Получить или создать singleton AsyncOpenAI клиент."""
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+    return _openai_client
+
+
+def _get_groq_client() -> Optional[AsyncGroq]:
+    """Получить или создать singleton AsyncGroq клиент."""
+    global _groq_client
+    if not config.GROQ_API_KEY:
+        return None
+    if _groq_client is None:
+        _groq_client = AsyncGroq(api_key=config.GROQ_API_KEY)
+    return _groq_client
+
 
 def _check_quality(text: str, min_words: int, required_keywords: list) -> bool:
     """Проверка качества результата."""
@@ -38,10 +60,11 @@ async def _call_llm(
     Вызвать LLM с фолбэком на Groq.
 
     Сначала пытается OpenAI, при ошибке переключается на Groq.
+    Использует singleton-клиенты для переиспользования HTTP-соединений.
     """
     # Попытка через OpenAI
     try:
-        client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+        client = _get_openai_client()
         response = await client.chat.completions.create(
             model=config.DEFAULT_MODEL,
             messages=messages,
@@ -53,12 +76,12 @@ async def _call_llm(
         logger.warning("OpenAI API ошибка, переключение на Groq: %s", str(e))
 
     # Фолбэк на Groq
-    if not config.GROQ_API_KEY:
+    groq_client = _get_groq_client()
+    if groq_client is None:
         logger.error("Groq API ключ не задан, фолбэк невозможен")
         return None
 
     try:
-        groq_client = AsyncGroq(api_key=config.GROQ_API_KEY)
         response = await groq_client.chat.completions.create(
             model="llama-3.1-70b-versatile",
             messages=messages,

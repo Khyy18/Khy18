@@ -72,6 +72,31 @@ async def can_place_order(telegram_id: int) -> bool:
     return False
 
 
+async def atomic_use_subscription(telegram_id: int) -> bool:
+    """
+    Атомарно проверить и инкрементировать использование подписки.
+
+    Использует UPDATE ... WHERE с проверкой лимита в одном запросе,
+    что исключает race condition при параллельных запросах.
+    Возвращает True если заказ по подписке разрешён и учтён.
+    """
+    sub = await check_subscription(telegram_id)
+    if not sub:
+        return False
+
+    tier = sub.get("tier", "none")
+    if tier == SubscriptionTier.PRO.value:
+        return await database.atomic_increment_subscription_usage_unlimited(telegram_id)
+
+    if tier == SubscriptionTier.BASIC.value:
+        limit = TIER_ORDER_LIMITS.get(SubscriptionTier.BASIC, 0)
+        if limit is None:
+            return await database.atomic_increment_subscription_usage_unlimited(telegram_id)
+        return await database.atomic_increment_subscription_usage(telegram_id, limit)
+
+    return False
+
+
 async def increment_subscription_usage(telegram_id: int) -> None:
     """Увеличить счётчик использованных заказов в подписке."""
     sub = await check_subscription(telegram_id)
@@ -110,17 +135,8 @@ async def expire_subscriptions() -> None:
     Пометить истёкшие подписки как expired.
 
     Вызывается периодически (по расписанию).
+    Маршрутизирует через database модуль для единообразия.
     """
-    import aiosqlite
-    now = datetime.utcnow().isoformat()
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cursor = await db.execute(
-            """UPDATE subscriptions SET status = 'expired'
-               WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < ?""",
-            (now,),
-        )
-        count = cursor.rowcount
-        await db.commit()
-
+    count = await database.expire_active_subscriptions()
     if count > 0:
         logger.info("Истекло подписок: %d", count)

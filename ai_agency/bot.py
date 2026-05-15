@@ -329,28 +329,11 @@ async def _credit_referral_bonus(user_id: int, order_price: float) -> None:
     if order_count != 1:
         return
 
-    import aiosqlite
-    async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        cursor = await db.execute(
-            "SELECT referrer_id FROM referrals WHERE referred_id = ? AND paid = 0",
-            (user_id,),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            return
-        referrer_id = row[0]
-        bonus = order_price * config.REFERRAL_BONUS_PERCENT / 100
-        # Начисляем бонус реферреру
-        await db.execute(
-            "UPDATE clients SET balance = balance + ? WHERE telegram_id = ?",
-            (bonus, referrer_id),
-        )
-        await db.execute(
-            "UPDATE referrals SET bonus_amount = ?, paid = 1 WHERE referred_id = ? AND referrer_id = ?",
-            (bonus, user_id, referrer_id),
-        )
-        await db.commit()
-    logger.info("Реферальный бонус %.2f начислен клиенту %d", bonus, referrer_id)
+    bonus = await database.credit_referral_bonus(
+        user_id, order_price, config.REFERRAL_BONUS_PERCENT
+    )
+    if bonus is not None:
+        logger.info("Реферальный бонус %.2f начислен за клиента %d", bonus, user_id)
 
 
 # --- Оценка заказа ---
@@ -392,18 +375,10 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
 
         # Получаем данные заказа
-        import aiosqlite
-        async with aiosqlite.connect(config.DATABASE_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM orders WHERE id = ?", (order_id,)
-            )
-            order_row = await cursor.fetchone()
+        order = await database.get_order_by_id(order_id)
 
-        if not order_row:
+        if not order:
             return
-
-        order = dict(order_row)
         service_type_value = order["service_type"]
         input_text = order["input_text"]
 

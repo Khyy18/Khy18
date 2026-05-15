@@ -16,17 +16,20 @@ async def retention_check(bot: Bot) -> None:
     """
     Задача удержания: каждые 24ч проверяет клиентов,
     неактивных 7+ дней, и отправляет напоминание.
+    Использует last_notified_at для дедупликации (cooldown 7 дней).
     """
     while True:
         try:
-            inactive_clients = await database.get_clients_inactive_days(7)
+            inactive_clients = await database.get_clients_inactive_days_not_notified(
+                days=7, cooldown_hours=168
+            )
+            sent = 0
             for client in inactive_clients:
                 telegram_id = client["telegram_id"]
                 name = client.get("first_name") or "друг"
                 text = (
                     f"\U0001f44b {name}, давно вас не видели!\n\n"
-                    f"Специально для вас \u2014 скидка 15% на следующий заказ.\n"
-                    f"Используйте промокод: <b>RETURN15</b>\n\n"
+                    f"Специально для вас \u2014 скидка на следующий заказ.\n\n"
                     f"Нажмите /start чтобы оформить заказ."
                 )
                 try:
@@ -35,10 +38,12 @@ async def retention_check(bot: Bot) -> None:
                         text=text,
                         parse_mode="HTML",
                     )
+                    await database.update_client_last_notified(telegram_id)
+                    sent += 1
                 except Exception as e:
                     logger.debug("Не удалось отправить retention клиенту %d: %s", telegram_id, e)
-            if inactive_clients:
-                logger.info("Retention: отправлено %d напоминаний", len(inactive_clients))
+            if sent:
+                logger.info("Retention: отправлено %d напоминаний", sent)
         except Exception as e:
             logger.error("Ошибка retention_check: %s", e)
 
@@ -49,15 +54,27 @@ async def upsell_check(bot: Bot) -> None:
     """
     Задача апселла: каждые 24ч находит клиентов с 3+ заказами
     без подписки и предлагает подписку.
+    Использует last_notified_at для дедупликации (cooldown 7 дней).
     """
     while True:
         try:
             all_clients = await database.get_all_clients_with_orders()
+            sent = 0
             for client in all_clients:
                 order_count = client.get("order_count", 0)
                 if order_count < 3:
                     continue
                 telegram_id = client["telegram_id"]
+                # Проверяем cooldown по last_notified_at
+                last_notified = client.get("last_notified_at")
+                if last_notified:
+                    from datetime import datetime, timedelta
+                    try:
+                        last_dt = datetime.fromisoformat(last_notified)
+                        if datetime.utcnow() - last_dt < timedelta(days=7):
+                            continue
+                    except (ValueError, TypeError):
+                        pass
                 # Проверяем есть ли подписка
                 sub = await subscriptions.check_subscription(telegram_id)
                 if sub:
@@ -77,9 +94,12 @@ async def upsell_check(bot: Bot) -> None:
                         text=text,
                         parse_mode="HTML",
                     )
+                    await database.update_client_last_notified(telegram_id)
+                    sent += 1
                 except Exception as e:
                     logger.debug("Не удалось отправить upsell клиенту %d: %s", telegram_id, e)
-            logger.info("Upsell check завершён")
+            if sent:
+                logger.info("Upsell: отправлено %d предложений", sent)
         except Exception as e:
             logger.error("Ошибка upsell_check: %s", e)
 
