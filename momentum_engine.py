@@ -379,15 +379,15 @@ async def _process_symbol(
             if len(closes) > 33:
                 rsi_prev = calc_rsi(closes[max(0, len(closes) - 33):len(closes) - 3], 14)
                 rsi_delta = rsi - rsi_prev
-                # Если RSI падает быстро (delta < -10) -> не LONG (это breakdown, не reversion)
-                # Если RSI растёт быстро (delta > +10) -> не SHORT
-                if rsi < cfg.MOMENTUM_MR_RSI_OVERSOLD and rsi_delta < -10:
+                # Если RSI падает быстро -> не LONG (это breakdown, не reversion)
+                # Если RSI растёт быстро -> не SHORT
+                if signal == "LONG" and rsi_delta < -cfg.MOMENTUM_MR_RSI_DELTA_THRESHOLD:
                     return f"сигнал LONG, но RSI momentum слишком сильный ({rsi_delta:+.0f})"
-                if rsi > cfg.MOMENTUM_MR_RSI_OVERBOUGHT and rsi_delta > 10:
+                if signal == "SHORT" and rsi_delta > cfg.MOMENTUM_MR_RSI_DELTA_THRESHOLD:
                     return f"сигнал SHORT, но RSI momentum слишком сильный ({rsi_delta:+.0f})"
 
         # Volume confirmation: вход только при повышенном volume (capitulation, не drift)
-        if len(klines) > 21:
+        if cfg.MOMENTUM_MR_MIN_VOL_RATIO > 0 and len(klines) > 21:
             volumes = [float(k.get("volume", 0)) for k in klines[-21:-1]]
             avg_vol = sum(volumes) / len(volumes) if volumes else 0
             cur_vol = float(klines[-1].get("volume", 0))
