@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Automated test suite: pytest + pytest-asyncio. Unit tests for pricing, billing, ab_testing, i18n, utils. Integration tests for database (in-memory SQLite) and pipeline (mocked OpenAI). Minimum 20 tests covering critical business logic.",
+  "status": "in_progress",
+  "steps": [
+    "Create ai_agency/tests/__init__.py: Empty file to make tests a package.",
+    "Create ai_agency/tests/conftest.py: Shared fixtures. 1) fixture 'db_path' using tmp_path to create a temp SQLite DB. 2) fixture 'mock_config' that monkeypatches config.DATABASE_PATH to use the temp DB and sets required config values. 3) fixture 'initialized_db' that calls database.init_db() with the mock config (async fixture). 4) fixture 'mock_openai' that patches openai.AsyncOpenAI to return controlled responses. 5) fixture 'sample_client' that creates a test client in the DB.",
+    "Create ai_agency/tests/test_pricing.py: Test pricing.calculate_price(). Tests: 1) base price for each service type, 2) length multiplier x1.0 for <=1000 chars, 3) length multiplier x1.5 for <=3000 chars, 4) length multiplier x2.0 for <=5000 chars, 5) length multiplier x3.0 for >5000 chars, 6) urgency multiplier x1.5, 7) combined length + urgency multiplier, 8) invalid service_type returns 0.0. At least 8 tests.",
+    "Create ai_agency/tests/test_billing.py: Test billing module with real SQLite. Tests: 1) check_balance returns True when sufficient, 2) check_balance returns False when insufficient, 3) charge_client deducts correctly, 4) charge_client fails with insufficient funds (atomic), 5) top_up_balance increases balance, 6) check_free_trial returns True for new user, 7) mark_free_trial_used makes trial unavailable. At least 7 tests. All async using pytest-asyncio.",
+    "Create ai_agency/tests/test_ab_testing.py: Test A/B testing logic. Tests: 1) select_variant returns None when no variants exist, 2) select_variant returns a variant after adding one, 3) UCB1 exploration (variant with <5 uses gets selected), 4) record_result increments total_score, 5) get_best_variant returns None when insufficient data, 6) get_best_variant returns best when enough data. At least 6 tests.",
+    "Create ai_agency/tests/test_i18n.py: Test internationalization. Tests: 1) get_text returns RU text for RU key, 2) get_text returns EN text for EN key, 3) get_text with kwargs formats correctly, 4) get_text fallbacks to RU if EN key missing, 5) get_text returns key if not found at all. At least 5 tests.",
+    "Create ai_agency/tests/test_utils.py: Test utility functions. Tests: 1) format_number with integer, 2) format_number with float, 3) progress_bar at 0%, 4) progress_bar at 50%, 5) progress_bar at 100%, 6) status_indicator returns correct emoji for each status, 7) sparkline produces correct length output, 8) _card formats correctly with title, emoji, body. At least 8 tests.",
+    "Create ai_agency/tests/test_database.py: Integration tests with in-memory/temp SQLite. Tests: 1) init_db creates all tables, 2) get_or_create_client creates new client, 3) get_or_create_client returns existing, 4) create_order and get_order_by_id, 5) update_order_status changes status, 6) get_client_balance returns correct value, 7) update_balance changes balance, 8) credit_referral_bonus works end-to-end. At least 8 tests.",
+    "Create ai_agency/tests/test_pipeline.py: Integration tests with mocked LLM. Tests: 1) process_order returns result for simple service (REWRITE), 2) process_order returns result for full pipeline service (COPYWRITING), 3) process_order handles OpenAI failure with Groq fallback, 4) process_order handles both APIs failing (returns None), 5) quality check triggers retry, 6) A/B variant is selected when variants exist. At least 5 tests. Mock both AsyncOpenAI and AsyncGroq.",
+    "Create ai_agency/tests/test_rate_limiter.py: Test rate limiting logic. Tests: 1) first order is allowed, 2) 5th order in an hour is allowed, 3) 6th order in an hour is rejected, 4) flood detection (>20 messages/min bans user), 5) cooldown enforced between orders (30s). At least 5 tests.",
+    "Create ai_agency/tests/test_queue_manager.py: Test queue system. Tests: 1) enqueue adds item, 2) priority ordering (urgent first), 3) queue stats returns correct values, 4) queue full returns wait time estimate. At least 4 tests. Use asyncio for async tests."
+  ],
+  "acceptance_criteria": [
+    "Running 'python -m pytest tests/ -v' from ai_agency/ directory discovers and runs all tests",
+    "At least 20 tests pass successfully",
+    "Tests cover all specified modules: pricing, billing, ab_testing, i18n, utils, database, pipeline, rate_limiter, queue_manager",
+    "No test requires external API calls (all mocked)",
+    "Database tests use temporary SQLite files, not the production database"
+  ],
+  "verification": [
+    "cd /projects/sandbox/Khy18/ai_agency && python -m pytest tests/ -v --tb=short 2>&1 | tail -20",
+    "cd /projects/sandbox/Khy18/ai_agency && python -m pytest tests/ --co -q 2>&1 | wc -l"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
