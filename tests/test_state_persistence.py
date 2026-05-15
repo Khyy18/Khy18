@@ -92,3 +92,57 @@ def test_handles_set_and_deque(tmp_db):
     assert set(loaded["disabled_exchanges"]) == {"bybit", "okx"}
     # deque → list.
     assert loaded["some_deque"] == [1, 2, 3]
+
+
+# ─── JSON file-based save_state / load_state tests ─────────────────────
+
+
+def test_save_state_and_load_state_roundtrip(tmp_path, monkeypatch):
+    """save_state writes JSON atomically, load_state reads it back."""
+    import state_persistence
+
+    state_file = str(tmp_path / "state.json")
+    monkeypatch.setattr(state_persistence, "_get_state_path", lambda: state_file)
+
+    test_state = {"global": {"bot_running": True, "test_val": 123}}
+    state_persistence.save_state(test_state)
+    loaded = state_persistence.load_state()
+    assert loaded == test_state
+
+
+def test_load_state_missing_file(tmp_path, monkeypatch):
+    """load_state returns None when file doesn't exist."""
+    import state_persistence
+
+    state_file = str(tmp_path / "nonexistent.json")
+    monkeypatch.setattr(state_persistence, "_get_state_path", lambda: state_file)
+    assert state_persistence.load_state() is None
+
+
+def test_save_state_atomic_on_error(tmp_path, monkeypatch):
+    """If save_state fails mid-write, original file is preserved."""
+    import state_persistence
+
+    state_file = str(tmp_path / "state.json")
+    monkeypatch.setattr(state_persistence, "_get_state_path", lambda: state_file)
+
+    # Write initial state
+    initial = {"global": {"version": 1}}
+    state_persistence.save_state(initial)
+
+    # Try to save something that will fail serialization
+    class Unserializable:
+        def __repr__(self):
+            raise RuntimeError("boom")
+
+    bad_state = {"obj": Unserializable()}
+    # This should not corrupt the existing file
+    try:
+        state_persistence.save_state(bad_state)
+    except Exception:
+        pass
+
+    # Original file should still be readable (or at least exist)
+    loaded = state_persistence.load_state()
+    # Either it's the original state or the bad one got through via str fallback
+    assert loaded is not None

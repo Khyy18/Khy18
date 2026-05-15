@@ -94,3 +94,37 @@ def test_get_status():
     assert "hwm" in status
     assert "margin_to_kill" in status
     assert status["threshold_pct"] == 0.15
+
+
+# ─── Kill file tests ───────────────────────────────────────────────────
+
+
+def test_kill_file_activates_kill(tmp_path, monkeypatch):
+    """Touch KILL file triggers is_kill_active and check_global_kill."""
+    kill_file = str(tmp_path / "KILL")
+    monkeypatch.setattr(global_kill_switch, "KILL_FILE_PATH", kill_file)
+
+    state = {"global": {"global_kill_active": False}}
+    monkeypatch.setattr(capital_allocator, "get_drawdown_pct", lambda s: 0.0)
+    monkeypatch.setattr(capital_allocator, "get_current_equity", lambda s: 1000.0)
+
+    # No file = not active
+    assert global_kill_switch.is_kill_active(state) is False
+    assert global_kill_switch.check_global_kill(state) is False
+
+    # Create kill file
+    open(kill_file, 'w').close()
+
+    # Now should be active
+    assert global_kill_switch.is_kill_active(state) is True
+    assert global_kill_switch.check_global_kill(state) is True
+    assert state["global"]["global_kill_active"] is True
+
+
+def test_kill_file_absent_not_active(tmp_path, monkeypatch):
+    """Without kill file, is_kill_active returns False (only checks state)."""
+    kill_file = str(tmp_path / "KILL_NONEXISTENT")
+    monkeypatch.setattr(global_kill_switch, "KILL_FILE_PATH", kill_file)
+
+    state = {"global": {"global_kill_active": False}}
+    assert global_kill_switch.is_kill_active(state) is False

@@ -447,13 +447,16 @@ async def _health_handler(request):
 
 async def _start_health_server():
     """Start health endpoint on port 8081."""
-    app = web.Application()
-    app.router.add_get("/health", _health_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8081)
-    await site.start()
-    print("[COMBO] Health endpoint: http://0.0.0.0:8081/health")
+    try:
+        app = web.Application()
+        app.router.add_get("/health", _health_handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", 8081)
+        await site.start()
+        print("[COMBO] Health endpoint: http://0.0.0.0:8081/health")
+    except OSError as exc:
+        print(f"[COMBO] Health endpoint failed to start (port 8081 busy?): {exc}")
 
 
 # ─── Entry point ───────────────────────────────────────────────────────

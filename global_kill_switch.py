@@ -33,6 +33,15 @@ def check_global_kill(state: dict[str, Any]) -> bool:
     if g.get("global_kill_active", False):
         return True
 
+    # File-based kill: triggers full kill sequence
+    try:
+        if os.path.exists(KILL_FILE_PATH):
+            g["global_kill_active"] = True
+            g["global_kill_reason"] = f"Kill file detected: {KILL_FILE_PATH}"
+            return True
+    except OSError:
+        pass
+
     dd = capital_allocator.get_drawdown_pct(state)
     threshold = cfg.GLOBAL_MAX_DRAWDOWN_PCT
 
