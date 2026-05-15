@@ -1,11 +1,22 @@
 import asyncio
+import hashlib
+import json
+import logging
 import time
 from typing import Any
 
 import anthropic
 import openai
+import redis.asyncio as aioredis
 
-from core.observability import llm_requests_total, llm_latency_seconds, llm_errors_total
+from core.observability import (
+    llm_requests_total,
+    llm_latency_seconds,
+    llm_errors_total,
+    fallback_triggered_total,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -109,3 +120,117 @@ class LLMClient:
         response = await self._anthropic_client.messages.create(**kwargs)
         content_block = response.content[0]
         return content_block.text if hasattr(content_block, "text") else str(content_block)
+
+
+class FallbackLLMClient:
+    """LLM client with fallback chain, response caching, and per-provider timeouts."""
+
+    def __init__(self, providers: list[dict[str, Any]], redis_url: str) -> None:
+        """Initialize fallback client with ordered provider list and Redis for caching.
+
+        Args:
+            providers: List of dicts with keys: provider, api_key, model, timeout.
+            redis_url: Redis connection URL for response caching.
+        """
+        self.providers = providers
+        self._clients: list[tuple[LLMClient, float]] = []
+        for p in providers:
+            client = LLMClient(
+                provider=p["provider"],
+                api_key=p["api_key"],
+                model=p["model"],
+            )
+            self._clients.append((client, float(p["timeout"])))
+        self._redis: aioredis.Redis = aioredis.from_url(redis_url)
+
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        """Generate response trying each provider in order with caching.
+
+        Checks Redis cache first. On cache miss, tries providers sequentially
+        with per-provider timeouts. Caches successful responses for 24 hours.
+
+        Raises:
+            RuntimeError: If all providers fail.
+        """
+        # Use first provider's model for cache key
+        model_name = self.providers[0]["model"] if self.providers else ""
+        cache_key_raw = json.dumps(messages, sort_keys=True) + model_name
+        cache_key = hashlib.sha256(cache_key_raw.encode()).hexdigest()
+        redis_key = f"llm_cache:{cache_key}"
+
+        # Check cache
+        try:
+            cached = await self._redis.get(redis_key)
+            if cached is not None:
+                return cached.decode() if isinstance(cached, bytes) else str(cached)
+        except Exception:
+            pass
+
+        # Try each provider in order
+        last_error: Exception | None = None
+        for i, (client, timeout) in enumerate(self._clients):
+            try:
+                result = await asyncio.wait_for(
+                    client.generate(messages, temperature, max_tokens),
+                    timeout=timeout,
+                )
+                # Cache successful response with 24h TTL
+                try:
+                    await self._redis.setex(redis_key, 86400, result)
+                except Exception:
+                    pass
+                return result
+            except (asyncio.TimeoutError, Exception) as exc:
+                last_error = exc
+                provider_name = self.providers[i]["provider"]
+                logger.warning(
+                    "Provider %s failed: %s. Trying next provider.",
+                    provider_name,
+                    str(exc),
+                )
+                fallback_triggered_total.labels(provider=provider_name).inc()
+
+        raise RuntimeError(
+            f"All LLM providers failed. Last error: {last_error}"
+        )
+
+    async def close(self) -> None:
+        """Close the Redis connection."""
+        await self._redis.close()
+
+
+class PromptRegistry:
+    """Registry for versioned prompt templates."""
+
+    def __init__(self) -> None:
+        self._prompts: dict[str, dict[str, Any]] = {}
+
+    def register(self, name: str, template: str, version: int) -> None:
+        """Register a prompt template with a version number.
+
+        Args:
+            name: Unique name for the prompt.
+            template: The prompt template string.
+            version: Version number for tracking.
+        """
+        self._prompts[name] = {"version": version, "template": template}
+
+    def get(self, name: str) -> tuple[int, str]:
+        """Retrieve the latest version and template for a prompt.
+
+        Args:
+            name: The prompt name to look up.
+
+        Returns:
+            Tuple of (version, template).
+
+        Raises:
+            KeyError: If prompt name is not registered.
+        """
+        entry = self._prompts[name]
+        return entry["version"], entry["template"]

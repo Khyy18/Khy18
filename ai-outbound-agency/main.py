@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             from channels.email.tracker import EmailTracker
             from channels.email.warmup import DomainWarmupManager
             from agents.copywriter import CopywriterAgent
-            from core.llm import LLMClient
+            from core.llm import LLMClient, FallbackLLMClient
             from scheduler import Scheduler
             from scheduler.sequence_runner import SequenceRunner
             from scheduler.warmup_scheduler import WarmupScheduler
@@ -86,10 +86,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 domains=[a.get("domain", "") for a in smtp_accounts],
             )
 
-            llm_client = LLMClient(
-                provider="openai",
-                api_key=settings.openai_api_key,
-                model="gpt-4",
+            # Build fallback chain from settings
+            _provider_configs = {
+                "openai": {
+                    "provider": "openai",
+                    "api_key": settings.openai_api_key,
+                    "model": settings.llm_openai_model,
+                    "timeout": settings.llm_openai_timeout,
+                },
+                "anthropic": {
+                    "provider": "anthropic",
+                    "api_key": settings.anthropic_api_key,
+                    "model": settings.llm_anthropic_model,
+                    "timeout": settings.llm_anthropic_timeout,
+                },
+                "groq": {
+                    "provider": "groq",
+                    "api_key": settings.groq_api_key,
+                    "model": settings.llm_groq_model,
+                    "timeout": settings.llm_groq_timeout,
+                },
+            }
+            _chain_names = [
+                p.strip()
+                for p in settings.llm_fallback_chain.split(",")
+                if p.strip()
+            ]
+            _fallback_providers = [
+                _provider_configs[name]
+                for name in _chain_names
+                if name in _provider_configs
+            ]
+
+            llm_client = FallbackLLMClient(
+                providers=_fallback_providers,
+                redis_url=settings.redis_url,
             )
             copywriter = CopywriterAgent(llm_client=llm_client, settings=settings)
 
@@ -117,14 +148,45 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Initialize ConversationAgent and related singletons for webhook use
     try:
-        from core.llm import LLMClient
+        from core.llm import FallbackLLMClient
         from integrations.calendar import CalendarIntegration
         from agents.conversation import ConversationAgent
 
-        webhook_llm_client = LLMClient(
-            provider="openai",
-            api_key=settings.openai_api_key,
-            model="gpt-4",
+        # Build fallback chain for webhook LLM client
+        _webhook_provider_configs = {
+            "openai": {
+                "provider": "openai",
+                "api_key": settings.openai_api_key,
+                "model": settings.llm_openai_model,
+                "timeout": settings.llm_openai_timeout,
+            },
+            "anthropic": {
+                "provider": "anthropic",
+                "api_key": settings.anthropic_api_key,
+                "model": settings.llm_anthropic_model,
+                "timeout": settings.llm_anthropic_timeout,
+            },
+            "groq": {
+                "provider": "groq",
+                "api_key": settings.groq_api_key,
+                "model": settings.llm_groq_model,
+                "timeout": settings.llm_groq_timeout,
+            },
+        }
+        _webhook_chain_names = [
+            p.strip()
+            for p in settings.llm_fallback_chain.split(",")
+            if p.strip()
+        ]
+        _webhook_fallback_providers = [
+            _webhook_provider_configs[name]
+            for name in _webhook_chain_names
+            if name in _webhook_provider_configs
+        ]
+
+        webhook_llm_client = FallbackLLMClient(
+            providers=_webhook_fallback_providers,
+            redis_url=settings.redis_url,
         )
         webhook_calendar = CalendarIntegration(
             provider=settings.calendar_provider,
