@@ -43,6 +43,11 @@ class ChannelType(str, enum.Enum):
     twitter = "twitter"
 
 
+class UserRole(str, enum.Enum):
+    admin = "admin"
+    member = "member"
+
+
 class MessageDirection(str, enum.Enum):
     outbound = "outbound"
     inbound = "inbound"
@@ -89,6 +94,20 @@ class Tenant(Base):
     leads = relationship("Lead", back_populates="tenant")
     campaigns = relationship("Campaign", back_populates="tenant")
     sequences = relationship("Sequence", back_populates="tenant")
+    users = relationship("User", back_populates="tenant")
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    email = Column(String, unique=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    role = Column(Enum(UserRole), default=UserRole.member, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="users")
 
 
 class Lead(Base):

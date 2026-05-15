@@ -14,3 +14,9 @@ httpx
 aioimaplib
 aiosmtplib
 python-dateutil
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart
+jinja2
+itsdangerous
+email-validator

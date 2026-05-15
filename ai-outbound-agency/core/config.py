@@ -37,5 +37,9 @@ class Settings(BaseSettings):
     calcom_base_url: str = "https://api.cal.com/v1"
     google_calendar_credentials_json: str = ""
 
+    # JWT Auth
+    jwt_secret_key: str = "change-me-in-production"
+    jwt_algorithm: str = "HS256"
+
 
 settings = Settings()  # type: ignore[call-arg]
