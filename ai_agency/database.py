@@ -150,6 +150,18 @@ async def init_db() -> None:
                 parsed_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
+        # Таблица api_keys для REST API аутентификации
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key TEXT UNIQUE NOT NULL,
+                client_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                rate_limit INTEGER NOT NULL DEFAULT 60,
+                requests_today INTEGER NOT NULL DEFAULT 0,
+                last_reset TEXT
+            )
+        """)
         await db.commit()
 
 

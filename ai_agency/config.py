@@ -55,6 +55,10 @@ KWORK_KEYWORDS: str = os.getenv("KWORK_KEYWORDS", "копирайтинг,рер
 # Мульти-бот архитектура (JSON-строка)
 NICHE_BOTS: str = os.getenv("NICHE_BOTS", "[]")
 
+# REST API
+API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
+API_PORT: int = int(os.getenv("API_PORT", "8000"))
+
 # Подписки
 SUBSCRIPTION_BASIC_PRICE: int = int(os.getenv("SUBSCRIPTION_BASIC_PRICE", "990"))
 SUBSCRIPTION_BASIC_ORDERS: int = int(os.getenv("SUBSCRIPTION_BASIC_ORDERS", "20"))
