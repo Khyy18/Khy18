@@ -356,6 +356,23 @@ async def _process_symbol(
     except Exception:  # noqa: BLE001
         score = 0.5  # fallback — входим без scoring
 
+    # Spread guard: проверяем что ликвидность достаточная
+    try:
+        import runtime_state
+        top = await adapter.get_orderbook_top(session, symbol)
+        if top and runtime_state.is_spread_too_wide(top[0], top[1]):
+            return f"сигнал {signal}, но spread слишком широкий"
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Correlation guard: не открывать в том же направлении по BTC если ETH уже LONG
+    try:
+        import runtime_state
+        if not runtime_state.check_correlation_allows_entry(state, symbol, signal):
+            return f"сигнал {signal}, но correlation guard (группа уже open)"
+    except Exception:  # noqa: BLE001
+        pass
+
     # Открываем позицию
     return await _open_position(
         session, state, adapter, symbol, signal, current_price

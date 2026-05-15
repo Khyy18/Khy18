@@ -87,6 +87,45 @@ def _progress_bar(value: float, total: float, width: int = 10) -> str:
     return "\u25b0" * filled + "\u25b1" * (width - filled)
 
 
+def _sparkline(values: list[float], width: int = 8) -> str:
+    """Sparkline из последних N значений через ▁▂▃▄▅▆▇█."""
+    chars = "▁▂▃▄▅▆▇█"
+    if not values:
+        return ""
+    # Берём последние width значений
+    recent = values[-width:]
+    if len(recent) < 2:
+        return chars[4] * len(recent)
+    mn = min(recent)
+    mx = max(recent)
+    rng = mx - mn
+    if rng == 0:
+        return chars[4] * len(recent)
+    result = ""
+    for v in recent:
+        idx = int((v - mn) / rng * (len(chars) - 1))
+        result += chars[max(0, min(len(chars) - 1, idx))]
+    return result
+
+
+def _regime_icon(regime: str) -> str:
+    """Иконка режима рынка."""
+    icons = {
+        "TRENDING": "\U0001f9e0 TRENDING \u2197",
+        "RANGING": "\U0001f4ca RANGING \u2194",
+        "VOLATILE": "\u26a1 VOLATILE",
+    }
+    return icons.get(regime, "\u2753 ???")
+
+
+def _grid_bar(active: int, total: int, width: int = 10) -> str:
+    """Визуальная полоса заполнения grid: ████░░░░░░."""
+    if total <= 0:
+        return "\u2591" * width
+    filled = round(active / total * width)
+    return "\u2588" * filled + "\u2591" * (width - filled)
+
+
 # ─── Клавиатура ───────────────────────────────────────────────────────
 
 def combo_keyboard() -> dict[str, Any]:
@@ -208,15 +247,26 @@ async def _handle_status(
     dd = summary["drawdown_pct"]
     hwm = summary["hwm"]
 
+    # Режим рынка
+    g = state.get("global", {})
+    regime = g.get("current_regime", "")
+    regime_line = _regime_icon(regime) if regime else ""
+
     body = [
         f"Equity:    ${_fmt_num(equity)}",
         f"HWM:       ${_fmt_num(hwm)}",
         f"Drawdown:  {dd*100:.1f}% {_progress_bar(dd, cfg.GLOBAL_MAX_DRAWDOWN_PCT)}",
         f"Kill порог: {cfg.GLOBAL_MAX_DRAWDOWN_PCT*100:.0f}%",
+    ]
+
+    if regime_line:
+        body.append(f"Режим:     {regime_line}")
+
+    body += [
         "",
         f"{kill_icon} Kill-switch: {'АКТИВЕН' if ks['active'] else 'выкл'}",
         "",
-        "── Стратегии ──",
+        "\u2500\u2500 Стратегии \u2500\u2500",
         "",
     ]
 
@@ -229,15 +279,25 @@ async def _handle_status(
         pnl = s["pnl"]
         alloc_pct = s["alloc_pct"] * 100
         alloc_usdt = s["alloc_usdt"]
-        arrow = "\u25b2" if pnl >= 0 else "\u25bc"
+        arrow = "\u25b2+" if pnl >= 0 else "\u25bc\u2212"
         body.append(
             f"{icon} {label:12s} {alloc_pct:.0f}% (${_fmt_num(alloc_usdt, 0)}) "
-            f"{arrow}{pnl:+.2f}"
+            f"{arrow}{abs(pnl):.2f}"
         )
 
     total_pnl = capital_allocator.get_total_pnl(state)
+    total_arrow = "\u25b2+" if total_pnl >= 0 else "\u25bc\u2212"
     body.append("")
-    body.append(f"Итого PnL: {total_pnl:+.2f} USDT")
+    body.append(f"Итого PnL: {total_arrow}{abs(total_pnl):.2f} USDT")
+
+    # Sparkline PnL (из signals_history momentum)
+    mom_state = state.get("momentum", {})
+    signals = mom_state.get("signals_history", [])
+    if signals:
+        pnl_values = [float(s.get("price", 0)) for s in signals[-8:]]
+        spark = _sparkline(pnl_values)
+        if spark:
+            body.append(f"Trend:     {spark}")
 
     return _card("Комбо-статус", "\U0001f4ca", body)
 
@@ -260,28 +320,41 @@ async def _handle_grid(
     status = grid_engine.get_grid_status(state)
 
     enabled_icon = "\U0001f7e2" if status["enabled"] else "\U0001f534"
+
+    # Адаптивный шаг из state
+    g = state.get("global", {})
+    actual_step = ""
+    for sym in cfg.GRID_SYMBOLS:
+        sym_state = state.get("grid", {}).get("symbols", {}).get(sym, {})
+        s = sym_state.get("step_pct_actual")
+        if s:
+            actual_step = f" (ATR: {float(s)*100:.2f}%)"
+            break
+
     body = [
         f"Состояние: {enabled_icon} {'активен' if status['enabled'] else 'выкл'}",
         f"Биржа: {status['exchange'].upper()}",
         f"Уровней: {status['levels_per_side']} × 2 стороны",
-        f"Шаг: {status['step_pct']*100:.2f}%",
+        f"Шаг: {status['step_pct']*100:.2f}%{actual_step}",
         f"Плечо: {status['leverage']}x",
         "",
         f"Циклов завершено: {status['total_cycles']}",
         f"Profit: {status['total_profit_usdt']:+.4f} USDT",
         "",
-        "── Символы ──",
+        "\u2500\u2500 Символы \u2500\u2500",
     ]
 
     for sym, info in status["symbols"].items():
         short_sym = sym.replace("USDT", "")
         mid = info["mid_price"]
         active = info["active_orders"]
-        filled = info["filled_orders"]
+        total = info["total_levels"]
+        bar = _grid_bar(active, total)
         body.append(
-            f"  {short_sym}: mid=${_fmt_num(mid, 1)} "
-            f"act={active} fill={filled}"
+            f"  {short_sym}: {bar} {active}/{total}"
         )
+        if mid > 0:
+            body.append(f"       mid=${_fmt_num(mid, 1)}")
 
     text = _card("Grid-бот", "\u25a6", body)
 

@@ -323,6 +323,44 @@ async def _main_loop(
             # 5. Обновляем HWM
             capital_allocator.update_hwm(state)
 
+            # 5.5: Grid unrealized loss check
+            try:
+                import runtime_state as _rs
+                # Собираем текущие цены по grid-символам
+                grid_prices: dict[str, float] = {}
+                for sym in cfg.GRID_SYMBOLS:
+                    sym_state = state.get("grid", {}).get("symbols", {}).get(sym, {})
+                    mp = float(sym_state.get("mid_price", 0))
+                    if mp > 0:
+                        grid_prices[sym] = mp
+                if grid_prices and _rs.should_force_close_grid(state, grid_prices):
+                    print("[COMBO] Grid unrealized loss limit exceeded — force close")
+                    try:
+                        msg = await grid_engine.stop_grid(session, state)
+                        await _notify(session, combo_telegram._card(
+                            "Grid force close", "\U0001f6a8",
+                            ["Unrealized loss превысил лимит", msg]
+                        ))
+                        # Сразу rebuild
+                        grid_state_inner = state.get("grid", {})
+                        grid_state_inner["enabled"] = True
+                        grid_state_inner["last_tick_epoch"] = 0.0
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[COMBO] grid force close error: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMBO] grid unrealized check: {exc}")
+
+            # 5.6: Performance monitoring (rolling winrate alert)
+            try:
+                import runtime_state as _rs
+                perf_alert = _rs.check_performance_degradation(state)
+                if perf_alert:
+                    await _notify(session, combo_telegram._card(
+                        "Деградация", "\u26a0\ufe0f", [perf_alert]
+                    ))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMBO] perf monitoring: {exc}")
+
             # 6. Persist state
             await _persist_tick(state)
 

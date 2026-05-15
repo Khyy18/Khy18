@@ -107,6 +107,34 @@ MOMENTUM_TRAIL_ACTIVATE_PCT = float(os.getenv("MOMENTUM_TRAIL_ACTIVATE_PCT", "0.
 MOMENTUM_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_TRAIL_DISTANCE_PCT", "0.01") or 0.01)
 
 
+# ─── Grid: защита от unrealized loss ───────────────────────────────────
+# Если суммарный unrealized loss по grid (все filled buy без matched sell)
+# превышает этот % от equity → force close all grid + rebuild.
+GRID_MAX_UNREALIZED_LOSS_PCT = float(os.getenv("GRID_MAX_UNREALIZED_LOSS_PCT", "0.05") or 0.05)
+
+# ─── Spread guard ─────────────────────────────────────────────────────
+# Если spread (ask - bid) / mid > порога → не размещать ордера (ликвидность
+# испарилась, maintenance, flash crash). 0.005 = 0.5%.
+MAX_SPREAD_PCT = float(os.getenv("MAX_SPREAD_PCT", "0.005") or 0.005)
+
+# ─── Correlation guard ─────────────────────────────────────────────────
+# Максимальное суммарное количество OPEN позиций momentum по коррелированным
+# символам (BTC+ETH считаются одной группой). 0 = выключено.
+CORRELATION_MAX_SAME_DIRECTION = int(os.getenv("CORRELATION_MAX_SAME_DIRECTION", "1") or 1)
+
+# Группы коррелированных символов (одна группа = одно направление макс.)
+CORRELATION_GROUPS: list[list[str]] = [
+    ["BTCUSDT", "ETHUSDT"],
+]
+
+# ─── Performance monitoring ────────────────────────────────────────────
+# Rolling window (количество сделок) для расчёта winrate.
+PERF_ROLLING_WINDOW = int(os.getenv("PERF_ROLLING_WINDOW", "20") or 20)
+# Минимальный допустимый winrate. Если rolling winrate < порога → alert.
+PERF_MIN_WINRATE = float(os.getenv("PERF_MIN_WINRATE", "0.30") or 0.30)
+# Cooldown между алертами о деградации (секунды).
+PERF_ALERT_COOLDOWN_SEC = float(os.getenv("PERF_ALERT_COOLDOWN_SEC", "21600") or 21600)
+
 # ─── Grid: адаптивный шаг ──────────────────────────────────────────────
 # Динамический шаг = ATR(14) * GRID_ATR_MULTIPLIER. Если 0 — фиксированный GRID_STEP_PCT.
 GRID_ATR_MULTIPLIER = float(os.getenv("GRID_ATR_MULTIPLIER", "1.5") or 1.5)

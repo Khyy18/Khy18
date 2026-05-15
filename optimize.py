@@ -106,11 +106,13 @@ def _score_result(result: dict[str, Any]) -> float:
 # ─── Main ──────────────────────────────────────────────────────────────
 
 async def async_main() -> None:
-    parser = argparse.ArgumentParser(description="Optimize momentum parameters")
-    parser.add_argument("--symbol", default="BTCUSDT")
-    parser.add_argument("--days", type=int, default=90)
-    parser.add_argument("--tf", default="15")
+    parser = argparse.ArgumentParser(description="Backtest momentum strategy")
+    parser.add_argument("--symbol", default="BTCUSDT", help="Символ (default: BTCUSDT)")
+    parser.add_argument("--days", type=int, default=90, help="Период в днях (default: 90)")
+    parser.add_argument("--tf", default="15", help="Таймфрейм в минутах (default: 15)")
     parser.add_argument("--iterations", type=int, default=50)
+    parser.add_argument("--walk-forward", action="store_true",
+                        help="Включить walk-forward validation (train/validate/test split)")
     args = parser.parse_args()
 
     print(f"[OPT] Загрузка {args.symbol} {args.tf}m за {args.days} дней...")
@@ -125,36 +127,119 @@ async def async_main() -> None:
         print("[OPT] Слишком мало данных")
         return
 
+    if args.walk_forward:
+        # Walk-forward: split 60% train, 20% validate, 20% test
+        n = len(klines)
+        train_end = int(n * 0.6)
+        val_end = int(n * 0.8)
+        train_klines = klines[:train_end]
+        val_klines = klines[train_end:val_end]
+        test_klines = klines[val_end:]
+
+        print(f"[WF] Walk-forward split: train={len(train_klines)}, "
+              f"val={len(val_klines)}, test={len(test_klines)}")
+        print()
+
+        # 1. Optimize on train
+        print("=" * 60)
+        print("  PHASE 1: OPTIMIZE on TRAIN")
+        print("=" * 60)
+        best_score, best_params, best_result, _ = _run_optimization(
+            train_klines, args.iterations
+        )
+        print(f"\n  Best on train: score={best_score:.3f}")
+        _print_params(best_params)
+
+        # 2. Validate
+        print()
+        print("=" * 60)
+        print("  PHASE 2: VALIDATE")
+        print("=" * 60)
+        val_result = backtest_momentum.run_backtest(
+            klines=val_klines, **_params_to_kwargs(best_params)
+        )
+        val_score = _score_result(val_result)
+        print(f"  Validation score: {val_score:.3f}")
+        print(f"  Trades: {val_result.get('trades', 0)} | "
+              f"WR: {val_result.get('winrate', 0)*100:.0f}% | "
+              f"PnL: {val_result.get('total_pnl_pct', 0)*100:+.1f}%")
+
+        # 3. Test
+        print()
+        print("=" * 60)
+        print("  PHASE 3: OUT-OF-SAMPLE TEST")
+        print("=" * 60)
+        test_result = backtest_momentum.run_backtest(
+            klines=test_klines, **_params_to_kwargs(best_params)
+        )
+        test_score = _score_result(test_result)
+        print(f"  Test score: {test_score:.3f}")
+        print(f"  Trades: {test_result.get('trades', 0)} | "
+              f"WR: {test_result.get('winrate', 0)*100:.0f}% | "
+              f"PnL: {test_result.get('total_pnl_pct', 0)*100:+.1f}% | "
+              f"DD: {test_result.get('max_drawdown_pct', 0)*100:.1f}%")
+
+        # 4. Verdict
+        print()
+        print("=" * 60)
+        degradation = 0.0
+        if best_score > 0:
+            degradation = 1.0 - (test_score / best_score)
+        if degradation > 0.5:
+            print("  ⚠️ OVERFIT WARNING: test score degraded > 50% vs train")
+            print("  Параметры НЕ рекомендуются для production.")
+        elif degradation > 0.25:
+            print("  ⚠️ MODERATE DEGRADATION: test score -25..50% vs train")
+            print("  Параметры можно использовать с осторожностью.")
+        else:
+            print("  ✅ STABLE: test score close to train (degradation < 25%)")
+            print("  Параметры рекомендуются для production.")
+        print(f"  Degradation: {degradation*100:.0f}%")
+        print("=" * 60)
+    else:
+        # Обычная оптимизация на всех данных
+        best_score, best_params, best_result, all_results = _run_optimization(
+            klines, args.iterations
+        )
+        _print_final_report(args.symbol, args.days, best_score, best_params, best_result, all_results)
+
+
+def _params_to_kwargs(params: dict[str, Any]) -> dict[str, Any]:
+    """Конвертировать params dict в kwargs для run_backtest."""
+    return {
+        "ema_fast": params["ema_fast"],
+        "ema_slow": params["ema_slow"],
+        "stop_loss_pct": params["stop_loss_pct"],
+        "take_profit_pct": params["take_profit_pct"],
+        "min_atr_pct": params["min_atr_pct"],
+        "trail_activate_pct": params["trail_activate_pct"],
+        "trail_distance_pct": params["trail_distance_pct"],
+        "fee_per_side": 0.00055,
+        "leverage": cfg.MOMENTUM_LEVERAGE,
+        "confirmation_bar": True,
+    }
+
+
+def _run_optimization(
+    klines: list[dict[str, Any]],
+    iterations: int,
+) -> tuple[float, dict[str, Any], dict[str, Any], list]:
+    """Запустить оптимизацию на данных. Возвращает (best_score, best_params, best_result, all)."""
     best_score = -999.0
     best_params: dict[str, Any] = {}
     best_result: dict[str, Any] = {}
     all_results: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
 
-    random_phase = int(args.iterations * 0.6)  # 60% random, 40% mutation
+    random_phase = int(iterations * 0.6)
 
-    print(f"[OPT] Итераций: {args.iterations} (random: {random_phase}, hill: {args.iterations - random_phase})")
-    print("-" * 60)
-
-    for i in range(args.iterations):
-        # Генерируем параметры
+    for i in range(iterations):
         if i < random_phase or best_score <= -999:
             params = _random_params()
         else:
             params = _mutate_params(best_params)
 
-        # Бэктест
         result = backtest_momentum.run_backtest(
-            klines=klines,
-            ema_fast=params["ema_fast"],
-            ema_slow=params["ema_slow"],
-            stop_loss_pct=params["stop_loss_pct"],
-            take_profit_pct=params["take_profit_pct"],
-            min_atr_pct=params["min_atr_pct"],
-            trail_activate_pct=params["trail_activate_pct"],
-            trail_distance_pct=params["trail_distance_pct"],
-            fee_per_side=0.00055,
-            leverage=cfg.MOMENTUM_LEVERAGE,
-            confirmation_bar=True,
+            klines=klines, **_params_to_kwargs(params)
         )
 
         score = _score_result(result)
@@ -172,20 +257,33 @@ async def async_main() -> None:
                 f"pnl={result.get('total_pnl_pct', 0)*100:+.1f}%"
             )
 
-    # Итоговый отчёт
+    return best_score, best_params, best_result, all_results
+
+
+def _print_params(params: dict[str, Any]) -> None:
+    """Вывести параметры."""
+    print(f"  MOMENTUM_EMA_FAST = {params.get('ema_fast')}")
+    print(f"  MOMENTUM_EMA_SLOW = {params.get('ema_slow')}")
+    print(f"  MOMENTUM_STOP_LOSS_PCT = {params.get('stop_loss_pct')}")
+    print(f"  MOMENTUM_TAKE_PROFIT_PCT = {params.get('take_profit_pct')}")
+    print(f"  MOMENTUM_MIN_ATR_PCT = {params.get('min_atr_pct')}")
+    print(f"  MOMENTUM_TRAIL_ACTIVATE_PCT = {params.get('trail_activate_pct')}")
+    print(f"  MOMENTUM_TRAIL_DISTANCE_PCT = {params.get('trail_distance_pct')}")
+
+
+def _print_final_report(
+    symbol: str, days: int,
+    best_score: float, best_params: dict[str, Any],
+    best_result: dict[str, Any], all_results: list,
+) -> None:
+    """Финальный отчёт оптимизации."""
     print()
     print("=" * 60)
     print("  ЛУЧШИЙ НАБОР ПАРАМЕТРОВ")
     print("=" * 60)
     print(f"  Score (Calmar × trade_bonus): {best_score:.3f}")
     print()
-    print(f"  MOMENTUM_EMA_FAST = {best_params.get('ema_fast')}")
-    print(f"  MOMENTUM_EMA_SLOW = {best_params.get('ema_slow')}")
-    print(f"  MOMENTUM_STOP_LOSS_PCT = {best_params.get('stop_loss_pct')}")
-    print(f"  MOMENTUM_TAKE_PROFIT_PCT = {best_params.get('take_profit_pct')}")
-    print(f"  MOMENTUM_MIN_ATR_PCT = {best_params.get('min_atr_pct')}")
-    print(f"  MOMENTUM_TRAIL_ACTIVATE_PCT = {best_params.get('trail_activate_pct')}")
-    print(f"  MOMENTUM_TRAIL_DISTANCE_PCT = {best_params.get('trail_distance_pct')}")
+    _print_params(best_params)
     print()
     print(f"  Результат:")
     print(f"    Сделок: {best_result.get('trades', 0)}")

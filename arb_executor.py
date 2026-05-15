@@ -718,6 +718,29 @@ async def evaluate_and_open(
             )
         except Exception:  # noqa: BLE001
             pass
+
+    # Directional SL: ставим algo SL на обеих ногах через биржу.
+    # Если цена уходит на ARB_DIRECTIONAL_STOP_PCT от entry — биржа сама
+    # закроет позицию reduce-only. Это защита от flash crash даже если
+    # бот offline.
+    dir_stop_pct = float(getattr(config, "ARB_DIRECTIONAL_STOP_PCT", 0.03))
+    if dir_stop_pct > 0:
+        # LONG нога: SL ниже entry
+        long_sl = long_fill["fill_price"] * (1 - dir_stop_pct)
+        try:
+            await long_adapter.set_trading_stop(session, cand.symbol, stop_loss=long_sl)
+            print(f"[ARB-EXEC] LONG SL set @{long_sl:.2f}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ARB-EXEC] LONG SL failed: {exc}")
+
+        # SHORT нога: SL выше entry
+        short_sl = short_fill["fill_price"] * (1 + dir_stop_pct)
+        try:
+            await short_adapter.set_trading_stop(session, cand.symbol, stop_loss=short_sl)
+            print(f"[ARB-EXEC] SHORT SL set @{short_sl:.2f}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ARB-EXEC] SHORT SL failed: {exc}")
+
     return arb_id
 
 
