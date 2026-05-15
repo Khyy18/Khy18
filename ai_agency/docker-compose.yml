@@ -13,6 +13,8 @@ services:
       - app-backups:/app/backups
     environment:
       - DATABASE_PATH=/app/data/agency.db
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://agency:agency_pass@postgres:5432/agency
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -96,10 +98,45 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: agency
+      POSTGRES_USER: agency
+      POSTGRES_PASSWORD: agency_pass
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agency"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - full
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - full
+    restart: unless-stopped
+
 volumes:
   app-data:
     driver: local
   app-logs:
     driver: local
   app-backups:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
     driver: local

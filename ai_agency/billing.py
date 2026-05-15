@@ -96,3 +96,55 @@ async def check_free_trial(telegram_id: int) -> bool:
 async def mark_free_trial_used(telegram_id: int) -> None:
     """Отметить бесплатный пробный заказ как использованный."""
     await database.mark_trial_used(telegram_id)
+
+
+async def refund_to_balance(telegram_id: int, order_id: int) -> bool:
+    """
+    Refund order price to client balance and mark order as 'refunded'.
+
+    Returns True on success, False on failure.
+    """
+    order = await database.get_order_by_id(order_id)
+    if not order:
+        return False
+
+    price = order.get("price", 0.0)
+    if price <= 0:
+        return False
+
+    # Top up balance with refund amount
+    await top_up_balance(telegram_id, price, method="refund")
+
+    # Mark order as refunded
+    await database.update_order_status(order_id, "refunded")
+
+    return True
+
+
+async def get_moneyback_stats() -> dict:
+    """
+    Get money-back statistics.
+
+    Returns dict with total_refunds, total_amount_refunded, refund_rate.
+    """
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        # Total refunds
+        cursor = await db.execute(
+            "SELECT COUNT(*), COALESCE(SUM(price), 0) FROM orders WHERE status = 'refunded'"
+        )
+        row = await cursor.fetchone()
+        total_refunds = row[0] if row else 0
+        total_amount = row[1] if row else 0.0
+
+        # Total orders
+        cursor2 = await db.execute("SELECT COUNT(*) FROM orders")
+        row2 = await cursor2.fetchone()
+        total_orders = row2[0] if row2 else 0
+
+        refund_rate = (total_refunds / total_orders * 100) if total_orders > 0 else 0.0
+
+        return {
+            "total_refunds": total_refunds,
+            "total_amount_refunded": total_amount,
+            "refund_rate": refund_rate,
+        }

@@ -2,7 +2,9 @@ aiofiles>=23.0
 aiohttp>=3.9
 aiohttp-jinja2>=1.5
 aiosqlite
+anthropic>=0.25
 apscheduler>=3.10
+asyncpg>=0.29
 fastapi
 feedparser
 groq>=0.4
@@ -10,12 +12,15 @@ jinja2>=3.1
 numpy
 openai>=1.0
 pydantic>=2.0
+pyrogram>=2.0
 pytest>=7.0
 pytest-asyncio>=0.21
 python-docx
 python-telegram-bot>=20.0
+redis[hiredis]>=5.0
 reportlab
 sentry-sdk[pure_eval]>=1.0
 stripe
+together>=1.0
 uvicorn
 yookassa>=3.0

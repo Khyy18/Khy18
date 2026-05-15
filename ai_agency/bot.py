@@ -121,6 +121,12 @@ try:
 except ImportError:
     demand_pricing_module = None
 
+# Интеграция support_handler (graceful)
+try:
+    import support_handler as support_handler_module
+except ImportError:
+    support_handler_module = None
+
 
 def set_order_queue(queue) -> None:
     """Set the shared order queue instance (called from main_multi.py)."""
@@ -198,6 +204,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         i18n.get_text(lang, "persona_greeting", greeting=config.BOT_PERSONA_GREETING),
         "",
         i18n.get_text(lang, "welcome", name=name),
+        "",
+        "\U0001f48e \u0413\u0430\u0440\u0430\u043d\u0442\u0438\u044f: \u043d\u0435 \u043f\u043e\u043d\u0440\u0430\u0432\u0438\u0442\u0441\u044f - \u0432\u0435\u0440\u043d\u0451\u043c \u0434\u0435\u043d\u044c\u0433\u0438",
         "",
         i18n.get_text(lang, "service_list"),
     ]
@@ -724,17 +732,75 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 parse_mode=ParseMode.HTML,
             )
     else:
-        # Оценка низкая - автоматическая переделка
+        # Оценка низкая - возврат средств и предложение переделки
+        # Refund to balance
+        refunded = await billing.refund_to_balance(user.id, order_id)
+
+        refund_text = (
+            "\u041d\u0430\u043c \u0436\u0430\u043b\u044c \u0447\u0442\u043e \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 "
+            "\u043d\u0435 \u0443\u0441\u0442\u0440\u043e\u0438\u043b. \u0421\u0440\u0435\u0434\u0441\u0442\u0432\u0430 "
+            "\u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u044b \u043d\u0430 \u0431\u0430\u043b\u0430\u043d\u0441. "
+            "\u0425\u043e\u0442\u0438\u0442\u0435 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u0443\u044e "
+            "\u043f\u0435\u0440\u0435\u0434\u0435\u043b\u043a\u0443?"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "\U0001f504 \u041f\u0435\u0440\u0435\u0434\u0435\u043b\u0430\u0442\u044c \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e",
+                    callback_data=f"moneyback_redo:{order_id}",
+                ),
+                InlineKeyboardButton(
+                    "\U0001f4b0 \u041e\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u043d\u0430 \u0431\u0430\u043b\u0430\u043d\u0441\u0435",
+                    callback_data=f"moneyback_keep:{order_id}",
+                ),
+            ]
+        ]
+
         await query.edit_message_text(
-            f"\u2b50 Оценка {rating}/5. Мы переделаем заказ бесплатно...",
+            f"\u2b50 \u041e\u0446\u0435\u043d\u043a\u0430 {rating}/5. {refund_text}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.HTML,
         )
 
-        # Получаем данные заказа
-        order = await database.get_order_by_id(order_id)
 
+# --- Moneyback choice ---
+
+async def handle_moneyback_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle moneyback button choice: redo or keep on balance."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # moneyback_redo:{order_id} or moneyback_keep:{order_id}
+    parts = data.split(":")
+    if len(parts) != 2:
+        return
+
+    action = parts[0]  # moneyback_redo or moneyback_keep
+    try:
+        order_id = int(parts[1])
+    except (ValueError, IndexError):
+        return
+
+    user = update.effective_user
+
+    if action == "moneyback_keep":
+        await query.edit_message_text(
+            "\U0001f4b0 \u0421\u0440\u0435\u0434\u0441\u0442\u0432\u0430 \u043d\u0430 "
+            "\u0431\u0430\u043b\u0430\u043d\u0441\u0435. \u0421\u043f\u0430\u0441\u0438\u0431\u043e "
+            "\u0437\u0430 \u043e\u0431\u0440\u0430\u0442\u043d\u0443\u044e \u0441\u0432\u044f\u0437\u044c!",
+            parse_mode=ParseMode.HTML,
+        )
+    elif action == "moneyback_redo":
+        # Re-process the order
+        order = await database.get_order_by_id(order_id)
         if not order:
+            await query.edit_message_text(
+                "\u274c \u0417\u0430\u043a\u0430\u0437 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d.",
+                parse_mode=ParseMode.HTML,
+            )
             return
+
         service_type_value = order["service_type"]
         input_text = order["input_text"]
 
@@ -743,9 +809,18 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except ValueError:
             return
 
-        # Переделываем с улучшенным промптом
+        await query.edit_message_text(
+            "\U0001f504 \u041f\u0435\u0440\u0435\u0434\u0435\u043b\u044b\u0432\u0430\u0435\u043c "
+            "\u0437\u0430\u043a\u0430\u0437...",
+            parse_mode=ParseMode.HTML,
+        )
+
+        # Redo with improved prompt
         improved_input = (
-            "Предыдущий результат неудовлетворительный. Пожалуйста, улучшите текст: " + input_text
+            "\u041f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0439 \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 "
+            "\u043d\u0435\u0443\u0434\u043e\u0432\u043b\u0435\u0442\u0432\u043e\u0440\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0439. "
+            "\u041f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430, \u0443\u043b\u0443\u0447\u0448\u0438\u0442\u0435 "
+            "\u0442\u0435\u043a\u0441\u0442: " + input_text
         )
         new_result, _ = await pipeline.process_order(service_type, improved_input)
 
@@ -755,13 +830,13 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             )
             await context.bot.send_message(
                 chat_id=user.id,
-                text=_card("Заказ переделан", "\U0001f504", [
-                    f"<b>Заказ #{order_id}</b> переделан бесплатно.",
+                text=_card("\u0417\u0430\u043a\u0430\u0437 \u043f\u0435\u0440\u0435\u0434\u0435\u043b\u0430\u043d", "\U0001f504", [
+                    f"<b>\u0417\u0430\u043a\u0430\u0437 #{order_id}</b> \u043f\u0435\u0440\u0435\u0434\u0435\u043b\u0430\u043d \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e.",
                     "",
                 ]),
                 parse_mode=ParseMode.HTML,
             )
-            # Отправляем новый результат
+            # Send new result
             max_len = 4000
             for i in range(0, len(new_result), max_len):
                 chunk = new_result[i:i + max_len]
@@ -773,9 +848,26 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         else:
             await context.bot.send_message(
                 chat_id=user.id,
-                text="\u274c К сожалению, переделка не удалась. Обратитесь в поддержку.",
+                text="\u274c \u041a \u0441\u043e\u0436\u0430\u043b\u0435\u043d\u0438\u044e, "
+                     "\u043f\u0435\u0440\u0435\u0434\u0435\u043b\u043a\u0430 \u043d\u0435 "
+                     "\u0443\u0434\u0430\u043b\u0430\u0441\u044c. "
+                     "\u041e\u0431\u0440\u0430\u0442\u0438\u0442\u0435\u0441\u044c \u0432 "
+                     "\u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0443.",
                 parse_mode=ParseMode.HTML,
             )
+
+
+# --- Support fallback handler ---
+
+async def handle_support_fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fallback handler (group=2) that answers questions via support_handler."""
+    if not support_handler_module:
+        return
+    if not update.message or not update.message.text:
+        return
+    text = update.message.text
+    if support_handler_module.detect_question(text):
+        await support_handler_module.handle_support_message(update, context)
 
 
 # --- Баланс ---
@@ -1445,6 +1537,21 @@ def create_application() -> Application:
         )
         application.add_handler(
             CallbackQueryHandler(upsell_agent_module.handle_upsell_purchase, pattern=r"^upsell_skip$")
+        )
+
+    # Обработчик moneyback choice (redo/keep)
+    application.add_handler(
+        CallbackQueryHandler(handle_moneyback_choice, pattern=r"^moneyback_(redo|keep):\d+$")
+    )
+
+    # Fallback support handler (group=2) for question detection
+    if support_handler_module:
+        application.add_handler(
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND,
+                handle_support_fallback,
+            ),
+            group=2,
         )
 
     return application

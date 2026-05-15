@@ -503,3 +503,26 @@ Automatic prompt translation for non-Russian clients. Caches translations in mem
 
 ### realtime_dashboard.py - Real-Time WebSocket Dashboard
 WebSocket endpoint at /ws/dashboard for live metric updates. Broadcasts new_order, payment, and rating events. Token-based auth. Auto-reconnect on frontend.
+
+## New Modules (v3)
+
+### llm_router.py - Multi-Provider LLM Router
+Automatic provider switching: OpenAI -> Groq -> Anthropic -> Together.ai. Health checks every 5 minutes, auto-selects cheapest working provider. Circuit breaker integration for fault tolerance.
+
+### fl_parser.py - FL.ru Lead Parser
+Parses FL.ru freelance orders by category (texts, copywriting, translations, SEO). Human-like anti-detect with delays, daily limits, and working hours. AI-generated unique responses.
+
+### tg_chat_parser.py - Telegram Chat Monitor
+Monitors specified Telegram chats for order-related messages. Keywords detection, contextual AI responses, anti-spam (max 3 responses/hour/chat). Uses pyrogram userbot.
+
+### support_handler.py - AI Live-Support
+FAQ-based instant answers with LLM fallback for complex questions. Automatic admin escalation when AI is not confident. Detects questions by markers ("?", starts with "how/what/why").
+
+### Money-back Guarantee
+Automatic refund to balance on low rating (1-2 stars). User choice: free redo or keep funds on balance. Guarantee text in welcome message. Full refund stats via get_moneyback_stats().
+
+### db_postgres.py - PostgreSQL Backend
+Alternative to SQLite for production deployments. Same async interface, asyncpg-based connection pool, PostgreSQL-native types. Migration script from SQLite included. Selectable via DATABASE_BACKEND config.
+
+### redis_backend.py - Redis Support
+Optional Redis backend for: order queues (LPUSH/RPOP), prompt/result cache with TTL, sliding window rate limiting, user session storage. Graceful fallback when Redis unavailable. Health check endpoint.
