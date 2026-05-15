@@ -65,6 +65,12 @@ try:
 except ImportError:
     demo_generator = None
 
+# Интеграция retargeting (graceful)
+try:
+    import retargeting
+except ImportError:
+    retargeting = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -437,6 +443,23 @@ async def demo_generator_check(bot: Bot) -> None:
         await asyncio.sleep(86400)  # 24 часа
 
 
+async def retargeting_check_task(bot: Bot) -> None:
+    """
+    Задача ретаргетинга: каждые 5 минут проверяет
+    и отправляет ретаргетинг-сообщения.
+    """
+    while True:
+        try:
+            if retargeting:
+                sent = await retargeting.process_retargeting(bot)
+                if sent:
+                    logger.info("Retargeting: отправлено %d сообщений", sent)
+        except Exception as e:
+            logger.error("Ошибка retargeting_check_task: %s", e)
+
+        await asyncio.sleep(300)  # 5 минут
+
+
 def start_scheduler(bot: Bot) -> None:
     """
     Запустить все фоновые задачи в текущем event loop.
@@ -469,9 +492,10 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(_staggered_start(content_farm_check(bot), 280))
     loop.create_task(_staggered_start(marketplace_replenish(), 300))
     loop.create_task(_staggered_start(demo_generator_check(bot), 320))
+    loop.create_task(_staggered_start(retargeting_check_task(bot), 340))
     logger.info(
         "Планировщик задач запущен (retention, upsell, subscription_expiry, "
         "lead_parser, auto_posting, backup, crm_segment_update, crm_send_offers, "
         "monitoring_watchdog, funnel_check, review_posting, service_discovery, "
-        "ad_budget, content_farm, marketplace_replenish, demo_generator)"
+        "ad_budget, content_farm, marketplace_replenish, demo_generator, retargeting)"
     )

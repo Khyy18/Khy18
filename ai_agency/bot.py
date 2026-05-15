@@ -103,6 +103,24 @@ try:
 except ImportError:
     whitelabel_module = None
 
+# Интеграция onboarding (graceful)
+try:
+    import onboarding as onboarding_module
+except ImportError:
+    onboarding_module = None
+
+# Интеграция retargeting (graceful)
+try:
+    import retargeting as retargeting_module
+except ImportError:
+    retargeting_module = None
+
+# Интеграция demand_pricing (graceful)
+try:
+    import demand_pricing as demand_pricing_module
+except ImportError:
+    demand_pricing_module = None
+
 
 def set_order_queue(queue) -> None:
     """Set the shared order queue instance (called from main_multi.py)."""
@@ -156,6 +174,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 await ad_manager.track_utm(user.id, source)
             except Exception as e:
                 logger.debug("Ошибка трекинга UTM: %s", e)
+
+    # Трекинг ретаргетинга - пользователь выполнил /start
+    if retargeting_module:
+        try:
+            await retargeting_module.track_event(user.id, "start")
+        except Exception as e:
+            logger.debug("Ошибка трекинга retargeting: %s", e)
+
+    # Онбординг для новых пользователей
+    if is_new and onboarding_module:
+        try:
+            return await onboarding_module.start_onboarding(update, context)
+        except Exception as e:
+            logger.debug("Ошибка онбординга: %s", e)
 
     # Проверка бесплатного триала
     trial_available = await billing.check_free_trial(user.id)

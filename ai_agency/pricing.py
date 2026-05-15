@@ -3,6 +3,18 @@
 from services import SERVICES
 from models import ServiceType
 
+# Интеграция demand_pricing (graceful)
+try:
+    import demand_pricing as _demand_pricing
+except ImportError:
+    _demand_pricing = None
+
+# Интеграция loyalty (graceful)
+try:
+    import loyalty as _loyalty
+except ImportError:
+    _loyalty = None
+
 
 def _length_multiplier(text_length: int) -> float:
     """
@@ -33,7 +45,7 @@ def _urgency_multiplier(urgent: bool) -> float:
     return 1.5 if urgent else 1.0
 
 
-def calculate_price(service_type: str, text_length: int, urgent: bool = False) -> float:
+def calculate_price(service_type: str, text_length: int, urgent: bool = False, telegram_id: int = None) -> float:
     """
     Рассчитать динамическую цену заказа.
 
@@ -41,6 +53,7 @@ def calculate_price(service_type: str, text_length: int, urgent: bool = False) -
         service_type: тип услуги (значение ServiceType enum)
         text_length: длина текста в символах
         urgent: срочный заказ или нет
+        telegram_id: ID клиента для расчёта скидки лояльности (опционально)
 
     Returns:
         Итоговая цена в рублях

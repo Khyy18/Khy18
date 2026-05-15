@@ -16,6 +16,12 @@ try:
 except ImportError:
     aiosqlite = None
 
+# Интеграция realtime_dashboard (graceful)
+try:
+    import realtime_dashboard
+except ImportError:
+    realtime_dashboard = None
+
 _HERE = pathlib.Path(__file__).resolve().parent
 _PROJECT_ROOT = _HERE.parent
 
@@ -281,6 +287,10 @@ def create_web_app() -> web.Application:
     app.router.add_get("/api/admin/orders", api_admin_orders)
     app.router.add_get("/api/admin/promos", api_admin_promos)
     app.router.add_get("/api/admin/expenses", api_admin_expenses)
+
+    # WebSocket real-time dashboard
+    if realtime_dashboard:
+        app.router.add_get("/ws/dashboard", realtime_dashboard.websocket_handler)
 
     # Статические файлы
     app.router.add_static("/static/", path=str(_HERE / "static"), name="static")

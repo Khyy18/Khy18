@@ -477,3 +477,29 @@ docker-compose logs bot --tail=50
 # Enter container for debugging
 make shell
 ```
+
+## New Modules (v2)
+
+### onboarding.py - Automated Onboarding Tour
+4-step interactive tour for new users: service carousel, free trial offer, how-it-works demo, 20% bonus promo. Tracks drop-off analytics per step.
+
+### demand_pricing.py - Dynamic Demand Pricing
+Smart pricing based on real-time demand. Surge pricing (+10-20%) during peak hours, night/weekend discounts (-10-15%) during low demand.
+
+### loyalty.py - Loyalty Program
+4-tier loyalty system (Bronze/Silver/Gold/Platinum) based on total spending. Progressive discounts from 0% to 15%, priority queue, exclusive features.
+
+### retargeting.py - Automated Retargeting
+Scenario-based retargeting: reminds users who started but did not order, abandoned carts, marketplace viewers, and low-rating recovery. 24h cooldown per user.
+
+### ad_copywriter.py - AI Ad Copy Generator
+Generates 3 ad variants (short/medium/long) for any niche with A/B UTM tracking links. Supports formal/informal styles.
+
+### platform_adapter.py + adapters/ - Multi-Platform Support
+Abstract PlatformAdapter interface with concrete TelegramAdapter (working) and stubs for WhatsApp and VK. PlatformRouter for message routing.
+
+### prompt_localizer.py - Prompt Localization
+Automatic prompt translation for non-Russian clients. Caches translations in memory and DB. Integrates with pipeline.py for language-aware generation.
+
+### realtime_dashboard.py - Real-Time WebSocket Dashboard
+WebSocket endpoint at /ws/dashboard for live metric updates. Broadcasts new_order, payment, and rating events. Token-based auth. Auto-reconnect on frontend.

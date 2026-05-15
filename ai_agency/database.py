@@ -338,6 +338,46 @@ async def init_db() -> None:
                 FOREIGN KEY (template_id) REFERENCES templates(id)
             )
         """)
+        # Таблица user_events для ретаргетинга
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                processed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица onboarding_events для отслеживания онбординга
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS onboarding_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER NOT NULL,
+                step TEXT NOT NULL,
+                action TEXT NOT NULL DEFAULT 'view',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица prompt_cache для кеша переводов промптов
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS prompt_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_type TEXT NOT NULL,
+                lang TEXT NOT NULL,
+                system_prompt TEXT NOT NULL,
+                user_prompt TEXT NOT NULL,
+                cached_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(service_type, lang)
+            )
+        """)
+        # Миграция: добавляем loyalty_notified_level если отсутствует
+        try:
+            await db.execute(
+                "ALTER TABLE clients ADD COLUMN loyalty_notified_level TEXT DEFAULT 'bronze'"
+            )
+        except Exception:
+            pass  # Колонка уже существует
         await db.commit()
 
 

@@ -18,6 +18,12 @@ try:
 except ImportError:
     _cache_module = None
 
+# Интеграция prompt_localizer (graceful)
+try:
+    import prompt_localizer as _prompt_localizer
+except ImportError:
+    _prompt_localizer = None
+
 # Интеграция модуля отказоустойчивости (graceful)
 try:
     from resilience import retry_with_backoff, CircuitBreaker, CircuitState
@@ -194,7 +200,7 @@ async def _qa_agent(original_task: str, text: str) -> Optional[str]:
     return await _call_llm(messages, temperature=0.3)
 
 
-async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Optional[str], Optional[int]]:
+async def process_order(service_type: ServiceType, input_text: str, lang: str = "ru") -> Tuple[Optional[str], Optional[int]]:
     """
     Обработать заказ через мульти-агентную цепочку.
 
@@ -205,6 +211,11 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
     - Для rewrite и summary (дешевле, быстрее)
 
     При неудаче проверки качества повторяет Writer один раз.
+
+    Args:
+        service_type: тип услуги
+        input_text: входной текст заказа
+        lang: язык клиента для локализации промптов (по умолчанию 'ru')
 
     Возвращает (result_text, variant_id). variant_id = None если A/B тест не использовался.
     """
@@ -238,6 +249,19 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
         logger.warning("Ошибка A/B тестирования: %s", e)
 
     user_prompt = service.user_prompt_template.format(input_text=input_text)
+
+    # Локализация промптов если язык не русский
+    if lang != "ru" and _prompt_localizer:
+        try:
+            localized_system, localized_user_template = await _prompt_localizer.get_localized_prompts(
+                service_type.value, lang
+            )
+            if localized_system:
+                system_prompt = localized_system
+            if localized_user_template:
+                user_prompt = localized_user_template.format(input_text=input_text)
+        except Exception as e:
+            logger.warning("Ошибка локализации промптов: %s", e)
     max_attempts = quality.max_retry + 1
 
     for attempt in range(max_attempts):

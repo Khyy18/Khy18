@@ -131,6 +131,19 @@ WHITELABEL_ENABLED: bool = os.getenv("WHITELABEL_ENABLED", "False").lower() in (
 # USD to RUB exchange rate
 USD_TO_RUB_RATE: float = float(os.getenv("USD_TO_RUB_RATE", "90.0"))
 
+# Demand pricing
+DEMAND_SURGE_THRESHOLD: int = int(os.getenv("DEMAND_SURGE_THRESHOLD", "10"))
+DEMAND_DISCOUNT_THRESHOLD: int = int(os.getenv("DEMAND_DISCOUNT_THRESHOLD", "2"))
+
+# Loyalty system
+LOYALTY_ENABLED: bool = os.getenv("LOYALTY_ENABLED", "True").lower() in ("true", "1", "yes")
+
+# Retargeting
+RETARGETING_ENABLED: bool = os.getenv("RETARGETING_ENABLED", "True").lower() in ("true", "1", "yes")
+
+# WebSocket dashboard auth
+WS_AUTH_TOKEN: str = os.getenv("WS_AUTH_TOKEN", "")
+
 
 def validate_config() -> List[str]:
     """

@@ -225,6 +225,60 @@
 
         // Auto-refresh every 30 seconds
         setInterval(() => { loadMetrics(); loadOrders(); }, 30000);
+
+        // WebSocket real-time updates
+        (function() {
+            let ws = null;
+            let reconnectTimeout = null;
+
+            function connectWS() {
+                const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = protocol + '//' + location.host + '/ws/dashboard?token=';
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = function() {
+                    console.log('WebSocket connected');
+                };
+
+                ws.onmessage = function(event) {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === 'counters' && msg.data) {
+                            const d = msg.data;
+                            if (d.revenue_today !== undefined) {
+                                document.getElementById('metric-revenue').textContent = d.revenue_today + ' \u20BD';
+                            }
+                            if (d.orders_in_queue !== undefined) {
+                                document.getElementById('metric-orders').textContent = d.orders_in_queue;
+                            }
+                            if (d.active_clients !== undefined) {
+                                document.getElementById('metric-clients').textContent = d.active_clients;
+                            }
+                        } else if (msg.type === 'new_order' || msg.type === 'payment' || msg.type === 'rating') {
+                            // Refresh metrics on any event
+                            loadMetrics();
+                            if (msg.type === 'new_order') {
+                                loadOrders();
+                            }
+                        }
+                    } catch (e) {
+                        console.debug('WS message parse error:', e);
+                    }
+                };
+
+                ws.onclose = function() {
+                    console.log('WebSocket disconnected, reconnecting in 5s...');
+                    reconnectTimeout = setTimeout(connectWS, 5000);
+                };
+
+                ws.onerror = function(err) {
+                    console.debug('WebSocket error:', err);
+                    ws.close();
+                };
+            }
+
+            connectWS();
+        })();
     </script>
 </body>
 </html>

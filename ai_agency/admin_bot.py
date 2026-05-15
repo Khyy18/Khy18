@@ -62,6 +62,12 @@ try:
 except ImportError:
     service_discovery = None
 
+# Интеграция ad_copywriter (graceful)
+try:
+    import ad_copywriter
+except ImportError:
+    ad_copywriter = None
+
 logger = logging.getLogger(__name__)
 
 # Состояния для пополнения баланса и CRM
@@ -688,6 +694,56 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+# --- Команда /ad_copy ---
+
+@admin_only
+async def ad_copy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Генерация рекламных текстов.
+    Формат: /ad_copy <ниша> <аудитория> [formal|informal]
+    """
+    if not ad_copywriter:
+        await update.message.reply_text(
+            "\u274c Модуль ad_copywriter не установлен.",
+            parse_mode=ParseMode.HTML,
+        )
+        return ConversationHandler.END
+
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "\u2139\ufe0f Формат: /ad_copy &lt;ниша&gt; &lt;аудитория&gt; [formal|informal]\n"
+            "Пример: /ad_copy кофейня 5000 informal",
+            parse_mode=ParseMode.HTML,
+        )
+        return ConversationHandler.END
+
+    niche = args[0]
+    try:
+        audience_size = int(args[1])
+    except ValueError:
+        audience_size = 1000
+    style = args[2] if len(args) > 2 else "informal"
+
+    await update.message.reply_text(
+        "\u23f3 Генерирую рекламные тексты...",
+        parse_mode=ParseMode.HTML,
+    )
+
+    variants = await ad_copywriter.generate_ad_copy(niche, audience_size, style)
+
+    body_lines = []
+    for v in variants:
+        body_lines.append(f"<b>{v['length_type'].upper()}</b>:")
+        body_lines.append(v["text"][:300])
+        body_lines.append(f"\U0001f517 {v['utm_link']}")
+        body_lines.append("")
+
+    text = _card(f"Ad Copy: {niche}", "\U0001f4e3", body_lines)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
 def create_admin_application() -> Application:
     """Создать и настроить приложение админ-бота."""
     application = Application.builder().token(config.TELEGRAM_ADMIN_BOT_TOKEN).build()
@@ -718,6 +774,7 @@ def create_admin_application() -> Application:
     )
 
     application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("ad_copy", ad_copy_command))
     return application
 
 
