@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth import verify_bearer_token
 from backend.database import get_db
 from backend.models.child import Child
 from backend.schemas.child import ChildCreate, ChildResponse
@@ -20,7 +21,11 @@ async def list_children(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("", response_model=ChildResponse, status_code=201)
-async def create_child(data: ChildCreate, db: AsyncSession = Depends(get_db)):
+async def create_child(
+    data: ChildCreate,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Depends(verify_bearer_token),
+):
     child = Child(
         child_fio=data.child_fio,
         group_name=data.group_name,
@@ -34,7 +39,11 @@ async def create_child(data: ChildCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/{child_id}", status_code=204)
-async def delete_child(child_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_child(
+    child_id: int,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Depends(verify_bearer_token),
+):
     result = await db.execute(select(Child).where(Child.id == child_id))
     child = result.scalar_one_or_none()
     if not child:

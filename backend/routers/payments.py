@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth import verify_bearer_token
 from backend.config import settings
 from backend.database import get_db
 from backend.models.child import Child
@@ -13,7 +14,11 @@ router = APIRouter(prefix="/payments", tags=["payments"])
 
 
 @router.post("/generate", response_model=PaymentOrderResponse)
-async def generate_payment(data: PaymentOrderRequest, db: AsyncSession = Depends(get_db)):
+async def generate_payment(
+    data: PaymentOrderRequest,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Depends(verify_bearer_token),
+):
     """Generate payment order for parent fee."""
     result = await db.execute(select(Child).where(Child.id == data.child_id))
     child = result.scalar_one_or_none()

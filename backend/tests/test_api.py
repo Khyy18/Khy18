@@ -13,6 +13,9 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 TestSessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
 
+# Auth header for protected endpoints (matches SECRET_KEY default "change-me-in-production")
+AUTH_HEADERS = {"Authorization": "Bearer change-me-in-production"}
+
 
 async def override_get_db():
     async with TestSessionLocal() as session:
@@ -81,6 +84,16 @@ async def test_salary_calculate_basic(client):
     assert abs(data["nachisleno"] - 10000.0) < 0.01
 
 
+@pytest.mark.asyncio
+async def test_salary_calculate_invalid(client):
+    """Negative oklad should be rejected by validation."""
+    response = await client.post(
+        "/api/v1/salary/calculate",
+        json={"oklad": -100, "rate": 1.0, "stazh_percent": 0},
+    )
+    assert response.status_code == 422
+
+
 # --- Vacation calculator ---
 
 
@@ -130,34 +143,55 @@ async def test_sick_calculate_low_stazh(client):
     assert abs(data["daily"] - 600.0) < 0.01
 
 
+@pytest.mark.asyncio
+async def test_sick_calculate_invalid_bracket(client):
+    """Invalid stazh_bracket should be rejected by validation."""
+    response = await client.post(
+        "/api/v1/sick/calculate",
+        json={"earnings_2y": 730000, "stazh_bracket": "invalid", "days": 5},
+    )
+    assert response.status_code == 422
+
+
 # --- Employees CRUD ---
 
 
 @pytest.mark.asyncio
 async def test_employees_crud(client):
-    # Create
+    # Create (requires auth)
     response = await client.post(
         "/api/v1/employees",
         json={"fio": "Ivanova A.B.", "position": "Vospitatel", "rate": 1.0},
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 201
     emp = response.json()
     assert emp["fio"] == "Ivanova A.B."
     emp_id = emp["id"]
 
-    # List
+    # List (no auth needed)
     response = await client.get("/api/v1/employees")
     assert response.status_code == 200
     assert len(response.json()) == 1
 
-    # Delete
-    response = await client.delete(f"/api/v1/employees/{emp_id}")
+    # Delete (requires auth)
+    response = await client.delete(f"/api/v1/employees/{emp_id}", headers=AUTH_HEADERS)
     assert response.status_code == 204
 
     # Verify deleted
     response = await client.get("/api/v1/employees")
     assert response.status_code == 200
     assert len(response.json()) == 0
+
+
+@pytest.mark.asyncio
+async def test_employees_create_no_auth(client):
+    """POST without auth should return 401."""
+    response = await client.post(
+        "/api/v1/employees",
+        json={"fio": "Test", "position": "Worker", "rate": 1.0},
+    )
+    assert response.status_code == 401
 
 
 # --- Children CRUD ---
@@ -173,6 +207,7 @@ async def test_children_crud(client):
             "parent_fio": "Petrova N.",
             "discount_percent": 20,
         },
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 201
     child = response.json()
@@ -183,7 +218,7 @@ async def test_children_crud(client):
     assert response.status_code == 200
     assert len(response.json()) == 1
 
-    response = await client.delete(f"/api/v1/children/{child_id}")
+    response = await client.delete(f"/api/v1/children/{child_id}", headers=AUTH_HEADERS)
     assert response.status_code == 204
 
 
@@ -192,22 +227,24 @@ async def test_children_crud(client):
 
 @pytest.mark.asyncio
 async def test_journal_operations(client):
-    # Add entries
+    # Add entries (requires auth)
     await client.post(
         "/api/v1/journal",
         json={"date": "2024-01-15", "amount": 100000, "entry_type": "income", "counterparty": "Budget"},
+        headers=AUTH_HEADERS,
     )
     await client.post(
         "/api/v1/journal",
         json={"date": "2024-01-20", "amount": 30000, "entry_type": "expense", "counterparty": "Supplier"},
+        headers=AUTH_HEADERS,
     )
 
-    # List
+    # List (no auth needed)
     response = await client.get("/api/v1/journal")
     assert response.status_code == 200
     assert len(response.json()) == 2
 
-    # Totals
+    # Totals (no auth needed)
     response = await client.get("/api/v1/journal/totals")
     assert response.status_code == 200
     totals = response.json()
@@ -221,28 +258,32 @@ async def test_journal_operations(client):
 
 @pytest.mark.asyncio
 async def test_timesheet(client):
-    # Create employee first
+    # Create employee first (requires auth)
     resp = await client.post(
         "/api/v1/employees",
         json={"fio": "Test", "position": "Worker", "rate": 1.0},
+        headers=AUTH_HEADERS,
     )
     emp_id = resp.json()["id"]
 
-    # Add marks
+    # Add marks (requires auth)
     await client.post(
         "/api/v1/timesheet/mark",
         json={"employee_id": emp_id, "date": "2024-03-01", "mark_type": "present"},
+        headers=AUTH_HEADERS,
     )
     await client.post(
         "/api/v1/timesheet/mark",
         json={"employee_id": emp_id, "date": "2024-03-02", "mark_type": "present"},
+        headers=AUTH_HEADERS,
     )
     await client.post(
         "/api/v1/timesheet/mark",
         json={"employee_id": emp_id, "date": "2024-03-03", "mark_type": "sick"},
+        headers=AUTH_HEADERS,
     )
 
-    # Summary
+    # Summary (no auth needed)
     response = await client.get(f"/api/v1/timesheet/summary/{emp_id}?year=2024&month=3")
     assert response.status_code == 200
     data = response.json()
@@ -285,7 +326,7 @@ async def test_reminders_upcoming(client):
 
 @pytest.mark.asyncio
 async def test_payment_generate(client):
-    # Create a child first
+    # Create a child first (requires auth)
     resp = await client.post(
         "/api/v1/children",
         json={
@@ -294,12 +335,14 @@ async def test_payment_generate(client):
             "parent_fio": "Parent A.",
             "discount_percent": 50,
         },
+        headers=AUTH_HEADERS,
     )
     child_id = resp.json()["id"]
 
     response = await client.post(
         "/api/v1/payments/generate",
         json={"child_id": child_id, "month": 3, "year": 2024, "attendance_days": 20},
+        headers=AUTH_HEADERS,
     )
     assert response.status_code == 200
     data = response.json()

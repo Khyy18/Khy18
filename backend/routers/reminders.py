@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth import verify_bearer_token
 from backend.database import get_db
 from backend.models.reminder import Reminder
 from backend.schemas.reminder import ReminderResponse, ReminderToggleRequest
@@ -101,7 +102,11 @@ async def list_reminders(
 
 
 @router.post("/toggle", response_model=ReminderResponse)
-async def toggle_reminder(data: ReminderToggleRequest, db: AsyncSession = Depends(get_db)):
+async def toggle_reminder(
+    data: ReminderToggleRequest,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Depends(verify_bearer_token),
+):
     result = await db.execute(select(Reminder).where(Reminder.id == data.reminder_id))
     reminder = result.scalar_one_or_none()
     if not reminder:

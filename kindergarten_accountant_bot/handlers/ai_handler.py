@@ -103,7 +103,11 @@ async def _direct_groq_call(message: str) -> Optional[str]:
         from backend.ai.intents import classify_intent, Intent
         from backend.ai.groq_client import chat_completion
         from backend.ai.knowledge import get_knowledge_context
+    except ImportError:
+        logger.warning("backend.ai modules not available - AI service unavailable")
+        return "AI-сервис недоступен. Используйте команды меню для работы с ботом."
 
+    try:
         intent, params, confidence = await classify_intent(message)
 
         if intent == Intent.calculate_salary and params.get("oklad"):

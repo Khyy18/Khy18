@@ -1,14 +1,16 @@
 """Journal entry schemas."""
 
-from typing import Optional
+from typing import Optional, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class JournalEntryCreate(BaseModel):
     date: str
-    amount: float
-    entry_type: str  # 'income' or 'expense'
+    amount: float = Field(..., gt=0, description="Amount (must be positive)")
+    entry_type: Literal["income", "expense"] = Field(
+        ..., description="Entry type: 'income' or 'expense'"
+    )
     counterparty: Optional[str] = None
     basis: Optional[str] = None
 

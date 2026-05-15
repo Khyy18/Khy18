@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth import verify_bearer_token
 from backend.database import get_db
 from backend.models.journal import JournalEntry
 from backend.schemas.journal import JournalEntryCreate, JournalEntryResponse
@@ -14,7 +15,11 @@ router = APIRouter(prefix="/journal", tags=["journal"])
 
 
 @router.post("", response_model=JournalEntryResponse, status_code=201)
-async def add_entry(data: JournalEntryCreate, db: AsyncSession = Depends(get_db)):
+async def add_entry(
+    data: JournalEntryCreate,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Depends(verify_bearer_token),
+):
     entry = JournalEntry(
         date=data.date,
         amount=data.amount,

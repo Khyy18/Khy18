@@ -2,13 +2,13 @@
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class EmployeeCreate(BaseModel):
     fio: str
     position: str
-    rate: float = 1.0
+    rate: float = Field(default=1.0, gt=0, description="Employment rate (must be positive)")
 
 
 class EmployeeResponse(BaseModel):

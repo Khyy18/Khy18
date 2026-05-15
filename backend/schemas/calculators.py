@@ -1,13 +1,15 @@
 """Calculator request/response schemas."""
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 
 class SalaryCalculateRequest(BaseModel):
-    oklad: float
-    rate: float
-    stazh_percent: float
-    category_percent: float = 0
+    oklad: float = Field(..., gt=0, description="Base salary (must be positive)")
+    rate: float = Field(..., gt=0, description="Employment rate (must be positive)")
+    stazh_percent: float = Field(default=0, ge=0, description="Seniority bonus percent")
+    category_percent: float = Field(default=0, ge=0, description="Category bonus percent")
 
 
 class SalaryCalculateResponse(BaseModel):
@@ -22,8 +24,8 @@ class SalaryCalculateResponse(BaseModel):
 
 
 class VacationCalculateRequest(BaseModel):
-    total_12_months: float
-    days: int
+    total_12_months: float = Field(..., gt=0, description="Total earnings for 12 months")
+    days: int = Field(..., gt=0, description="Number of vacation days")
 
 
 class VacationCalculateResponse(BaseModel):
@@ -37,9 +39,11 @@ class VacationCalculateResponse(BaseModel):
 
 
 class SickCalculateRequest(BaseModel):
-    earnings_2y: float
-    stazh_bracket: str  # '<5', '5-8', '>8'
-    days: int
+    earnings_2y: float = Field(..., gt=0, description="Earnings for 2 years")
+    stazh_bracket: Literal["<5", "5-8", ">8"] = Field(
+        ..., description="Seniority bracket: '<5', '5-8', or '>8'"
+    )
+    days: int = Field(..., gt=0, description="Number of sick days")
 
 
 class SickCalculateResponse(BaseModel):

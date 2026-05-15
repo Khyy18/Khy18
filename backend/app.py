@@ -28,7 +28,7 @@ def create_app() -> FastAPI:
         version="1.0.0",
     )
 
-    # CORS
+    # CORS - use explicit origins (never wildcard with credentials)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,

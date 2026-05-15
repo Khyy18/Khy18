@@ -15,10 +15,16 @@ DEFAULT_MODEL = "llama-3.1-70b-versatile"
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0
 
+# Module-level singleton client for connection reuse
+_client: Optional[Groq] = None
+
 
 def _get_client() -> Groq:
-    """Create a Groq client instance."""
-    return Groq(api_key=settings.GROQ_API_KEY)
+    """Get or create the singleton Groq client instance."""
+    global _client
+    if _client is None:
+        _client = Groq(api_key=settings.GROQ_API_KEY)
+    return _client
 
 
 async def chat_completion(
