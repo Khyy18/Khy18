@@ -1,4 +1,4 @@
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 from kindergarten_accountant_bot.config import BOT_TOKEN
 from kindergarten_accountant_bot.models.database import init_db
@@ -13,6 +13,7 @@ from kindergarten_accountant_bot.handlers.reminders import reminders_handler, se
 from kindergarten_accountant_bot.handlers.kbk import kbk_handler
 from kindergarten_accountant_bot.handlers.payment import payment_conv_handler
 from kindergarten_accountant_bot.handlers.journal import journal_handler
+from kindergarten_accountant_bot.handlers.ai_handler import ai_command, ai_message_handler
 
 
 async def post_init(application):
@@ -38,6 +39,9 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^back_to_menu$"))
+    app.add_handler(CommandHandler("ai", ai_command))
+    # AI free-text handler - placed last as fallback for unhandled text
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_message_handler))
     setup_reminder_jobs(app)
     app.run_polling()
 

@@ -1,0 +1,284 @@
+"""FastAPI router for AI chat endpoint."""
+
+import logging
+from typing import Dict, Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from backend.ai.intents import Intent, classify_intent
+from backend.ai.groq_client import chat_completion
+from backend.ai.knowledge import get_knowledge_context
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/ai", tags=["ai"])
+
+
+class ChatRequest(BaseModel):
+    """Request body for the AI chat endpoint."""
+    message: str = Field(..., min_length=1, max_length=2000)
+    chat_id: int = Field(default=0)
+
+
+class ChatResponse(BaseModel):
+    """Response body for the AI chat endpoint."""
+    response: str
+    intent: str
+    params: Dict
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def ai_chat(request: ChatRequest) -> ChatResponse:
+    """Process a natural language message through the AI pipeline.
+
+    Flow:
+    1. Classify user message into intent + extract params via Groq LLM
+    2. Call the appropriate function based on intent
+    3. Format and return the result
+    4. If classification fails, return a clarification request
+    """
+    intent, params, confidence = await classify_intent(request.message)
+
+    if intent is None or confidence < 0.3:
+        return ChatResponse(
+            response="Не удалось определить ваш запрос. Пожалуйста, уточните, что вы хотите сделать. "
+                     "Я могу рассчитать зарплату, отпускные, больничный, найти КБК или ответить на вопрос по бухгалтерии.",
+            intent="unknown",
+            params=params,
+        )
+
+    # Execute the intent
+    result = await _execute_intent(intent, params, request.message)
+    return result
+
+
+async def _execute_intent(intent: Intent, params: Dict, original_message: str) -> ChatResponse:
+    """Execute the classified intent and return formatted result."""
+    try:
+        if intent == Intent.calculate_salary:
+            return _handle_salary(params)
+        elif intent == Intent.calculate_vacation:
+            return _handle_vacation(params)
+        elif intent == Intent.calculate_sick:
+            return _handle_sick(params)
+        elif intent == Intent.search_kbk:
+            return await _handle_kbk_search(params)
+        elif intent == Intent.ask_question:
+            return await _handle_question(params, original_message)
+        elif intent == Intent.generate_text:
+            return await _handle_generate_text(params, original_message)
+        elif intent in (Intent.add_employee, Intent.mark_timesheet, Intent.add_journal_entry):
+            return ChatResponse(
+                response=f"Операция '{intent.value}' принята. Параметры: {params}. "
+                         "Для выполнения используйте соответствующий раздел меню бота.",
+                intent=intent.value,
+                params=params,
+            )
+        else:
+            return await _handle_question(params, original_message)
+    except Exception as e:
+        logger.error(f"Error executing intent {intent}: {e}")
+        return ChatResponse(
+            response=f"Произошла ошибка при выполнении запроса: {str(e)}",
+            intent=intent.value if intent else "error",
+            params=params,
+        )
+
+
+def _handle_salary(params: Dict) -> ChatResponse:
+    """Calculate salary using the same logic as the bot handler."""
+    from kindergarten_accountant_bot.handlers.salary import calculate_salary
+
+    oklad = float(params.get("oklad", 0))
+    rate = float(params.get("rate", 1.0))
+    stazh_percent = float(params.get("stazh_percent", 0))
+    category_percent = float(params.get("category_percent", 0))
+
+    if oklad <= 0:
+        return ChatResponse(
+            response="Для расчёта зарплаты укажите оклад (положительное число).",
+            intent=Intent.calculate_salary.value,
+            params=params,
+        )
+
+    result = calculate_salary(oklad, rate, stazh_percent, category_percent)
+
+    response_text = (
+        f"Расчёт заработной платы:\n"
+        f"- Оклад: {oklad:,.2f} руб.\n"
+        f"- Ставка: {rate}\n"
+        f"- Надбавка за стаж: {stazh_percent}%\n"
+        f"- Надбавка за категорию: {category_percent}%\n\n"
+        f"Начислено: {result['nachisleno']:,.2f} руб.\n"
+        f"НДФЛ (13%): {result['ndfl']:,.2f} руб.\n"
+        f"На руки: {result['na_ruki']:,.2f} руб.\n\n"
+        f"Взносы работодателя:\n"
+        f"- ПФР (22%): {result['pfr']:,.2f} руб.\n"
+        f"- ОМС (5.1%): {result['oms']:,.2f} руб.\n"
+        f"- ФСС (2.9%): {result['fss']:,.2f} руб.\n"
+        f"- ФСС НС (0.2%): {result['fss_ns']:,.2f} руб.\n"
+        f"- Итого взносов: {result['total_contributions']:,.2f} руб."
+    )
+
+    return ChatResponse(
+        response=response_text,
+        intent=Intent.calculate_salary.value,
+        params=params,
+    )
+
+
+def _handle_vacation(params: Dict) -> ChatResponse:
+    """Calculate vacation pay using the same logic as the bot handler."""
+    from kindergarten_accountant_bot.handlers.vacation import calculate_vacation
+
+    total_12_months = float(params.get("total_12_months", 0))
+    days = int(params.get("days", 0))
+
+    if total_12_months <= 0 or days <= 0:
+        return ChatResponse(
+            response="Для расчёта отпускных укажите общий доход за 12 месяцев и количество дней отпуска.",
+            intent=Intent.calculate_vacation.value,
+            params=params,
+        )
+
+    result = calculate_vacation(total_12_months, days)
+
+    response_text = (
+        f"Расчёт отпускных:\n"
+        f"- Доход за 12 месяцев: {result['total_12_months']:,.2f} руб.\n"
+        f"- Среднемесячный: {result['avg_monthly']:,.2f} руб.\n"
+        f"- Среднедневной: {result['avg_daily']:,.2f} руб.\n"
+        f"- Дней отпуска: {days}\n\n"
+        f"Начислено: {result['vacation_gross']:,.2f} руб.\n"
+        f"НДФЛ (13%): {result['ndfl']:,.2f} руб.\n"
+        f"На руки: {result['vacation_net']:,.2f} руб."
+    )
+
+    return ChatResponse(
+        response=response_text,
+        intent=Intent.calculate_vacation.value,
+        params=params,
+    )
+
+
+def _handle_sick(params: Dict) -> ChatResponse:
+    """Calculate sick leave pay using the same logic as the bot handler."""
+    from kindergarten_accountant_bot.handlers.sick import calculate_sick
+
+    earnings_2y = float(params.get("earnings_2y", 0))
+    stazh_bracket = str(params.get("stazh_bracket", ">8"))
+    days = int(params.get("days", 0))
+
+    if earnings_2y <= 0 or days <= 0:
+        return ChatResponse(
+            response="Для расчёта больничного укажите доход за 2 года, стаж и количество дней.",
+            intent=Intent.calculate_sick.value,
+            params=params,
+        )
+
+    result = calculate_sick(earnings_2y, stazh_bracket, days)
+
+    percent_display = int(result['percent'] * 100)
+    response_text = (
+        f"Расчёт больничного листа:\n"
+        f"- Доход за 2 года: {result['earnings_2y']:,.2f} руб.\n"
+        f"- Стаж: {stazh_bracket} лет ({percent_display}%)\n"
+        f"- Дневное пособие: {result['daily']:,.2f} руб.\n"
+        f"- Дней больничного: {days}\n\n"
+        f"Начислено: {result['total_gross']:,.2f} руб.\n"
+        f"НДФЛ (13%): {result['ndfl']:,.2f} руб.\n"
+        f"На руки: {result['total_net']:,.2f} руб."
+    )
+
+    return ChatResponse(
+        response=response_text,
+        intent=Intent.calculate_sick.value,
+        params=params,
+    )
+
+
+async def _handle_kbk_search(params: Dict) -> ChatResponse:
+    """Search KBK codes."""
+    from kindergarten_accountant_bot.data.kbk_codes import KBK_CODES
+
+    query = str(params.get("query", "")).lower()
+    if not query:
+        return ChatResponse(
+            response="Укажите, какой КБК вы ищете (например, 'НДФЛ', 'страховые взносы').",
+            intent=Intent.search_kbk.value,
+            params=params,
+        )
+
+    results = []
+    for code in KBK_CODES:
+        name = code.get("name", "")
+        description = code.get("description", "")
+        if query in name.lower() or query in description.lower():
+            results.append(f"- {code.get('code', '')}: {name}")
+
+    if results:
+        response_text = f"Найденные КБК по запросу '{query}':\n" + "\n".join(results[:10])
+    else:
+        response_text = f"КБК по запросу '{query}' не найдены. Попробуйте другие ключевые слова."
+
+    return ChatResponse(
+        response=response_text,
+        intent=Intent.search_kbk.value,
+        params=params,
+    )
+
+
+async def _handle_question(params: Dict, original_message: str) -> ChatResponse:
+    """Answer accounting questions using Groq LLM with knowledge context."""
+    knowledge = get_knowledge_context()
+    question = params.get("question", original_message)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Ты - опытный бухгалтер детского сада. Отвечай кратко и по делу на русском языке. "
+                "Используй следующую справочную информацию:\n\n" + knowledge
+            ),
+        },
+        {"role": "user", "content": question},
+    ]
+
+    answer = await chat_completion(messages, temperature=0.3)
+    if not answer:
+        answer = "Извините, не удалось получить ответ. Попробуйте переформулировать вопрос."
+
+    return ChatResponse(
+        response=answer,
+        intent=Intent.ask_question.value,
+        params=params,
+    )
+
+
+async def _handle_generate_text(params: Dict, original_message: str) -> ChatResponse:
+    """Generate text documents using Groq LLM."""
+    text_type = params.get("text_type", "документ")
+    context_info = params.get("context", original_message)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Ты - помощник бухгалтера детского сада. "
+                "Составь официальный документ по запросу. "
+                "Используй деловой стиль русского языка."
+            ),
+        },
+        {"role": "user", "content": f"Составь {text_type}: {context_info}"},
+    ]
+
+    answer = await chat_completion(messages, temperature=0.4, max_tokens=2048)
+    if not answer:
+        answer = "Извините, не удалось сгенерировать текст. Попробуйте уточнить запрос."
+
+    return ChatResponse(
+        response=answer,
+        intent=Intent.generate_text.value,
+        params=params,
+    )
