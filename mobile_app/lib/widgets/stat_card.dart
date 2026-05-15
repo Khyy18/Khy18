@@ -20,6 +20,8 @@ class StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final numericValue = int.tryParse(value);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -32,13 +34,29 @@ class StatCard extends StatelessWidget {
               color: iconColor ?? AppColors.primary,
             ),
             const SizedBox(height: 12),
-            Text(
-              value,
-              style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                    fontSize: 24,
-                    letterSpacing: -0.5,
+            numericValue != null
+                ? TweenAnimationBuilder<double>(
+                    tween: Tween<double>(begin: 0, end: numericValue.toDouble()),
+                    duration: const Duration(milliseconds: 1200),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, animValue, child) {
+                      return Text(
+                        animValue.toInt().toString(),
+                        style:
+                            Theme.of(context).textTheme.displaySmall?.copyWith(
+                                  fontSize: 24,
+                                  letterSpacing: -0.5,
+                                ),
+                      );
+                    },
+                  )
+                : Text(
+                    value,
+                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                          fontSize: 24,
+                          letterSpacing: -0.5,
+                        ),
                   ),
-            ),
             const SizedBox(height: 4),
             Text(
               label,

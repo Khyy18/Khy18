@@ -7,6 +7,7 @@ import 'providers/auth_provider.dart';
 import 'services/local_storage.dart';
 import 'services/notification_service.dart';
 import 'theme/app_theme.dart';
+import 'theme/page_transitions.dart';
 
 import 'screens/login_screen.dart';
 import 'screens/dashboard_screen.dart';
@@ -53,43 +54,123 @@ class KindergartenApp extends ConsumerWidget {
         ),
         GoRoute(
           path: '/salary',
-          builder: (context, state) => const SalaryScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const SalaryScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/vacation',
-          builder: (context, state) => const VacationScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const VacationScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/sick',
-          builder: (context, state) => const SickScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const SickScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/timesheet',
-          builder: (context, state) => const TimesheetScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const TimesheetScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/children',
-          builder: (context, state) => const ChildrenScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const ChildrenScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/journal',
-          builder: (context, state) => const JournalScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const JournalScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/kbk',
-          builder: (context, state) => const KbkScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const KbkScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/reminders',
-          builder: (context, state) => const RemindersScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const RemindersScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/payment',
-          builder: (context, state) => const PaymentScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const PaymentScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/ai_chat',
-          builder: (context, state) => const AiChatScreen(),
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const AiChatScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
       ],
       redirect: (context, state) {
