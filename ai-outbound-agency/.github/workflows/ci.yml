@@ -1,0 +1,28 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pytest --cov=. --cov-report=xml tests/
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///test.db
+          REDIS_URL: redis://localhost:6379/0
+          OPENAI_API_KEY: sk-test
+          ANTHROPIC_API_KEY: ant-test
+          GROQ_API_KEY: gsk-test
+          APOLLO_API_KEY: apollo-test
+          HUNTER_API_KEY: hunter-test
+          SMTP_HOST: localhost
+          SMTP_PORT: 587
+          SMTP_USER: test
+          SMTP_PASSWORD: test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml

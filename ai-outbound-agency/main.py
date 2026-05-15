@@ -17,6 +17,8 @@ from core.observability import (
     CorrelationIdMiddleware,
     metrics_response,
 )
+from core.api_rate_limiter import RateLimiterMiddleware
+from core.graceful_shutdown import GracefulShutdownManager
 from channels.email.tracker import router as tracking_router
 from dashboard.auth import router as auth_router
 from dashboard.routes.campaigns import router as campaigns_router
@@ -222,6 +224,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.circuit_breaker_registry = circuit_breaker_registry
     logger.info("Circuit breaker registry initialized")
 
+    # Initialize graceful shutdown manager
+    shutdown_manager = GracefulShutdownManager()
+    shutdown_manager.register()
+    app.state.shutdown_manager = shutdown_manager
+
     # Health Monitor and Revenue Autopilot
     # These are periodically invoked via asyncio background tasks.
     # Health monitor runs every health_check_interval_minutes.
@@ -388,6 +395,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await _scheduler.stop()
         logger.info("Scheduler stopped")
 
+    # Graceful shutdown: wait for in-flight tasks
+    await shutdown_manager.shutdown()
+
     await engine.dispose()
 
 
@@ -400,6 +410,9 @@ app = FastAPI(
 
 # Add observability middleware
 app.add_middleware(CorrelationIdMiddleware)
+
+# Add API rate limiter middleware (after CorrelationIdMiddleware)
+app.add_middleware(RateLimiterMiddleware, redis_url=settings.redis_url)
 
 # Include tracking router for open/click tracking
 app.include_router(tracking_router)
