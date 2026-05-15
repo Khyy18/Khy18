@@ -182,3 +182,55 @@ class TopSequenceItem(BaseModel):
 
 class TopSequencesResponse(BaseModel):
     items: list[TopSequenceItem]
+
+
+# ---------- Optimizer / A/B Test Schemas ----------
+
+
+class ABTestVariantInput(BaseModel):
+    key: str
+    subject: Optional[str] = None
+    body: Optional[str] = None
+    template_config: Optional[dict[str, Any]] = None
+
+
+class ABTestCreate(BaseModel):
+    campaign_id: UUID
+    name: str
+    variants: list[ABTestVariantInput]
+    min_sends_per_variant: int = 100
+
+
+class ABTestResponse(BaseModel):
+    id: UUID
+    campaign_id: UUID
+    name: str
+    status: str
+    variants: list[dict[str, Any]]
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    winner_variant_key: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ABTestListResponse(BaseModel):
+    items: list[ABTestResponse]
+    total: int
+
+
+class ABTestResultsResponse(BaseModel):
+    test_id: str
+    status: str
+    variants: list[dict[str, Any]]
+    is_significant: bool
+    p_value: float
+    winner_key: Optional[str] = None
+
+
+class SuggestionResponse(BaseModel):
+    suggestions: list[dict[str, Any]]
+
+
+class SendTimeResponse(BaseModel):
+    optimal_times: list[dict[str, Any]]

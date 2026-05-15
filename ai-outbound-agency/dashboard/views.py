@@ -86,3 +86,9 @@ async def sequence_builder_page(request: Request, sequence_id: str):
 async def analytics_page(request: Request):
     """Render the analytics page."""
     return templates.TemplateResponse("analytics.html", {"request": request})
+
+
+@router.get("/optimizer", response_class=HTMLResponse)
+async def optimizer_page(request: Request):
+    """Render the optimizer page."""
+    return templates.TemplateResponse("optimizer.html", {"request": request})

@@ -17,6 +17,7 @@ from dashboard.routes.campaigns import router as campaigns_router
 from dashboard.routes.leads import router as leads_router
 from dashboard.routes.sequences import router as sequences_router
 from dashboard.routes.analytics import router as analytics_router
+from dashboard.routes.optimizer import router as optimizer_router
 from dashboard.views import router as views_router
 
 logger = logging.getLogger(__name__)
@@ -183,6 +184,7 @@ app.include_router(campaigns_router)
 app.include_router(leads_router)
 app.include_router(sequences_router)
 app.include_router(analytics_router)
+app.include_router(optimizer_router)
 app.include_router(views_router)
 
 # Mount static files

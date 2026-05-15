@@ -5,16 +5,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from scheduler.sequence_runner import SequenceRunner
 from scheduler.warmup_scheduler import WarmupScheduler
+
+if TYPE_CHECKING:
+    from agents.optimizer import OptimizerAgent
 
 logger = logging.getLogger(__name__)
 
 # Default intervals in seconds
 _SEQUENCE_INTERVAL = 300   # 5 minutes
 _WARMUP_INTERVAL = 900     # 15 minutes
+_OPTIMIZER_INTERVAL = 3600  # 1 hour
 
 
 class Scheduler:
@@ -24,9 +28,11 @@ class Scheduler:
         self,
         sequence_runner: SequenceRunner,
         warmup_scheduler: WarmupScheduler,
+        optimizer: OptimizerAgent | None = None,
     ) -> None:
         self._sequence_runner = sequence_runner
         self._warmup_scheduler = warmup_scheduler
+        self._optimizer = optimizer
         self._tasks: list[asyncio.Task[None]] = []
 
     async def start(self) -> None:
@@ -49,6 +55,18 @@ class Scheduler:
             name="scheduler:warmup_scheduler",
         )
         self._tasks = [sequence_task, warmup_task]
+
+        if self._optimizer is not None:
+            optimizer_task = asyncio.create_task(
+                self._run_loop(
+                    self._optimizer_tick,
+                    _OPTIMIZER_INTERVAL,
+                    "optimizer",
+                ),
+                name="scheduler:optimizer",
+            )
+            self._tasks.append(optimizer_task)
+
         logger.info("Scheduler started with %d background tasks", len(self._tasks))
 
     async def stop(self) -> None:
@@ -74,6 +92,12 @@ class Scheduler:
 
         self._tasks = []
         logger.info("Scheduler stopped")
+
+    async def _optimizer_tick(self) -> None:
+        """Run one optimizer check cycle."""
+        if self._optimizer is None:
+            return
+        await self._optimizer.auto_check_and_promote()
 
     async def _run_loop(
         self,

@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Integer,
     String,
     Text,
 )
@@ -70,6 +71,12 @@ class EventType(str, enum.Enum):
     unsubscribe = "unsubscribe"
 
 
+class ABTestStatus(str, enum.Enum):
+    running = "running"
+    completed = "completed"
+    paused = "paused"
+
+
 # ---------- Utility ----------
 
 def _utcnow() -> datetime:
@@ -95,6 +102,7 @@ class Tenant(Base):
     campaigns = relationship("Campaign", back_populates="tenant")
     sequences = relationship("Sequence", back_populates="tenant")
     users = relationship("User", back_populates="tenant")
+    ab_tests = relationship("ABTest", back_populates="tenant")
 
 
 class User(Base):
@@ -158,6 +166,7 @@ class Campaign(Base):
     tenant = relationship("Tenant", back_populates="campaigns")
     sequence = relationship("Sequence", back_populates="campaigns")
     messages = relationship("Message", back_populates="campaign")
+    ab_tests = relationship("ABTest", back_populates="campaign")
 
 
 class Message(Base):
@@ -189,3 +198,35 @@ class Event(Base):
     meta = Column("metadata", JSONB, default=dict)
 
     message = relationship("Message", back_populates="events")
+
+
+class ABTest(Base):
+    __tablename__ = "ab_tests"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=False)
+    name = Column(String, nullable=False)
+    status = Column(Enum(ABTestStatus), default=ABTestStatus.running, nullable=False)
+    variants = Column(JSONB, default=list)
+    min_sends_per_variant = Column(Integer, default=100)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    winner_variant_key = Column(String, nullable=True)
+
+    tenant = relationship("Tenant", back_populates="ab_tests")
+    campaign = relationship("Campaign", back_populates="ab_tests")
+    assignments = relationship("ABTestAssignment", back_populates="test")
+
+
+class ABTestAssignment(Base):
+    __tablename__ = "ab_test_assignments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    test_id = Column(UUID(as_uuid=True), ForeignKey("ab_tests.id"), nullable=False)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False)
+    variant_key = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    test = relationship("ABTest", back_populates="assignments")
+    lead = relationship("Lead")

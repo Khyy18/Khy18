@@ -16,6 +16,9 @@ from agents.copywriter import CopywriterAgent
 from channels.email.sender import AsyncEmailSender
 from channels.email.tracker import EmailTracker
 from core.models import (
+    ABTest,
+    ABTestAssignment,
+    ABTestStatus,
     Campaign,
     CampaignStatus,
     ChannelType,
@@ -210,6 +213,65 @@ class SequenceRunner:
             "value_proposition": campaign_settings.get("value_proposition", ""),
             "tone_of_voice": campaign_settings.get("tone_of_voice", "professional"),
         }
+
+        # Check for active A/B test and apply variant configuration
+        ab_test_stmt = select(ABTest).where(
+            ABTest.campaign_id == campaign.id,
+            ABTest.status == ABTestStatus.running,
+        )
+        ab_test_result = await session.execute(ab_test_stmt)
+        active_test = ab_test_result.scalars().first()
+
+        variant_config: dict[str, Any] | None = None
+        if active_test:
+            # Get or create assignment for this lead
+            existing_stmt = select(ABTestAssignment).where(
+                ABTestAssignment.test_id == active_test.id,
+                ABTestAssignment.lead_id == lead.id,
+            )
+            existing_result = await session.execute(existing_stmt)
+            assignment = existing_result.scalar_one_or_none()
+
+            if assignment is None:
+                # Round-robin assignment
+                variants = active_test.variants or []
+                variant_keys = [v.get("key", "") for v in variants]
+                if variant_keys:
+                    from sqlalchemy import func as sqlfunc
+                    counts_stmt = (
+                        select(ABTestAssignment.variant_key, sqlfunc.count())
+                        .where(ABTestAssignment.test_id == active_test.id)
+                        .group_by(ABTestAssignment.variant_key)
+                    )
+                    counts_result = await session.execute(counts_stmt)
+                    counts: dict[str, int] = {k: 0 for k in variant_keys}
+                    for row in counts_result.fetchall():
+                        counts[row[0]] = row[1]
+                    chosen_key = min(variant_keys, key=lambda k: counts.get(k, 0))
+
+                    assignment = ABTestAssignment(
+                        test_id=active_test.id,
+                        lead_id=lead.id,
+                        variant_key=chosen_key,
+                    )
+                    session.add(assignment)
+                    await session.flush()
+
+            if assignment:
+                # Find the variant config matching the assigned key
+                for v in (active_test.variants or []):
+                    if v.get("key") == assignment.variant_key:
+                        variant_config = v
+                        break
+
+        # Apply variant overrides to campaign context if A/B test active
+        if variant_config:
+            if variant_config.get("subject"):
+                campaign_context["subject_override"] = variant_config["subject"]
+            if variant_config.get("body"):
+                campaign_context["body_override"] = variant_config["body"]
+            if variant_config.get("template_config"):
+                campaign_context["template_config"] = variant_config["template_config"]
 
         # Generate message content via copywriter
         message_content = await self._copywriter.write_message(
