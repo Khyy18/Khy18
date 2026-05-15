@@ -13,6 +13,7 @@ from scheduler.warmup_scheduler import WarmupScheduler
 
 if TYPE_CHECKING:
     from agents.optimizer import OptimizerAgent
+    from scheduler.backup_scheduler import BackupScheduler
     from scheduler.notifications_scheduler import NotificationsScheduler
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,8 @@ _WARMUP_INTERVAL = 900     # 15 minutes
 _OPTIMIZER_INTERVAL = 3600  # 1 hour
 _NOTIFICATIONS_INTERVAL = 3600  # 1 hour
 _USAGE_RESET_INTERVAL = 86400  # 24 hours (checks daily if 1st of month)
+_BACKUP_INTERVAL = 21600  # 6 hours
+_REDIS_SNAPSHOT_INTERVAL = 3600  # 1 hour
 
 
 class Scheduler:
@@ -35,12 +38,14 @@ class Scheduler:
         optimizer: OptimizerAgent | None = None,
         notifications_scheduler: NotificationsScheduler | None = None,
         redis_url: str = "",
+        backup_scheduler: BackupScheduler | None = None,
     ) -> None:
         self._sequence_runner = sequence_runner
         self._warmup_scheduler = warmup_scheduler
         self._optimizer = optimizer
         self._notifications_scheduler = notifications_scheduler
         self._redis_url = redis_url
+        self._backup_scheduler = backup_scheduler
         self._tasks: list[asyncio.Task[None]] = []
 
     async def start(self) -> None:
@@ -98,6 +103,28 @@ class Scheduler:
             )
             self._tasks.append(usage_reset_task)
 
+        # Backup scheduler tasks
+        if self._backup_scheduler is not None:
+            backup_task = asyncio.create_task(
+                self._run_loop(
+                    self._backup_tick,
+                    _BACKUP_INTERVAL,
+                    "backup",
+                ),
+                name="scheduler:backup",
+            )
+            self._tasks.append(backup_task)
+
+            redis_snapshot_task = asyncio.create_task(
+                self._run_loop(
+                    self._redis_snapshot_tick,
+                    _REDIS_SNAPSHOT_INTERVAL,
+                    "redis_snapshot",
+                ),
+                name="scheduler:redis_snapshot",
+            )
+            self._tasks.append(redis_snapshot_task)
+
         logger.info("Scheduler started with %d background tasks", len(self._tasks))
 
     async def stop(self) -> None:
@@ -139,6 +166,18 @@ class Scheduler:
 
         logger.info("Monthly usage reset: resetting all tenant usage counters")
         await monthly_usage_reset(self._redis_url)
+
+    async def _backup_tick(self) -> None:
+        """Run one backup cycle via the backup scheduler."""
+        if self._backup_scheduler is None:
+            return
+        await self._backup_scheduler.run_backup_tick()
+
+    async def _redis_snapshot_tick(self) -> None:
+        """Run Redis BGSAVE snapshot via the backup scheduler."""
+        if self._backup_scheduler is None:
+            return
+        await self._backup_scheduler.run_redis_snapshot_tick()
 
     async def _run_loop(
         self,

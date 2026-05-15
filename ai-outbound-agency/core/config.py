@@ -97,5 +97,13 @@ class Settings(BaseSettings):
     health_check_interval_minutes: int = 5
     health_telegram_alerts: bool = True
 
+    # Backup settings
+    backup_dir: str = "/backups"
+    backup_retention_days: int = 7
+    s3_backup_bucket: str = ""
+    s3_backup_endpoint: str = ""
+    s3_backup_access_key: str = ""
+    s3_backup_secret_key: str = ""
+
 
 settings = Settings()  # type: ignore[call-arg]

@@ -277,6 +277,8 @@ class ConversationAgent:
         Returns:
             Action summary dict with classification, response, and status updates.
         """
+        from agents.edge_cases import EdgeCaseDetector
+
         async with self._session_factory() as session:
             # Load the inbound message
             msg_uuid = uuid.UUID(message_id)
@@ -312,6 +314,99 @@ class ConversationAgent:
                     "sender_name": campaign.icp_filter.get("sender_name", ""),
                     "sender_title": campaign.icp_filter.get("sender_title", ""),
                 }
+
+            # --- Edge Case Detection (before standard classification) ---
+            edge_detector = EdgeCaseDetector(llm_client=self._llm)
+
+            # Build conversation history from previous messages for this lead
+            history_stmt = (
+                select(Message)
+                .where(Message.lead_id == inbound_message.lead_id)
+                .where(Message.id != inbound_message.id)
+                .order_by(Message.sent_at)
+            )
+            history_result = await session.execute(history_stmt)
+            history_messages = history_result.scalars().all()
+
+            conversation_history: list[dict[str, Any]] = []
+            for hist_msg in history_messages:
+                conversation_history.append({
+                    "content": hist_msg.content or "",
+                    "direction": hist_msg.direction.value if hist_msg.direction else "outbound",
+                    "sent_at": hist_msg.sent_at.isoformat() if hist_msg.sent_at else None,
+                })
+
+            # Build headers from message metadata if available
+            headers: dict[str, str] = {}
+            if hasattr(inbound_message, "metadata") and inbound_message.metadata:
+                msg_meta = inbound_message.metadata
+                if isinstance(msg_meta, dict):
+                    if msg_meta.get("cc"):
+                        headers["cc"] = msg_meta["cc"]
+                    if msg_meta.get("bcc"):
+                        headers["bcc"] = msg_meta["bcc"]
+
+            lead_data_for_edge: dict[str, Any] = {
+                "first_name": lead.first_name,
+                "last_name": lead.last_name,
+                "email": lead.email,
+                "company": lead.company,
+                "title": lead.title,
+            }
+
+            edge_case_type = edge_detector.detect_edge_case(
+                message_content=inbound_message.content,
+                lead_data=lead_data_for_edge,
+                conversation_history=conversation_history,
+                headers=headers,
+            )
+
+            if edge_case_type is not None:
+                logger.info(
+                    "Edge case detected for message %s: %s",
+                    message_id,
+                    edge_case_type,
+                )
+                edge_response = await edge_detector.handle_edge_case(
+                    edge_case_type=edge_case_type,
+                    message_content=inbound_message.content,
+                    lead_data=lead_data_for_edge,
+                    campaign_context=campaign_context,
+                )
+
+                # Handle stop_sequence: mark lead as lost, return early
+                if edge_response.get("action") == "stop_sequence":
+                    lead.status = LeadStatus.lost
+                    await session.commit()
+                    return {
+                        "message_id": message_id,
+                        "edge_case_type": edge_case_type,
+                        "response": edge_response,
+                        "lead_status": lead.status.value,
+                        "response_sent": False,
+                    }
+
+                # Handle create_referral with new lead info
+                if (
+                    edge_response.get("action") == "create_referral"
+                    and edge_response.get("create_new_lead")
+                ):
+                    logger.info(
+                        "Referral detected for message %s: new_lead_info=%s",
+                        message_id,
+                        edge_response.get("new_lead_info"),
+                    )
+
+                # For all other edge cases, return the edge case response
+                return {
+                    "message_id": message_id,
+                    "edge_case_type": edge_case_type,
+                    "response": edge_response,
+                    "lead_status": lead.status.value if lead.status else None,
+                    "response_sent": False,
+                }
+
+            # --- End Edge Case Detection ---
 
             # Classify the reply
             classification = await self.classify_reply(
