@@ -64,6 +64,28 @@ SUBSCRIPTION_BASIC_PRICE: int = int(os.getenv("SUBSCRIPTION_BASIC_PRICE", "990")
 SUBSCRIPTION_BASIC_ORDERS: int = int(os.getenv("SUBSCRIPTION_BASIC_ORDERS", "20"))
 SUBSCRIPTION_PRO_PRICE: int = int(os.getenv("SUBSCRIPTION_PRO_PRICE", "2490"))
 
+# Sentry (опционально)
+SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+
+# Очередь заказов
+QUEUE_MAX_SIZE: int = int(os.getenv("QUEUE_MAX_SIZE", "100"))
+QUEUE_WORKERS: int = int(os.getenv("QUEUE_WORKERS", "3"))
+
+# Telegram Stars
+STARS_TO_RUB_RATE: float = float(os.getenv("STARS_TO_RUB_RATE", "1.5"))
+
+# Аналитика
+GOOGLE_ANALYTICS_ID: str = os.getenv("GOOGLE_ANALYTICS_ID", "")
+YANDEX_METRIKA_ID: str = os.getenv("YANDEX_METRIKA_ID", "")
+
+# Логирование
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+LOG_FILE: str = os.getenv("LOG_FILE", "logs/agency.log")
+
+# Бэкапы
+BACKUP_DIR: str = os.getenv("BACKUP_DIR", "backups")
+BACKUP_KEEP_COUNT: int = int(os.getenv("BACKUP_KEEP_COUNT", "7"))
+
 
 def validate_config() -> List[str]:
     """
