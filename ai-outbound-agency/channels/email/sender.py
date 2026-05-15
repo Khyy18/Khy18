@@ -19,10 +19,12 @@ class AsyncEmailSender:
         self,
         smtp_accounts: list[dict[str, Any]],
         redis_url: str,
+        reputation_tracker: Any | None = None,
     ) -> None:
         self._accounts = smtp_accounts
         self._redis = aioredis.from_url(redis_url, decode_responses=True)
         self._current_index = 0
+        self._reputation_tracker = reputation_tracker
 
     async def _get_daily_send_count(self, domain: str) -> int:
         """Get the number of emails sent today for a domain."""
@@ -48,6 +50,16 @@ class AsyncEmailSender:
             daily_limit = account.get("daily_limit", 50)
             current_count = await self._get_daily_send_count(domain)
             if current_count < daily_limit:
+                # Check domain reputation if tracker is available
+                if self._reputation_tracker is not None:
+                    score = await self._reputation_tracker.get_reputation_score(domain)
+                    if score < 60:
+                        logger.warning(
+                            "Domain %s skipped due to low reputation score: %d",
+                            domain,
+                            score,
+                        )
+                        continue
                 return account
         return None
 
@@ -88,6 +100,34 @@ class AsyncEmailSender:
 
         Returns a dict with domain_used, message_id_header, and success status.
         """
+        # Pre-send spam check
+        from channels.email.spam_checker import SpamChecker
+
+        checker = SpamChecker()
+        spam_result = checker.check_message(subject, html_body)
+
+        if spam_result.verdict == "blocked":
+            logger.warning(
+                "Email to %s blocked by spam checker (score=%.1f): %s",
+                to,
+                spam_result.score,
+                [c.name for c in spam_result.breakdown],
+            )
+            return {
+                "domain_used": None,
+                "message_id_header": None,
+                "success": False,
+                "spam_blocked": True,
+            }
+
+        if spam_result.verdict == "warning":
+            logger.warning(
+                "Email to %s has spam warning (score=%.1f): %s",
+                to,
+                spam_result.score,
+                [c.name for c in spam_result.breakdown],
+            )
+
         account = await self._pick_account()
         if account is None:
             logger.warning("No available domain - all daily limits reached")

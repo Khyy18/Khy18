@@ -35,6 +35,7 @@ def email_sender(smtp_accounts, mock_redis):
     sender._accounts = smtp_accounts
     sender._redis = mock_redis
     sender._current_index = 0
+    sender._reputation_tracker = None
     return sender
 
 
