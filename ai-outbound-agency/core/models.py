@@ -131,6 +131,7 @@ class Tenant(Base):
     usage_records = relationship("UsageRecord", back_populates="tenant")
     api_keys = relationship("ApiKey", back_populates="tenant")
     webhooks = relationship("Webhook", back_populates="tenant")
+    lead_feedbacks = relationship("LeadFeedback", back_populates="tenant")
 
 
 class User(Base):
@@ -351,3 +352,31 @@ class Webhook(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     tenant = relationship("Tenant", back_populates="webhooks")
+
+
+class LeadFeedback(Base):
+    __tablename__ = "lead_feedbacks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    rating = Column(Integer, nullable=False)
+    comment = Column(Text, nullable=True)
+    feedback_type = Column(String, nullable=False)
+    event_trigger = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="lead_feedbacks")
+    lead = relationship("Lead")
+
+
+class CompetitiveIntel(Base):
+    __tablename__ = "competitive_intel"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    source = Column(String, nullable=False)
+    category = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    summary = Column(Text, nullable=True)
+    competitor_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
