@@ -117,6 +117,12 @@ class LeadImportResponse(BaseModel):
     imported_count: int
 
 
+class HotLeadsResponse(BaseModel):
+    items: list[LeadResponse]
+    total: int
+    threshold: float
+
+
 # ---------- Sequence Schemas ----------
 
 # Valid channel types for sequence steps

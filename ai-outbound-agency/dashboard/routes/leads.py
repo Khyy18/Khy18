@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from core.models import Lead, User
 from dashboard.auth import get_current_user
 from dashboard.schemas import (
+    HotLeadsResponse,
     LeadCreate,
     LeadImportResponse,
     LeadListResponse,
@@ -88,6 +89,40 @@ async def list_leads(
     items = list(result.scalars().all())
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/hot", response_model=HotLeadsResponse)
+async def get_hot_leads(
+    threshold: float = Query(default=80.0, ge=0, le=100),
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Get leads with score above threshold, sorted by score descending."""
+    from sqlalchemy import func as sa_func
+
+    base_query = select(Lead).where(
+        Lead.tenant_id == current_user.tenant_id,
+        Lead.score > threshold,
+    )
+    count_query = (
+        select(sa_func.count())
+        .select_from(Lead)
+        .where(
+            Lead.tenant_id == current_user.tenant_id,
+            Lead.score > threshold,
+        )
+    )
+
+    total_result = await session.execute(count_query)
+    total = total_result.scalar() or 0
+
+    result = await session.execute(
+        base_query.order_by(Lead.score.desc()).limit(limit)
+    )
+    items = list(result.scalars().all())
+
+    return {"items": items, "total": total, "threshold": threshold}
 
 
 @router.get("/{lead_id}", response_model=LeadResponse)

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -139,6 +140,20 @@ async def track_open(
         )
         await session.commit()
         logger.info("Tracked open for message %s", message_id)
+
+        # Trigger score update (non-blocking)
+        try:
+            from agents.lead_scorer import trigger_score_update
+            from core.db import _get_session_factory
+
+            msg_result = await session.execute(
+                select(Message.lead_id).where(Message.id == uuid.UUID(message_id))
+            )
+            lead_id_row = msg_result.scalar_one_or_none()
+            if lead_id_row:
+                asyncio.create_task(trigger_score_update(lead_id_row, _get_session_factory()))
+        except Exception:
+            pass  # Non-blocking, don't fail tracking
     except Exception as exc:
         logger.error("Failed to track open: %s", str(exc))
 
@@ -188,6 +203,20 @@ async def track_click(
             )
             await session.commit()
             logger.info("Tracked click for message %s -> %s", message_id, original_url)
+
+            # Trigger score update (non-blocking)
+            try:
+                from agents.lead_scorer import trigger_score_update
+                from core.db import _get_session_factory
+
+                msg_result = await session.execute(
+                    select(Message.lead_id).where(Message.id == uuid.UUID(message_id))
+                )
+                lead_id_row = msg_result.scalar_one_or_none()
+                if lead_id_row:
+                    asyncio.create_task(trigger_score_update(lead_id_row, _get_session_factory()))
+            except Exception:
+                pass  # Non-blocking, don't fail tracking
     except Exception as exc:
         logger.error("Failed to track click: %s", str(exc))
 
