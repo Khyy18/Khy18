@@ -157,6 +157,17 @@ def init_db() -> None:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bk_classifications (
+                    bookmaker TEXT PRIMARY KEY,
+                    risk_level TEXT NOT NULL,
+                    days_to_cut INTEGER,
+                    recommendation TEXT,
+                    updated_ts TEXT
+                )
+                """
+            )
             conn.commit()
         print(f"[ARB_MEMORY] База данных инициализирована: {DB_PATH}")
     except sqlite3.Error as exc:
@@ -732,3 +743,62 @@ def load_bot_state(key: str) -> Optional[str]:
     except sqlite3.Error as exc:
         print(f"[ARB_MEMORY] Ошибка загрузки bot_state '{key}': {exc}")
     return None
+
+
+# --- Bookmaker Classifications ---
+
+
+def save_bk_classification(
+    bookmaker: str,
+    risk_level: str,
+    days_to_cut: int,
+    recommendation: str,
+) -> None:
+    """Сохранить или обновить классификацию букмекера."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO bk_classifications (bookmaker, risk_level, days_to_cut, recommendation, updated_ts)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(bookmaker) DO UPDATE SET
+                    risk_level = excluded.risk_level,
+                    days_to_cut = excluded.days_to_cut,
+                    recommendation = excluded.recommendation,
+                    updated_ts = excluded.updated_ts
+                """,
+                (str(bookmaker), str(risk_level), int(days_to_cut), str(recommendation), _now_iso()),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка сохранения классификации {bookmaker}: {exc}")
+
+
+def get_bk_classification(bookmaker: str) -> Optional[dict[str, Any]]:
+    """Получить классификацию букмекера. None если нет записи."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT bookmaker, risk_level, days_to_cut, recommendation, updated_ts "
+                "FROM bk_classifications WHERE bookmaker = ?",
+                (str(bookmaker),),
+            ).fetchone()
+            if row:
+                return dict(row)
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения классификации {bookmaker}: {exc}")
+    return None
+
+
+def get_all_bk_classifications() -> list[dict[str, Any]]:
+    """Получить все классификации букмекеров."""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT bookmaker, risk_level, days_to_cut, recommendation, updated_ts "
+                "FROM bk_classifications ORDER BY bookmaker"
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения классификаций: {exc}")
+        return []

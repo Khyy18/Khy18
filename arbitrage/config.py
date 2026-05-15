@@ -16,6 +16,7 @@ BETFAIR_SESSION_TOKEN: str = os.getenv("BETFAIR_SESSION_TOKEN", "")
 TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+NEWS_API_KEY: str = os.getenv("NEWS_API_KEY", "")
 
 # --- Константы арбитража ---
 MIN_ARB_PROFIT: float = 1.0          # минимальная прибыль surebets (%)
