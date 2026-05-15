@@ -218,12 +218,16 @@ class BankrollAllocator:
         recent = memory.get_recent_bets(50)
         pnls = [float(b.get("pnl") or 0.0) for b in recent if b.get("pnl") is not None]
 
-        # Calculate HWM (high water mark)
-        hwm = bankroll
-        running = bankroll
-        for p in pnls:
+        # pnls are newest-first from get_recent_bets; reverse to get chronological order
+        chronological_pnls = list(reversed(pnls))
+        # Reconstruct the starting bankroll before these bets happened
+        starting_bankroll = bankroll - sum(chronological_pnls)
+        running = starting_bankroll
+        hwm = starting_bankroll
+        for p in chronological_pnls:
             running += p
             hwm = max(hwm, running)
+        # hwm is now the actual peak; bankroll is current position
 
         # Count losing streak (from most recent)
         losing_streak = 0

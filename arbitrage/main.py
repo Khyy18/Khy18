@@ -689,6 +689,15 @@ async def stream_arb_detector(state: dict[str, Any], session: aiohttp.ClientSess
                                                 "[STREAM_ARB] Арб обнаружен: market=%s, profit=%.2f%%",
                                                 market_id, profit_pct,
                                             )
+                                            stream_opps = state.setdefault("stream_arb_opps", [])
+                                            stream_opps.append({
+                                                "market_id": market_id,
+                                                "profit_pct": round(profit_pct, 2),
+                                                "detected_ts": datetime.now(timezone.utc).isoformat(),
+                                            })
+                                            # Keep only last 20 stream opportunities
+                                            if len(stream_opps) > 20:
+                                                state["stream_arb_opps"] = stream_opps[-20:]
 
         logger.debug(
             "[STREAM_ARB] Price change: market=%s, runners=%d",
