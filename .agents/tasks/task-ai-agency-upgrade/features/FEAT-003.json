@@ -2,7 +2,7 @@
   "id": "FEAT-003",
   "type": "feat",
   "description": "Bot upgrades: referral system, rating/auto-redo, subscription UI, payment UI in client bot. Analytics dashboard and broadcast commands in admin bot. Scheduler for automated messages.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Update ai_agency/bot.py - Add referral system: (1) Parse deep link parameter in /start (context.args[0] if starts with 'ref_'). (2) If new user and has referrer, store in DB via database.create_referral(). (3) Add 'Referral link' button in main menu that shows the user's deep link (t.me/{BOT_USERNAME}?start=ref_{user_id}) and referral stats. (4) After first order by referred user, credit referrer with 10% bonus.",
     "Update ai_agency/bot.py - Add payment/subscription UI: (1) Replace 'contact admin' in balance section with 'Top up balance' button. (2) On 'Top up' click show amount options (500, 1000, 2000, 5000 rub) as inline buttons. (3) On amount selection call payment_gateway.create_payment() and send payment URL. (4) Add 'Subscriptions' button showing BASIC and PRO tiers with prices and 'Subscribe' buttons. (5) On subscribe click create subscription payment via payment_gateway.",
@@ -28,5 +28,5 @@
     "cd /projects/sandbox/Khy18/ai_agency && python -c \"import bot; import admin_bot; import analytics; import scheduler; print('All imports OK')\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All modules compile and import cleanly. bot.py updated with referral deep links, payment/subscription UI, rating system with auto-redo, billing integration via check_can_order/charge_or_use_subscription, and scheduler post_init hook. analytics.py provides get_dashboard_data() and format_dashboard(). scheduler.py uses asyncio tasks (retention 24h, upsell 24h, subscription_expiry 1h). admin_bot.py has new Analytics button calling analytics module. Rating handler registered outside ConversationHandler with pattern filter."
 }
