@@ -1,6 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
@@ -14,15 +15,16 @@ from kindergarten_accountant_bot.config import (
     OMS_RATE,
     PFR_RATE,
 )
+from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.utils.formatting import _card, format_money
 from kindergarten_accountant_bot.utils.keyboards import back_to_menu_button
 
 OKLAD, RATE, STAZH, CATEGORY = range(4)
 
 
-def calculate_salary(oklad: float, rate: float, stazh_percent: float) -> dict:
+def calculate_salary(oklad: float, rate: float, stazh_percent: float, category_percent: float = 0) -> dict:
     """Calculate salary breakdown. Returns dict with all computed values."""
-    nachisleno = oklad * rate * (1 + stazh_percent / 100)
+    nachisleno = oklad * rate * (1 + stazh_percent / 100 + category_percent / 100)
     ndfl = nachisleno * NDFL_RATE
     pfr = nachisleno * PFR_RATE
     oms = nachisleno * OMS_RATE
@@ -59,6 +61,9 @@ async def oklad_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         oklad = float(update.message.text.replace(" ", "").replace(",", "."))
     except ValueError:
         await update.message.reply_text("Пожалуйста, введите число. Попробуйте ещё раз:")
+        return OKLAD
+    if oklad <= 0:
+        await update.message.reply_text("Введите положительное число")
         return OKLAD
     context.user_data["salary_oklad"] = oklad
     keyboard = [
@@ -98,24 +103,29 @@ async def stazh_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return STAZH
     context.user_data["salary_stazh"] = stazh
     await update.message.reply_text(
-        "Введите надбавку за категорию (текстом или 0, если нет):"
+        "Введите надбавку за категорию в процентах (0, если нет):"
     )
     return CATEGORY
 
 
 async def category_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive category, calculate and show result."""
-    category_text = update.message.text.strip()
+    try:
+        category_percent = float(update.message.text.replace(" ", "").replace(",", "."))
+    except ValueError:
+        category_percent = 0
+
     oklad = context.user_data["salary_oklad"]
     rate = context.user_data["salary_rate"]
     stazh = context.user_data["salary_stazh"]
 
-    result = calculate_salary(oklad, rate, stazh)
+    result = calculate_salary(oklad, rate, stazh, category_percent)
 
     body_lines = [
         f"Оклад:           {format_money(oklad)}",
         f"Ставка:          {rate}",
         f"Надбавка стаж:   {stazh:.0f}%",
+        f"Надбавка кат.:   {category_percent:.0f}%",
         "\u2501" * 24,
         f"Начислено:       {format_money(result['nachisleno'])}",
         f"НДФЛ (13%):      {format_money(result['ndfl'])}",
@@ -147,5 +157,6 @@ salary_conv_handler = ConversationHandler(
         STAZH: [MessageHandler(filters.TEXT & ~filters.COMMAND, stazh_received)],
         CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_received)],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )

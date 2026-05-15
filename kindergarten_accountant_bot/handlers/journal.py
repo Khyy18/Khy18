@@ -1,16 +1,19 @@
 """Handlers for operations journal."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from typing import Optional
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
     filters,
 )
 
+from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.models.journal import (
     add_entry,
     get_entries_for_period,
@@ -29,14 +32,21 @@ JRN_VIEW_PERIOD, JRN_VIEW_START, JRN_VIEW_END = range(10, 13)
 JRN_TOTALS_PERIOD, JRN_TOTALS_START, JRN_TOTALS_END = range(20, 23)
 
 
-def _parse_date(text: str) -> str:
-    """Parse date from DD.MM.YYYY or YYYY-MM-DD format. Returns YYYY-MM-DD."""
+def _parse_date(text: str) -> Optional[str]:
+    """Parse date from DD.MM.YYYY or YYYY-MM-DD format. Returns YYYY-MM-DD or None if invalid."""
     text = text.strip()
     if "." in text:
-        parts = text.split(".")
-        if len(parts) == 3:
-            return f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
-    return text
+        try:
+            dt = datetime.strptime(text, "%d.%m.%Y")
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+    else:
+        try:
+            datetime.strptime(text, "%Y-%m-%d")
+            return text
+        except ValueError:
+            return None
 
 
 async def journal_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,7 +88,13 @@ async def jrn_add_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if text == ".":
         context.user_data["jrn_date"] = date.today().strftime("%Y-%m-%d")
     else:
-        context.user_data["jrn_date"] = _parse_date(text)
+        parsed = _parse_date(text)
+        if parsed is None:
+            await update.message.reply_text(
+                "Неверный формат даты. Введите дату в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД:"
+            )
+            return JRN_DATE
+        context.user_data["jrn_date"] = parsed
     await update.message.reply_text("Введите сумму:")
     return JRN_AMOUNT
 
@@ -90,6 +106,9 @@ async def jrn_add_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         amount = float(text)
     except ValueError:
         await update.message.reply_text("Введите число. Попробуйте ещё раз:")
+        return JRN_AMOUNT
+    if amount <= 0:
+        await update.message.reply_text("Введите положительное число")
         return JRN_AMOUNT
     context.user_data["jrn_amount"] = amount
     keyboard = [
@@ -198,7 +217,13 @@ async def jrn_view_period(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def jrn_view_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive start date for custom period."""
-    context.user_data["jrn_view_start"] = _parse_date(update.message.text)
+    parsed = _parse_date(update.message.text)
+    if parsed is None:
+        await update.message.reply_text(
+            "Неверный формат даты. Введите дату в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД:"
+        )
+        return JRN_VIEW_START
+    context.user_data["jrn_view_start"] = parsed
     await update.message.reply_text("Введите дату окончания периода (ДД.ММ.ГГГГ):")
     return JRN_VIEW_END
 
@@ -207,6 +232,11 @@ async def jrn_view_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Receive end date and show entries."""
     start = context.user_data["jrn_view_start"]
     end = _parse_date(update.message.text)
+    if end is None:
+        await update.message.reply_text(
+            "Неверный формат даты. Введите дату в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД:"
+        )
+        return JRN_VIEW_END
     entries = await get_entries_for_period(start, end)
 
     start_display = _format_display_date(start)
@@ -316,7 +346,13 @@ async def jrn_totals_period(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def jrn_totals_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive start date for custom totals period."""
-    context.user_data["jrn_totals_start"] = _parse_date(update.message.text)
+    parsed = _parse_date(update.message.text)
+    if parsed is None:
+        await update.message.reply_text(
+            "Неверный формат даты. Введите дату в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД:"
+        )
+        return JRN_TOTALS_START
+    context.user_data["jrn_totals_start"] = parsed
     await update.message.reply_text("Введите дату окончания периода (ДД.ММ.ГГГГ):")
     return JRN_TOTALS_END
 
@@ -325,6 +361,11 @@ async def jrn_totals_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Receive end date and show totals."""
     start = context.user_data["jrn_totals_start"]
     end = _parse_date(update.message.text)
+    if end is None:
+        await update.message.reply_text(
+            "Неверный формат даты. Введите дату в формате ДД.ММ.ГГГГ или ГГГГ-ММ-ДД:"
+        )
+        return JRN_TOTALS_END
     totals = await get_totals_for_period(start, end)
 
     start_display = _format_display_date(start)
@@ -408,7 +449,8 @@ add_entry_conv = ConversationHandler(
         ],
         JRN_BASIS: [MessageHandler(filters.TEXT & ~filters.COMMAND, jrn_add_basis)],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 view_journal_conv = ConversationHandler(
@@ -424,7 +466,8 @@ view_journal_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, jrn_view_end_date)
         ],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 totals_conv = ConversationHandler(
@@ -440,7 +483,8 @@ totals_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, jrn_totals_end_date)
         ],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 journal_handler = [

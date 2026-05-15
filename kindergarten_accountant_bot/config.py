@@ -1,4 +1,6 @@
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+import os
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 DB_PATH = "bot.db"
 BASE_FEE_PER_DAY = 150.0
 NDFL_RATE = 0.13
@@ -8,3 +10,8 @@ FSS_RATE = 0.029
 FSS_NS_RATE = 0.002
 WORKING_DAYS_MONTH = 22
 AVG_DAYS_MONTH = 29.3
+
+
+def get_db_path() -> str:
+    """Return the database path. Used by models to allow easy patching in tests."""
+    return DB_PATH

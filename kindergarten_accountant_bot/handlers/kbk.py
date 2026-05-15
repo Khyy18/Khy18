@@ -3,6 +3,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
@@ -10,6 +11,7 @@ from telegram.ext import (
 )
 
 from kindergarten_accountant_bot.data.kbk_codes import KBK_CODES, POPULAR_KBK, search_kbk
+from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.utils.formatting import _card
 from kindergarten_accountant_bot.utils.keyboards import back_to_menu_button
 
@@ -155,7 +157,8 @@ kbk_search_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, kbk_search_input)
         ],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 kbk_handler = [

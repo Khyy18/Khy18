@@ -2,12 +2,12 @@ from typing import List, Optional
 
 import aiosqlite
 
-from kindergarten_accountant_bot.config import DB_PATH
+from kindergarten_accountant_bot import config
 
 
 async def add_child(child_fio: str, group_name: str, parent_fio: str, discount_percent: float) -> int:
     """Add child, return ID."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         cursor = await db.execute(
             "INSERT INTO children (child_fio, group_name, parent_fio, discount_percent) VALUES (?, ?, ?, ?)",
             (child_fio, group_name, parent_fio, discount_percent),
@@ -18,7 +18,7 @@ async def add_child(child_fio: str, group_name: str, parent_fio: str, discount_p
 
 async def get_children() -> List[dict]:
     """Return all children."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("SELECT * FROM children ORDER BY id")
         rows = await cursor.fetchall()
@@ -27,7 +27,7 @@ async def get_children() -> List[dict]:
 
 async def get_child(child_id: int) -> Optional[dict]:
     """Get single child by ID."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM children WHERE id = ?", (child_id,)
@@ -38,7 +38,7 @@ async def get_child(child_id: int) -> Optional[dict]:
 
 async def delete_child(child_id: int) -> bool:
     """Delete child."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         cursor = await db.execute(
             "DELETE FROM children WHERE id = ?", (child_id,)
         )
@@ -48,7 +48,7 @@ async def delete_child(child_id: int) -> bool:
 
 async def get_children_by_group(group_name: str) -> List[dict]:
     """Get children filtered by group."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM children WHERE group_name = ? ORDER BY id",

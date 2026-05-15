@@ -1,8 +1,10 @@
 """Handlers for deadline reminders management."""
 
+import logging
 from datetime import date, datetime, timezone, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import Forbidden
 from telegram.ext import CallbackQueryHandler, ContextTypes
 
 from kindergarten_accountant_bot.data.deadlines import DEADLINES
@@ -166,8 +168,10 @@ async def daily_reminder_job(context: ContextTypes.DEFAULT_TYPE):
                     text=card,
                     parse_mode="HTML",
                 )
-            except Exception:
-                pass
+            except Forbidden:
+                logging.warning("User %s blocked the bot", chat_id)
+            except Exception as e:
+                logging.warning("Failed to send reminder to %s: %s", chat_id, e)
 
 
 def setup_reminder_jobs(application):

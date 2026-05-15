@@ -4,13 +4,13 @@ from datetime import date, timedelta
 
 import aiosqlite
 
-from kindergarten_accountant_bot.config import DB_PATH
+from kindergarten_accountant_bot import config
 from kindergarten_accountant_bot.data.deadlines import DEADLINES
 
 
 async def set_reminder_status(chat_id: int, reminder_name: str, enabled: bool) -> None:
     """Enable or disable a reminder for a chat. Upsert into reminders table."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         existing = await db.execute(
             "SELECT id FROM reminders WHERE chat_id = ? AND name = ?",
             (chat_id, reminder_name),
@@ -31,7 +31,7 @@ async def set_reminder_status(chat_id: int, reminder_name: str, enabled: bool) -
 
 async def get_enabled_reminders(chat_id: int) -> list:
     """Return list of enabled reminder names for chat."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT name FROM reminders WHERE chat_id = ? AND enabled = 1",
@@ -43,7 +43,7 @@ async def get_enabled_reminders(chat_id: int) -> list:
 
 async def get_all_reminders_status(chat_id: int) -> dict:
     """Return dict of {reminder_name: enabled} for all known deadlines."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT name, enabled FROM reminders WHERE chat_id = ?",
@@ -96,7 +96,7 @@ def get_next_deadline_date(deadline: dict, from_date: date = None) -> date:
 
 async def get_chats_with_reminders() -> list:
     """Return list of distinct chat_ids that have at least one enabled reminder."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         cursor = await db.execute(
             "SELECT DISTINCT chat_id FROM reminders WHERE enabled = 1"
         )

@@ -3,6 +3,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
@@ -10,6 +11,7 @@ from telegram.ext import (
 )
 
 from kindergarten_accountant_bot.data.kbk_codes import POPULAR_KBK
+from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.utils.formatting import _card, format_money
 from kindergarten_accountant_bot.utils.keyboards import back_to_menu_button
 
@@ -104,6 +106,9 @@ async def payment_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         amount = float(text)
     except ValueError:
         await update.message.reply_text("Введите число. Попробуйте ещё раз:")
+        return AMOUNT
+    if amount <= 0:
+        await update.message.reply_text("Введите положительное число")
         return AMOUNT
     context.user_data["pay_amount"] = amount
     await update.message.reply_text("Введите назначение платежа:")
@@ -226,5 +231,6 @@ payment_conv_handler = ConversationHandler(
             CallbackQueryHandler(payment_kbk_selected, pattern="^pay_kbk_sel_.+$"),
         ],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )

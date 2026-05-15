@@ -3,6 +3,7 @@ from datetime import date
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
@@ -10,6 +11,7 @@ from telegram.ext import (
 )
 
 from kindergarten_accountant_bot.config import BASE_FEE_PER_DAY
+from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.models.child import (
     add_child,
     delete_child,
@@ -326,10 +328,19 @@ async def pay_input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except ValueError:
         await update.message.reply_text("Введите число. Попробуйте ещё раз:")
         return PAY_INPUT_AMOUNT
+    if amount <= 0:
+        await update.message.reply_text("Введите положительное число")
+        return PAY_INPUT_AMOUNT
 
     child_id = context.user_data["pr_pay_child_id"]
     today = date.today()
-    await record_payment(child_id, today.month, today.year, amount)
+    updated = await record_payment(child_id, today.month, today.year, amount)
+    if not updated:
+        await update.message.reply_text(
+            "Нет начислений за текущий месяц. Сначала рассчитайте плату.",
+            reply_markup=back_to_menu_button(),
+        )
+        return ConversationHandler.END
     child = await get_child(child_id)
     child_fio = child["child_fio"] if child else "?"
 
@@ -396,7 +407,8 @@ add_child_conv = ConversationHandler(
         ADD_CHILD_PARENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_child_parent)],
         ADD_CHILD_DISCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_child_discount)],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 calc_fee_conv = ConversationHandler(
@@ -407,7 +419,8 @@ calc_fee_conv = ConversationHandler(
         ],
         CALC_INPUT_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, calc_input_days)],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 pay_conv = ConversationHandler(
@@ -418,7 +431,8 @@ pay_conv = ConversationHandler(
         ],
         PAY_INPUT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, pay_input_amount)],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 parents_handler = [

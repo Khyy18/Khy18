@@ -1,11 +1,11 @@
 import aiosqlite
 
-from kindergarten_accountant_bot.config import DB_PATH
+from kindergarten_accountant_bot import config
 
 
 async def init_db():
     """Initialize the database and create all tables."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS employees (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

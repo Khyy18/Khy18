@@ -2,7 +2,7 @@
 
 import aiosqlite
 
-from kindergarten_accountant_bot.config import DB_PATH
+from kindergarten_accountant_bot import config
 
 
 async def add_entry(
@@ -13,7 +13,7 @@ async def add_entry(
     basis: str,
 ) -> int:
     """Add journal entry. entry_type is 'income' or 'expense'. Returns ID."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         cursor = await db.execute(
             """INSERT INTO journal_entries (date, amount, entry_type, counterparty, basis)
                VALUES (?, ?, ?, ?, ?)""",
@@ -25,7 +25,7 @@ async def add_entry(
 
 async def get_entries_for_period(start_date: str, end_date: str) -> list:
     """Get all entries between start and end date (YYYY-MM-DD format), ordered by date."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """SELECT id, date, amount, entry_type, counterparty, basis
@@ -40,7 +40,7 @@ async def get_entries_for_period(start_date: str, end_date: str) -> list:
 
 async def get_totals_for_period(start_date: str, end_date: str) -> dict:
     """Return {'income': float, 'expense': float, 'balance': float} for period."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         cursor = await db.execute(
             """SELECT
                  COALESCE(SUM(CASE WHEN entry_type='income' THEN amount ELSE 0 END), 0) as income,

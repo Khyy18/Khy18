@@ -1,6 +1,7 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
@@ -8,6 +9,7 @@ from telegram.ext import (
 )
 
 from kindergarten_accountant_bot.config import AVG_DAYS_MONTH, NDFL_RATE
+from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.utils.formatting import _card, format_money
 from kindergarten_accountant_bot.utils.keyboards import back_to_menu_button
 
@@ -135,5 +137,6 @@ vacation_conv_handler = ConversationHandler(
         SINGLE_SUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, single_sum_received)],
         DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, days_received)],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )

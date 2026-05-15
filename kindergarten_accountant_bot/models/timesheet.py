@@ -2,13 +2,13 @@ from typing import List
 
 import aiosqlite
 
-from kindergarten_accountant_bot.config import DB_PATH
+from kindergarten_accountant_bot import config
 from kindergarten_accountant_bot.utils.constants import MARK_TYPES
 
 
 async def add_mark(employee_id: int, date: str, mark_type: str) -> int:
     """Add timesheet mark for date (format YYYY-MM-DD). If mark exists for this employee+date, update it."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         cursor = await db.execute(
             "SELECT id FROM timesheet_marks WHERE employee_id = ? AND date = ?",
             (employee_id, date),
@@ -33,7 +33,7 @@ async def add_mark(employee_id: int, date: str, mark_type: str) -> int:
 async def get_marks_for_month(employee_id: int, year: int, month: int) -> List[dict]:
     """Return all marks for employee in given month."""
     date_prefix = f"{year:04d}-{month:02d}"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM timesheet_marks WHERE employee_id = ? AND date LIKE ?",

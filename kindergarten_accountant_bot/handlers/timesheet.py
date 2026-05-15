@@ -3,12 +3,14 @@ from datetime import date
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
     filters,
 )
 
+from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.models.employee import (
     add_employee,
     delete_employee,
@@ -361,7 +363,8 @@ add_employee_conv = ConversationHandler(
         ADD_POSITION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_employee_position)],
         ADD_RATE: [CallbackQueryHandler(add_employee_rate, pattern=r"^ts_rate_")],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 mark_conv = ConversationHandler(
@@ -378,7 +381,8 @@ mark_conv = ConversationHandler(
             CallbackQueryHandler(mark_select_type, pattern=r"^ts_mark_type_")
         ],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 summary_conv = ConversationHandler(
@@ -388,7 +392,8 @@ summary_conv = ConversationHandler(
             CallbackQueryHandler(summary_select_employee, pattern=r"^ts_sum_emp_\d+$")
         ],
     },
-    fallbacks=[],
+    fallbacks=[CommandHandler("cancel", cancel)],
+    conversation_timeout=600,
 )
 
 timesheet_handler = [

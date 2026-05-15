@@ -18,10 +18,9 @@ from kindergarten_accountant_bot.models.reminder import (
 
 @pytest_asyncio.fixture
 async def reminder_db(tmp_path):
-    """Fixture that patches DB_PATH and initializes the database."""
+    """Fixture that patches get_db_path and initializes the database."""
     db_file = str(tmp_path / "test_reminder.db")
-    with patch("kindergarten_accountant_bot.models.database.DB_PATH", db_file), \
-         patch("kindergarten_accountant_bot.models.reminder.DB_PATH", db_file):
+    with patch("kindergarten_accountant_bot.config.get_db_path", return_value=db_file):
         await init_db()
         yield db_file
 
@@ -29,7 +28,7 @@ async def reminder_db(tmp_path):
 @pytest.mark.asyncio
 async def test_set_reminder_status_enable(reminder_db):
     """Test enabling a reminder."""
-    with patch("kindergarten_accountant_bot.models.reminder.DB_PATH", reminder_db):
+    with patch("kindergarten_accountant_bot.config.get_db_path", return_value=reminder_db):
         await set_reminder_status(123, "6-НДФЛ", True)
         enabled = await get_enabled_reminders(123)
         assert "6-НДФЛ" in enabled
@@ -38,7 +37,7 @@ async def test_set_reminder_status_enable(reminder_db):
 @pytest.mark.asyncio
 async def test_set_reminder_status_disable(reminder_db):
     """Test disabling a reminder."""
-    with patch("kindergarten_accountant_bot.models.reminder.DB_PATH", reminder_db):
+    with patch("kindergarten_accountant_bot.config.get_db_path", return_value=reminder_db):
         await set_reminder_status(123, "6-НДФЛ", True)
         await set_reminder_status(123, "6-НДФЛ", False)
         enabled = await get_enabled_reminders(123)
@@ -48,7 +47,7 @@ async def test_set_reminder_status_disable(reminder_db):
 @pytest.mark.asyncio
 async def test_get_enabled_reminders_only_enabled(reminder_db):
     """Test that only enabled reminders are returned."""
-    with patch("kindergarten_accountant_bot.models.reminder.DB_PATH", reminder_db):
+    with patch("kindergarten_accountant_bot.config.get_db_path", return_value=reminder_db):
         await set_reminder_status(123, "6-НДФЛ", True)
         await set_reminder_status(123, "РСВ", True)
         await set_reminder_status(123, "СЗВ-М (ЕФС-1)", False)
@@ -61,7 +60,7 @@ async def test_get_enabled_reminders_only_enabled(reminder_db):
 @pytest.mark.asyncio
 async def test_get_all_reminders_status(reminder_db):
     """Test getting all reminders status returns dict for all deadlines."""
-    with patch("kindergarten_accountant_bot.models.reminder.DB_PATH", reminder_db):
+    with patch("kindergarten_accountant_bot.config.get_db_path", return_value=reminder_db):
         await set_reminder_status(123, "6-НДФЛ", True)
         await set_reminder_status(123, "РСВ", False)
         statuses = await get_all_reminders_status(123)
@@ -76,7 +75,7 @@ async def test_get_all_reminders_status(reminder_db):
 @pytest.mark.asyncio
 async def test_get_all_reminders_status_empty(reminder_db):
     """Test getting status when nothing is set returns all False."""
-    with patch("kindergarten_accountant_bot.models.reminder.DB_PATH", reminder_db):
+    with patch("kindergarten_accountant_bot.config.get_db_path", return_value=reminder_db):
         statuses = await get_all_reminders_status(999)
         assert all(v is False for v in statuses.values())
 

@@ -35,6 +35,19 @@ class TestSalaryCalculation:
         assert result["nachisleno"] == pytest.approx(50000.0)
         assert result["na_ruki"] == pytest.approx(50000 - 50000 * 0.13)
 
+    def test_salary_with_category_percent(self):
+        result = calculate_salary(oklad=30000, rate=1.0, stazh_percent=10, category_percent=15)
+        # nachisleno = 30000 * 1.0 * (1 + 10/100 + 15/100) = 30000 * 1.25 = 37500
+        assert result["nachisleno"] == pytest.approx(37500.0)
+        assert result["ndfl"] == pytest.approx(37500 * 0.13)
+        assert result["na_ruki"] == pytest.approx(37500 - 37500 * 0.13)
+
+    def test_salary_category_percent_default_zero(self):
+        # Without category_percent, should behave the same as before
+        result_without = calculate_salary(oklad=30000, rate=1.0, stazh_percent=10)
+        result_with_zero = calculate_salary(oklad=30000, rate=1.0, stazh_percent=10, category_percent=0)
+        assert result_without["nachisleno"] == result_with_zero["nachisleno"]
+
 
 class TestVacationCalculation:
     def test_vacation_600000_28days(self):

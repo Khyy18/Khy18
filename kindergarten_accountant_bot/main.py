@@ -2,6 +2,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 
 from kindergarten_accountant_bot.config import BOT_TOKEN
 from kindergarten_accountant_bot.models.database import init_db
+from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.handlers.start import start_command, main_menu_callback
 from kindergarten_accountant_bot.handlers.salary import salary_conv_handler
 from kindergarten_accountant_bot.handlers.vacation import vacation_conv_handler
@@ -35,6 +36,7 @@ def main():
     for handler in journal_handler:
         app.add_handler(handler)
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("cancel", cancel))
     app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^back_to_menu$"))
     setup_reminder_jobs(app)
     app.run_polling()

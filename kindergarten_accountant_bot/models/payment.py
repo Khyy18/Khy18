@@ -2,12 +2,12 @@ from typing import List, Optional
 
 import aiosqlite
 
-from kindergarten_accountant_bot.config import DB_PATH
+from kindergarten_accountant_bot import config
 
 
 async def create_fee_record(child_id: int, month: int, year: int, attendance_days: int, amount_due: float) -> int:
     """Create or update fee record for child/month/year."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         cursor = await db.execute(
             "SELECT id FROM parent_payments WHERE child_id = ? AND month = ? AND year = ?",
             (child_id, month, year),
@@ -30,20 +30,21 @@ async def create_fee_record(child_id: int, month: int, year: int, attendance_day
             return cursor.lastrowid
 
 
-async def record_payment(child_id: int, month: int, year: int, amount: float) -> None:
-    """Add payment amount to existing record."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+async def record_payment(child_id: int, month: int, year: int, amount: float) -> bool:
+    """Add payment amount to existing record. Returns True if a record was updated, False otherwise."""
+    async with aiosqlite.connect(config.get_db_path()) as db:
+        cursor = await db.execute(
             "UPDATE parent_payments SET amount_paid = amount_paid + ?, paid_at = CURRENT_TIMESTAMP "
             "WHERE child_id = ? AND month = ? AND year = ?",
             (amount, child_id, month, year),
         )
         await db.commit()
+        return cursor.rowcount > 0
 
 
 async def get_payment_record(child_id: int, month: int, year: int) -> Optional[dict]:
     """Get payment record for specific child/month/year."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT * FROM parent_payments WHERE child_id = ? AND month = ? AND year = ?",
@@ -55,7 +56,7 @@ async def get_payment_record(child_id: int, month: int, year: int) -> Optional[d
 
 async def get_debts() -> List[dict]:
     """Return all records where amount_paid < amount_due, joined with children info."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(config.get_db_path()) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT pp.*, c.child_fio, c.group_name, c.parent_fio "
