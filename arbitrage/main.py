@@ -20,8 +20,14 @@ import aiohttp
 from arbitrage import config, memory
 from arbitrage import telegram_bot
 from arbitrage.ai_allocator import BankrollAllocator
+from arbitrage.ai_bk_classifier import classifier_loop
+from arbitrage.ai_correlation import correlation_loop
 from arbitrage.ai_filter import ArbFilter
+from arbitrage.ai_line_predictor import LinePredictor, compute_urgency_factor
+from arbitrage.ai_news_scanner import news_scanner_loop
+from arbitrage.ai_optimizer import optimizer_loop
 from arbitrage.anti_ban import AntiBanEngine
+from arbitrage.betfair_stream import market_maker_loop
 from arbitrage.dedup import ArbDeduplicator
 from arbitrage.executor import BetExecutor
 from arbitrage.logging_config import setup_logging
@@ -228,7 +234,43 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
 
             logger.info("Прошли AI-фильтр: %d", len(filtered))
 
-            # 4a. Ранжирование
+            # 4a. LinePredictor: predict line movement for urgency
+            line_predictor = LinePredictor()
+            predictions_list: list[dict[str, Any]] = []
+            for opp in filtered:
+                details = opp.get("details", {})
+                velocity = details.get("line_velocity", 0.0)
+                if velocity:
+                    event_id = opp.get("event_id", "")
+                    outcome = opp.get("event_name", "")
+                    odds_val = opp.get("best_odds", 2.0)
+                    sport = opp.get("sport", "")
+                    commence_time = opp.get("commence_time", "")
+                    # Estimate time_to_event in minutes
+                    time_to_event_min = 60.0
+                    if commence_time:
+                        try:
+                            ct = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+                            diff = (ct - datetime.now(timezone.utc)).total_seconds() / 60.0
+                            if diff > 0:
+                                time_to_event_min = diff
+                        except (ValueError, TypeError):
+                            pass
+                    try:
+                        prediction = await line_predictor.predict(
+                            session, event_id, outcome, odds_val, velocity, sport, time_to_event_min
+                        )
+                        urgency_factor = compute_urgency_factor(prediction)
+                        opp["urgency_factor"] = urgency_factor
+                        prediction["event_id"] = event_id
+                        predictions_list.append(prediction)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("LinePredictor ошибка: %s", exc)
+
+            # Store last 20 predictions in state
+            state["line_predictions"] = predictions_list[-20:]
+
+            # 4b. Ранжирование
             filtered = ranker.rank(filtered)
             logger.info("После ранжирования: %d", len(filtered))
 
@@ -574,6 +616,11 @@ async def main() -> None:
         asyncio.create_task(stats_loop(state, session)),
         asyncio.create_task(settlement_loop(state, session)),
         asyncio.create_task(state_saver_loop(state)),
+        asyncio.create_task(news_scanner_loop(state, session)),
+        asyncio.create_task(optimizer_loop(state, session)),
+        asyncio.create_task(classifier_loop(state, session)),
+        asyncio.create_task(correlation_loop(state, session)),
+        asyncio.create_task(market_maker_loop(state, session)),
     ]
 
     try:

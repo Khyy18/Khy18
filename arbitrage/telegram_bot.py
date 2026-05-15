@@ -35,6 +35,8 @@ CB_SETTINGS: str = "arb:settings"
 CB_LAST_BETS: str = "arb:bets"
 CB_AI_LEARNINGS: str = "arb:learnings"
 CB_API_HEALTH: str = "arb:api_health"
+CB_AI_FORECAST: str = "arb:ai_forecast"
+CB_WITHDRAWAL: str = "arb:withdrawal"
 
 
 def set_keyboard() -> dict[str, Any]:
@@ -56,6 +58,10 @@ def set_keyboard() -> dict[str, Any]:
             [
                 {"text": "\ud83e\udde0 AI LEARNINGS", "callback_data": CB_AI_LEARNINGS},
                 {"text": "\ud83d\udce1 API HEALTH", "callback_data": CB_API_HEALTH},
+            ],
+            [
+                {"text": "\U0001f52e AI \u041f\u0420\u041e\u0413\u041d\u041e\u0417", "callback_data": CB_AI_FORECAST},
+                {"text": "\U0001f4b8 \u0421\u0422\u0420\u0410\u0422\u0415\u0413\u0418\u042f \u0412\u042b\u0412\u041e\u0414\u0410", "callback_data": CB_WITHDRAWAL},
             ],
         ]
     }
@@ -250,6 +256,25 @@ async def _handle_bank(
         for acc in balances:
             body.append(f"  {acc['bookmaker']}: <code>{format_number(acc['balance'])}</code>")
 
+    # Классификации рисков БК
+    classifications = memory.get_all_bk_classifications()
+    if classifications:
+        body.append("")
+        body.append("<b>\u0420\u0438\u0441\u043a\u0438 \u0411\u041a:</b>")
+        for cls in classifications:
+            risk = cls.get("risk_level", "medium")
+            if risk == "low":
+                indicator = "\ud83d\udfe2"
+            elif risk == "medium":
+                indicator = "\ud83d\udfe1"
+            elif risk == "high":
+                indicator = "\ud83d\udd34"
+            else:
+                indicator = "\u2620\ufe0f"
+            body.append(
+                f"  {indicator} {cls['bookmaker']}: <code>{risk}</code>"
+            )
+
     return _card("\u0411\u0430\u043d\u043a", "\ud83d\udcb0", body)
 
 
@@ -265,6 +290,21 @@ async def _handle_settings(
         f"\u0420\u0435\u0436\u0438\u043c: {dry_status}",
         f"\u0421\u043f\u043e\u0440\u0442\u044b: <code>{', '.join(config.SPORTS)}</code>",
     ]
+
+    # Auto-optimized thresholds
+    defaults = {"MIN_ARB_PROFIT": 1.0, "MIN_VALUE_EDGE": 3.0, "SCAN_INTERVAL_SEC": 30}
+    current = {
+        "MIN_ARB_PROFIT": config.MIN_ARB_PROFIT,
+        "MIN_VALUE_EDGE": config.MIN_VALUE_EDGE,
+        "SCAN_INTERVAL_SEC": config.SCAN_INTERVAL_SEC,
+    }
+    changed = {k: v for k, v in current.items() if v != defaults[k]}
+    if changed:
+        body.append("")
+        body.append("<b>\u0410\u0432\u0442\u043e-\u043e\u043f\u0442\u0438\u043c\u0438\u0437\u0430\u0446\u0438\u044f:</b>")
+        for k, v in changed.items():
+            body.append(f"  {k}: <code>{v}</code> (\u0434\u0435\u0444\u043e\u043b\u0442: {defaults[k]})")
+
     return _card("\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "\u2699\ufe0f", body)
 
 
@@ -450,6 +490,69 @@ async def _handle_api_health(
     return _card("API Health", "\ud83d\udce1", body)
 
 
+async def _handle_ai_forecast(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Показать текущие AI-прогнозы движения линий."""
+    predictions = state.get("line_predictions", [])
+    if not predictions:
+        return _card("AI \u041f\u0440\u043e\u0433\u043d\u043e\u0437", "\U0001f52e", ["\u041d\u0435\u0442 \u043f\u0440\u043e\u0433\u043d\u043e\u0437\u043e\u0432"])
+
+    body: list[str] = []
+    for pred in predictions[:5]:
+        event = pred.get("event_id", "?")
+        direction = pred.get("direction", "stable")
+        magnitude = pred.get("magnitude", 0.0)
+        confidence = pred.get("confidence", 0)
+        timeframe = pred.get("timeframe_min", 15)
+        if direction == "up":
+            arrow = "\u2191"
+        elif direction == "down":
+            arrow = "\u2193"
+        else:
+            arrow = "\u2192"
+        bar = progress_bar(confidence / 100.0)
+        body.append(
+            f"\u2022 <code>{event}</code>\n"
+            f"  {arrow} {direction} | \u0394 {magnitude:.3f} | {bar} {confidence}% | {timeframe} \u043c\u0438\u043d"
+        )
+    return _card("AI \u041f\u0440\u043e\u0433\u043d\u043e\u0437", "\U0001f52e", body)
+
+
+async def _handle_withdrawal(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Показать рекомендации по выводу средств."""
+    from arbitrage.ai_withdrawal import WithdrawalStrategy
+
+    strategy = WithdrawalStrategy()
+    try:
+        recommendations = await strategy.recommend(session)
+    except Exception:  # noqa: BLE001
+        recommendations = []
+
+    if not recommendations:
+        return _card("\u0421\u0442\u0440\u0430\u0442\u0435\u0433\u0438\u044f \u0432\u044b\u0432\u043e\u0434\u0430", "\U0001f4b8", ["\u041d\u0435\u0442 \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434\u0430\u0446\u0438\u0439"])
+
+    body: list[str] = []
+    for rec in recommendations:
+        bookmaker = rec.get("bookmaker", "?")
+        amount = rec.get("amount", 0.0)
+        reason = rec.get("reason", "")
+        urgency = rec.get("urgency", "low")
+        if urgency == "high":
+            indicator = "\ud83d\udd34"
+        elif urgency == "medium":
+            indicator = "\ud83d\udfe1"
+        else:
+            indicator = "\ud83d\udfe2"
+        body.append(
+            f"{indicator} <b>{bookmaker}</b>: <code>{format_number(amount)}</code>\n"
+            f"  {reason} [{urgency}]"
+        )
+    return _card("\u0421\u0442\u0440\u0430\u0442\u0435\u0433\u0438\u044f \u0432\u044b\u0432\u043e\u0434\u0430", "\U0001f4b8", body)
+
+
 # --- Маппинг обработчиков ---
 
 _HANDLERS: dict[str, Any] = {
@@ -462,6 +565,8 @@ _HANDLERS: dict[str, Any] = {
     CB_LAST_BETS: _handle_last_bets,
     CB_AI_LEARNINGS: _handle_ai_learnings,
     CB_API_HEALTH: _handle_api_health,
+    CB_AI_FORECAST: _handle_ai_forecast,
+    CB_WITHDRAWAL: _handle_withdrawal,
 }
 
 
@@ -506,6 +611,25 @@ async def _process_message(
         return
     if text == "/settings":
         reply = await _handle_settings(session, state)
+        await send_message(session, reply, reply_markup=set_keyboard())
+        return
+    if text == "/news":
+        findings = state.get("news_findings", [])
+        if not findings:
+            body_lines = ["\u041d\u0435\u0442 \u043d\u043e\u0432\u043e\u0441\u0442\u0435\u0439"]
+        else:
+            body_lines = []
+            for item in findings[:5]:
+                headline = item.get("headline", "?")
+                impact = item.get("impact", "?")
+                magnitude = item.get("magnitude", 0)
+                confidence = item.get("confidence", 0)
+                bar = progress_bar(confidence / 100.0)
+                body_lines.append(
+                    f"\u2022 {headline}\n"
+                    f"  \u0412\u043b\u0438\u044f\u043d\u0438\u0435: {impact} | \u0421\u0438\u043b\u0430: {magnitude}/10 | {bar} {confidence}%"
+                )
+        reply = _card("\u041d\u043e\u0432\u043e\u0441\u0442\u0438", "\ud83d\udcf0", body_lines)
         await send_message(session, reply, reply_markup=set_keyboard())
         return
     if text.startswith("/set_balance"):
