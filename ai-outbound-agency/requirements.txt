@@ -11,3 +11,6 @@ pydantic-settings
 openai
 anthropic
 httpx
+aioimaplib
+aiosmtplib
+python-dateutil
