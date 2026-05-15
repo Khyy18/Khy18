@@ -32,6 +32,10 @@ from dashboard.routes.integrations_api import router as integrations_api_router
 from dashboard.routes.onboarding import router as onboarding_router
 from dashboard.routes.roi import router as roi_router
 from dashboard.routes.feedback import router as feedback_router
+from dashboard.routes.trial import router as trial_router
+from dashboard.routes.preview import router as preview_router
+from dashboard.routes.referral import router as referral_router
+from dashboard.routes.webhook_status import router as webhook_status_router
 from dashboard.views import router as views_router
 from agents.approval_queue import router as approvals_router, set_email_sender
 
@@ -430,6 +434,10 @@ app.include_router(integrations_api_router)
 app.include_router(onboarding_router)
 app.include_router(roi_router)
 app.include_router(feedback_router)
+app.include_router(trial_router)
+app.include_router(preview_router)
+app.include_router(referral_router)
+app.include_router(webhook_status_router)
 app.include_router(approvals_router)
 app.include_router(views_router)
 

@@ -122,3 +122,21 @@ async def onboarding_preview_page(request: Request):
 async def onboarding_complete_page(request: Request):
     """Render the onboarding completion page."""
     return templates.TemplateResponse("onboarding/step3.html", {"request": request})
+
+
+@router.get("/ab-tests", response_class=HTMLResponse)
+async def ab_tests_page(request: Request):
+    """Render the A/B test results page."""
+    return templates.TemplateResponse("ab_tests.html", {"request": request})
+
+
+@router.get("/referral", response_class=HTMLResponse)
+async def referral_page(request: Request):
+    """Render the referral program page."""
+    return templates.TemplateResponse("referral.html", {"request": request})
+
+
+@router.get("/webhooks", response_class=HTMLResponse)
+async def webhooks_page(request: Request):
+    """Render the webhook deliveries page."""
+    return templates.TemplateResponse("webhooks.html", {"request": request})

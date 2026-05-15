@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Referral Program - AI Outbound Agency{% endblock %}
+{% block page_title %}Referral Program{% endblock %}
+
+{% block content %}
+<div id="referral-app" class="space-y-8">
+    <!-- Referral Code -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Your Referral Code</h3>
+        <div id="referral-code-section">
+            <p class="text-gray-500">Loading...</p>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Referral Stats</h3>
+        <div id="referral-stats" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="text-center p-4 border rounded">
+                <p class="text-2xl font-bold text-indigo-600" id="total-referrals">0</p>
+                <p class="text-sm text-gray-500">Total Referrals</p>
+            </div>
+            <div class="text-center p-4 border rounded">
+                <p class="text-2xl font-bold text-green-600" id="rewards-earned">0</p>
+                <p class="text-sm text-gray-500">Rewards Earned</p>
+            </div>
+            <div class="text-center p-4 border rounded">
+                <p class="text-2xl font-bold text-yellow-600" id="pending-referrals">0</p>
+                <p class="text-sm text-gray-500">Pending</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Apply Code -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Apply a Referral Code</h3>
+        <div class="flex space-x-2">
+            <input type="text" id="apply-code-input" placeholder="Enter referral code"
+                   class="flex-1 border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <button onclick="applyCode()" class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">Apply</button>
+        </div>
+        <p id="apply-result" class="mt-2 text-sm"></p>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) { window.location.href = '/login'; return; }
+
+    // Load referral code
+    try {
+        const codeResp = await fetch('/api/referral/code', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (codeResp.ok) {
+            const data = await codeResp.json();
+            document.getElementById('referral-code-section').innerHTML = `
+                <div class="flex items-center space-x-4">
+                    <code class="text-2xl font-mono bg-gray-100 px-4 py-2 rounded">${data.code}</code>
+                    <button onclick="navigator.clipboard.writeText('${data.code}')" class="text-indigo-600 hover:text-indigo-800">Copy</button>
+                </div>
+                <p class="text-sm text-gray-500 mt-2">Share this code to earn 1 month free for each referral!</p>
+            `;
+        }
+    } catch (err) {}
+
+    // Load stats
+    try {
+        const statsResp = await fetch('/api/referral/stats', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (statsResp.ok) {
+            const stats = await statsResp.json();
+            document.getElementById('total-referrals').textContent = stats.total_referrals;
+            document.getElementById('rewards-earned').textContent = stats.rewards_earned;
+            document.getElementById('pending-referrals').textContent = stats.pending_referrals;
+        }
+    } catch (err) {}
+});
+
+async function applyCode() {
+    const token = localStorage.getItem('auth_token');
+    const code = document.getElementById('apply-code-input').value.trim();
+    if (!code) return;
+
+    try {
+        const resp = await fetch('/api/referral/apply', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code })
+        });
+        const result = await resp.json();
+        const el = document.getElementById('apply-result');
+        if (resp.ok) {
+            el.textContent = result.reward || 'Referral applied successfully!';
+            el.className = 'mt-2 text-sm text-green-600';
+        } else {
+            el.textContent = result.detail || 'Failed to apply code';
+            el.className = 'mt-2 text-sm text-red-600';
+        }
+    } catch (err) {
+        document.getElementById('apply-result').textContent = 'Error applying code';
+    }
+}
+</script>
+{% endblock %}

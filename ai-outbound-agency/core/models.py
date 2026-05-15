@@ -380,3 +380,50 @@ class CompetitiveIntel(Base):
     summary = Column(Text, nullable=True)
     competitor_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class TrialStatus(str, enum.Enum):
+    active = "active"
+    frozen = "frozen"
+    converted = "converted"
+
+
+class Trial(Base):
+    __tablename__ = "trials"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, unique=True)
+    status = Column(Enum(TrialStatus), default=TrialStatus.active, nullable=False)
+    started_at = Column(DateTime(timezone=True), default=_utcnow)
+    ends_at = Column(DateTime(timezone=True), nullable=False)
+    leads_used = Column(Integer, default=0)
+    emails_used = Column(Integer, default=0)
+    converted_at = Column(DateTime(timezone=True), nullable=True)
+
+    tenant = relationship("Tenant")
+
+
+class Referral(Base):
+    __tablename__ = "referrals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    referrer_tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    referred_tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True)
+    code = Column(String, unique=True, nullable=False)
+    reward_applied = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class WebhookDelivery(Base):
+    __tablename__ = "webhook_deliveries"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    webhook_id = Column(UUID(as_uuid=True), ForeignKey("webhooks.id"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    event_type = Column(String, nullable=False)
+    payload = Column(JSONB, default=dict)
+    status = Column(String, default="pending", nullable=False)
+    attempts = Column(Integer, default=0)
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    response_code = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
