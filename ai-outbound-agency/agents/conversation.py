@@ -306,6 +306,150 @@ class ConversationAgent:
                 campaign_context=campaign_context,
             )
 
+            # Auto-approve routing (when enabled)
+            if getattr(self._settings, "auto_approve_enabled", None) is True:
+                from agents.auto_approve import AutoApproveEngine
+
+                auto_engine = AutoApproveEngine(
+                    llm_client=self._llm,
+                    settings=self._settings,
+                )
+                auto_lead_data = {**lead_data, "original_message": inbound_message.content}
+                auto_result = await auto_engine.evaluate(
+                    proposed_response=response,
+                    lead_data=auto_lead_data,
+                    campaign_context=campaign_context,
+                )
+
+                if auto_result.approved:
+                    # Send immediately
+                    response_sent = False
+                    action = response.get("action", "")
+                    if (
+                        action in ("send_reply", "book_meeting")
+                        and response.get("body")
+                        and self._email_sender is not None
+                    ):
+                        try:
+                            reply_msg_id = str(uuid.uuid4())
+                            send_result = await self._email_sender.send_email(
+                                to=lead.email,
+                                subject=response["subject"],
+                                html_body=f"<p>{response['body']}</p>",
+                                message_id=reply_msg_id,
+                                tracking_pixel_url=None,
+                                tracked_links=None,
+                            )
+                            response_sent = send_result.get("success", False)
+                        except Exception as exc:
+                            logger.error(
+                                "Error sending auto-approved reply for message %s: %s",
+                                message_id,
+                                exc,
+                            )
+
+                    # Update lead status
+                    intent = classification.get("classification", "")
+                    if intent == "positive":
+                        lead.status = LeadStatus.qualified
+                    elif intent in ("unsubscribe", "negative"):
+                        lead.status = LeadStatus.lost
+                    elif intent in ("objection", "question"):
+                        lead.status = LeadStatus.replied
+                    await session.commit()
+
+                    return {
+                        "message_id": message_id,
+                        "classification": classification,
+                        "response": response,
+                        "lead_status": lead.status.value if lead.status else None,
+                        "response_sent": response_sent,
+                        "auto_approved": True,
+                        "quality_score": auto_result.quality_score,
+                    }
+
+                elif auto_result.should_regenerate:
+                    # Regenerate up to max_retries, pick best
+                    max_retries = getattr(self._settings, "auto_approve_max_retries", 3)
+                    best_response = response
+                    best_score = auto_result.quality_score
+                    best_result = auto_result
+
+                    for _ in range(max_retries):
+                        regen_response = await self.generate_response(
+                            classification=classification,
+                            original_message=inbound_message.content,
+                            lead_data=lead_data,
+                            campaign_context=campaign_context,
+                        )
+                        regen_lead_data = {**lead_data, "original_message": inbound_message.content}
+                        regen_result = await auto_engine.evaluate(
+                            proposed_response=regen_response,
+                            lead_data=regen_lead_data,
+                            campaign_context=campaign_context,
+                        )
+
+                        if regen_result.quality_score > best_score:
+                            best_response = regen_response
+                            best_score = regen_result.quality_score
+                            best_result = regen_result
+
+                        if regen_result.approved:
+                            best_response = regen_response
+                            best_score = regen_result.quality_score
+                            best_result = regen_result
+                            break
+
+                    if best_result.approved:
+                        # Send best version
+                        response_sent = False
+                        action = best_response.get("action", "")
+                        if (
+                            action in ("send_reply", "book_meeting")
+                            and best_response.get("body")
+                            and self._email_sender is not None
+                        ):
+                            try:
+                                reply_msg_id = str(uuid.uuid4())
+                                send_result = await self._email_sender.send_email(
+                                    to=lead.email,
+                                    subject=best_response["subject"],
+                                    html_body=f"<p>{best_response['body']}</p>",
+                                    message_id=reply_msg_id,
+                                    tracking_pixel_url=None,
+                                    tracked_links=None,
+                                )
+                                response_sent = send_result.get("success", False)
+                            except Exception as exc:
+                                logger.error(
+                                    "Error sending regenerated auto-approved reply for message %s: %s",
+                                    message_id,
+                                    exc,
+                                )
+
+                        intent = classification.get("classification", "")
+                        if intent == "positive":
+                            lead.status = LeadStatus.qualified
+                        elif intent in ("unsubscribe", "negative"):
+                            lead.status = LeadStatus.lost
+                        elif intent in ("objection", "question"):
+                            lead.status = LeadStatus.replied
+                        await session.commit()
+
+                        return {
+                            "message_id": message_id,
+                            "classification": classification,
+                            "response": best_response,
+                            "lead_status": lead.status.value if lead.status else None,
+                            "response_sent": response_sent,
+                            "auto_approved": True,
+                            "quality_score": best_score,
+                        }
+                    # If regeneration did not achieve approval, fall through to existing logic
+                    response = best_response
+
+                # If not approved and not should_regenerate, fall through to existing logic
+
             # Quality scoring for auto-send responses
             quality_score_value = None
             action = response.get("action", "")
