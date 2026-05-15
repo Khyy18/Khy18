@@ -84,18 +84,37 @@ class OnboardingService:
                 detail="No onboarding data found. Complete setup first.",
             )
 
-        # Build LLM prompt
-        prompt = (
-            "You are an expert outbound sales strategist. Based on the following company info, "
-            "generate a complete outbound campaign plan.\n\n"
-            f"Company: {onboarding_data.get('company_description', '')}\n"
-            f"Ideal Customer Industry: {onboarding_data.get('ideal_customer_industry', '')}\n"
-            f"Ideal Customer Company Size: {onboarding_data.get('ideal_customer_company_size', '')}\n"
-            f"Target Titles: {onboarding_data.get('ideal_customer_titles', '')}\n"
-            f"Problem Solved: {onboarding_data.get('problem_solved', '')}\n"
-            f"Differentiator: {onboarding_data.get('differentiator', '')}\n"
-            f"Tone: {onboarding_data.get('tone', 'professional')}\n"
-            f"Website: {onboarding_data.get('website_url', '')}\n\n"
+        # Sanitize user inputs: strip instruction-like patterns to mitigate
+        # prompt injection. User content is placed in a separate user message
+        # role so it cannot override system instructions.
+        def _sanitize(value: str) -> str:
+            """Remove instruction-like patterns from user input."""
+            import re
+            # Strip patterns that look like prompt injection attempts
+            value = re.sub(
+                r"(?i)(ignore|forget|disregard)\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?|rules?)",
+                "",
+                value,
+            )
+            value = re.sub(r"(?i)you\s+are\s+now\s+", "", value)
+            value = re.sub(r"(?i)system\s*:", "", value)
+            return value.strip()
+
+        sanitized_data = {
+            "company_description": _sanitize(onboarding_data.get("company_description", "")),
+            "ideal_customer_industry": _sanitize(onboarding_data.get("ideal_customer_industry", "")),
+            "ideal_customer_company_size": _sanitize(onboarding_data.get("ideal_customer_company_size", "")),
+            "ideal_customer_titles": _sanitize(onboarding_data.get("ideal_customer_titles", "")),
+            "problem_solved": _sanitize(onboarding_data.get("problem_solved", "")),
+            "differentiator": _sanitize(onboarding_data.get("differentiator", "")),
+            "tone": _sanitize(onboarding_data.get("tone", "professional")),
+            "website_url": _sanitize(onboarding_data.get("website_url", "")),
+        }
+
+        # Use system/user role separation to isolate instructions from user content
+        system_message = (
+            "You are an expert outbound sales strategist. Based on the company info "
+            "provided in the user message, generate a complete outbound campaign plan.\n\n"
             "Return a JSON object with:\n"
             "- campaign_name: string\n"
             "- value_proposition: string\n"
@@ -105,7 +124,23 @@ class OnboardingService:
             "Return ONLY valid JSON, no markdown."
         )
 
-        llm_response = await self.llm_client.generate(prompt)
+        user_message = (
+            f"Company: {sanitized_data['company_description']}\n"
+            f"Ideal Customer Industry: {sanitized_data['ideal_customer_industry']}\n"
+            f"Ideal Customer Company Size: {sanitized_data['ideal_customer_company_size']}\n"
+            f"Target Titles: {sanitized_data['ideal_customer_titles']}\n"
+            f"Problem Solved: {sanitized_data['problem_solved']}\n"
+            f"Differentiator: {sanitized_data['differentiator']}\n"
+            f"Tone: {sanitized_data['tone']}\n"
+            f"Website: {sanitized_data['website_url']}"
+        )
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message},
+        ]
+
+        llm_response = await self.llm_client.generate(messages)
 
         # Parse LLM response
         try:

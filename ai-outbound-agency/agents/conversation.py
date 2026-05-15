@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -97,6 +98,55 @@ class ConversationAgent:
         self._calendar = calendar
         self._session_factory = session_factory
         self._email_sender = email_sender
+
+    async def _send_and_update_status(
+        self,
+        response: dict[str, Any],
+        lead: Lead,
+        classification: dict[str, Any],
+        session: AsyncSession,
+        message_id: str,
+    ) -> bool:
+        """Send email reply and update lead status based on classification.
+
+        Returns True if the email was sent successfully.
+        """
+        response_sent = False
+        action = response.get("action", "")
+        if (
+            action in ("send_reply", "book_meeting")
+            and response.get("body")
+            and self._email_sender is not None
+        ):
+            try:
+                reply_msg_id = str(uuid.uuid4())
+                send_result = await self._email_sender.send_email(
+                    to=lead.email,
+                    subject=response["subject"],
+                    html_body=f"<p>{response['body']}</p>",
+                    message_id=reply_msg_id,
+                    tracking_pixel_url=None,
+                    tracked_links=None,
+                )
+                response_sent = send_result.get("success", False)
+            except Exception as exc:
+                logger.error(
+                    "Error sending auto-approved reply for message %s: %s",
+                    message_id,
+                    exc,
+                )
+
+        # Update lead status
+        intent = classification.get("classification", "")
+        if intent == "positive":
+            lead.status = LeadStatus.qualified
+        elif intent in ("unsubscribe", "negative"):
+            lead.status = LeadStatus.lost
+        elif intent in ("objection", "question"):
+            lead.status = LeadStatus.replied
+        await session.commit()
+
+        return response_sent
 
     async def classify_reply(
         self,
@@ -323,40 +373,13 @@ class ConversationAgent:
 
                 if auto_result.approved:
                     # Send immediately
-                    response_sent = False
-                    action = response.get("action", "")
-                    if (
-                        action in ("send_reply", "book_meeting")
-                        and response.get("body")
-                        and self._email_sender is not None
-                    ):
-                        try:
-                            reply_msg_id = str(uuid.uuid4())
-                            send_result = await self._email_sender.send_email(
-                                to=lead.email,
-                                subject=response["subject"],
-                                html_body=f"<p>{response['body']}</p>",
-                                message_id=reply_msg_id,
-                                tracking_pixel_url=None,
-                                tracked_links=None,
-                            )
-                            response_sent = send_result.get("success", False)
-                        except Exception as exc:
-                            logger.error(
-                                "Error sending auto-approved reply for message %s: %s",
-                                message_id,
-                                exc,
-                            )
-
-                    # Update lead status
-                    intent = classification.get("classification", "")
-                    if intent == "positive":
-                        lead.status = LeadStatus.qualified
-                    elif intent in ("unsubscribe", "negative"):
-                        lead.status = LeadStatus.lost
-                    elif intent in ("objection", "question"):
-                        lead.status = LeadStatus.replied
-                    await session.commit()
+                    response_sent = await self._send_and_update_status(
+                        response=response,
+                        lead=lead,
+                        classification=classification,
+                        session=session,
+                        message_id=message_id,
+                    )
 
                     return {
                         "message_id": message_id,
@@ -369,72 +392,63 @@ class ConversationAgent:
                     }
 
                 elif auto_result.should_regenerate:
-                    # Regenerate up to max_retries, pick best
+                    # Regenerate up to max_retries, pick best.
+                    # NOTE: Each iteration fires 2 LLM calls (generate + quality score).
+                    # With max_retries=3, total cost can be up to 8 LLM calls per message.
+                    # A 60-second timeout caps wall-clock time to prevent stalled webhooks.
                     max_retries = getattr(self._settings, "auto_approve_max_retries", 3)
                     best_response = response
                     best_score = auto_result.quality_score
                     best_result = auto_result
 
-                    for _ in range(max_retries):
-                        regen_response = await self.generate_response(
-                            classification=classification,
-                            original_message=inbound_message.content,
-                            lead_data=lead_data,
-                            campaign_context=campaign_context,
-                        )
-                        regen_lead_data = {**lead_data, "original_message": inbound_message.content}
-                        regen_result = await auto_engine.evaluate(
-                            proposed_response=regen_response,
-                            lead_data=regen_lead_data,
-                            campaign_context=campaign_context,
-                        )
+                    async def _regeneration_loop() -> None:
+                        nonlocal best_response, best_score, best_result
+                        for _ in range(max_retries):
+                            regen_response = await self.generate_response(
+                                classification=classification,
+                                original_message=inbound_message.content,
+                                lead_data=lead_data,
+                                campaign_context=campaign_context,
+                            )
+                            regen_lead_data = {**lead_data, "original_message": inbound_message.content}
+                            regen_result = await auto_engine.evaluate(
+                                proposed_response=regen_response,
+                                lead_data=regen_lead_data,
+                                campaign_context=campaign_context,
+                            )
 
-                        if regen_result.quality_score > best_score:
-                            best_response = regen_response
-                            best_score = regen_result.quality_score
-                            best_result = regen_result
+                            if regen_result.approved:
+                                # Approved result always becomes best
+                                best_response = regen_response
+                                best_score = regen_result.quality_score
+                                best_result = regen_result
+                                break
+                            elif (
+                                regen_result.quality_score > best_score
+                                and all(regen_result.safety_checks.values())
+                            ):
+                                # Only update best if quality is higher AND safety checks pass
+                                best_response = regen_response
+                                best_score = regen_result.quality_score
+                                best_result = regen_result
 
-                        if regen_result.approved:
-                            best_response = regen_response
-                            best_score = regen_result.quality_score
-                            best_result = regen_result
-                            break
+                    try:
+                        await asyncio.wait_for(_regeneration_loop(), timeout=60.0)
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "Regeneration loop timed out after 60s for message %s",
+                            message_id,
+                        )
 
                     if best_result.approved:
                         # Send best version
-                        response_sent = False
-                        action = best_response.get("action", "")
-                        if (
-                            action in ("send_reply", "book_meeting")
-                            and best_response.get("body")
-                            and self._email_sender is not None
-                        ):
-                            try:
-                                reply_msg_id = str(uuid.uuid4())
-                                send_result = await self._email_sender.send_email(
-                                    to=lead.email,
-                                    subject=best_response["subject"],
-                                    html_body=f"<p>{best_response['body']}</p>",
-                                    message_id=reply_msg_id,
-                                    tracking_pixel_url=None,
-                                    tracked_links=None,
-                                )
-                                response_sent = send_result.get("success", False)
-                            except Exception as exc:
-                                logger.error(
-                                    "Error sending regenerated auto-approved reply for message %s: %s",
-                                    message_id,
-                                    exc,
-                                )
-
-                        intent = classification.get("classification", "")
-                        if intent == "positive":
-                            lead.status = LeadStatus.qualified
-                        elif intent in ("unsubscribe", "negative"):
-                            lead.status = LeadStatus.lost
-                        elif intent in ("objection", "question"):
-                            lead.status = LeadStatus.replied
-                        await session.commit()
+                        response_sent = await self._send_and_update_status(
+                            response=best_response,
+                            lead=lead,
+                            classification=classification,
+                            session=session,
+                            message_id=message_id,
+                        )
 
                         return {
                             "message_id": message_id,

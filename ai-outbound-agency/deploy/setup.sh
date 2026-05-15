@@ -6,14 +6,21 @@ echo ""
 echo "This script will configure your environment and start all services."
 echo ""
 
-# Prompt for API keys
-read -p "OpenAI API Key: " OPENAI_API_KEY
-read -p "Anthropic API Key: " ANTHROPIC_API_KEY
-read -p "Groq API Key (optional, press Enter to skip): " GROQ_API_KEY
-read -p "Apollo API Key: " APOLLO_API_KEY
-read -p "Hunter API Key: " HUNTER_API_KEY
-read -p "Stripe Secret Key: " STRIPE_SECRET_KEY
-read -p "Stripe Webhook Secret: " STRIPE_WEBHOOK_SECRET
+# Prompt for API keys (using -sp to suppress echo for secrets)
+read -sp "OpenAI API Key: " OPENAI_API_KEY
+echo ""
+read -sp "Anthropic API Key: " ANTHROPIC_API_KEY
+echo ""
+read -sp "Groq API Key (optional, press Enter to skip): " GROQ_API_KEY
+echo ""
+read -sp "Apollo API Key: " APOLLO_API_KEY
+echo ""
+read -sp "Hunter API Key: " HUNTER_API_KEY
+echo ""
+read -sp "Stripe Secret Key: " STRIPE_SECRET_KEY
+echo ""
+read -sp "Stripe Webhook Secret: " STRIPE_WEBHOOK_SECRET
+echo ""
 echo ""
 
 # Database and Redis
@@ -28,7 +35,8 @@ read -p "SMTP Host: " SMTP_HOST
 read -p "SMTP Port [587]: " SMTP_PORT
 SMTP_PORT=${SMTP_PORT:-587}
 read -p "SMTP User: " SMTP_USER
-read -p "SMTP Password: " SMTP_PASSWORD
+read -sp "SMTP Password: " SMTP_PASSWORD
+echo ""
 
 # JWT
 JWT_SECRET=$(openssl rand -hex 32)
@@ -82,7 +90,8 @@ APP_HOST=0.0.0.0
 APP_PORT=8000
 EOF
 
-echo ".env file created successfully."
+chmod 600 .env
+echo ".env file created successfully (permissions set to 600)."
 echo ""
 
 # Start services

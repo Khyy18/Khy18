@@ -214,7 +214,13 @@ class AutoApproveEngine:
         return True
 
     def _log_decision(self, result: AutoApproveResult) -> None:
-        """Log the auto-approve decision with structured details."""
+        """Log the auto-approve decision with structured details.
+
+        TODO: Persist audit logs to a database table in a future iteration.
+        Currently audit_log data is only logged at INFO level and lost on
+        log rotation. A dedicated audit_decisions table should store these
+        records for compliance and ML training purposes.
+        """
         logger.info(
             "Auto-approve decision: approved=%s, reason=%s, quality_score=%d, "
             "safety_checks=%s, should_regenerate=%s",

@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     client_telegram_bot_token: str = ""
 
     # Auto-approve settings
-    auto_approve_enabled: bool = True
+    auto_approve_enabled: bool = False
     auto_approve_quality_threshold: int = 75
     protected_companies_list: str = "[]"
     auto_approve_max_retries: int = 3

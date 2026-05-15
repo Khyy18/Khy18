@@ -214,9 +214,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.conversation_agent = None
 
     # Health Monitor and Revenue Autopilot
-    # These integrate with the scheduler for periodic execution.
+    # These are periodically invoked via asyncio background tasks.
     # Health monitor runs every health_check_interval_minutes.
     # Revenue autopilot runs daily to check lead pools, inactive clients, etc.
+    _health_task: asyncio.Task | None = None
+    _revenue_task: asyncio.Task | None = None
+
     if settings.health_telegram_alerts:
         try:
             from core.health_monitor import HealthMonitor
@@ -226,9 +229,47 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 session_factory=async_session_factory,
             )
             app.state.health_monitor = health_monitor
-            logger.info("Health monitor initialized")
+
+            async def _health_loop() -> None:
+                interval = settings.health_check_interval_minutes * 60
+                while True:
+                    try:
+                        await health_monitor.run_health_checks()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.error("Health check error: %s", exc)
+                    await asyncio.sleep(interval)
+
+            _health_task = asyncio.create_task(_health_loop(), name="health_monitor")
+            logger.info("Health monitor initialized and scheduled")
         except Exception as exc:
             logger.error("Failed to initialize health monitor: %s", exc)
+
+    try:
+        from scheduler.revenue_autopilot import RevenueAutopilot
+
+        revenue_autopilot = RevenueAutopilot(
+            session_factory=async_session_factory,
+            settings=settings,
+        )
+        app.state.revenue_autopilot = revenue_autopilot
+
+        async def _revenue_loop() -> None:
+            interval = 86400  # Run daily (24 hours)
+            while True:
+                try:
+                    await revenue_autopilot.run_autopilot_tick()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error("Revenue autopilot error: %s", exc)
+                await asyncio.sleep(interval)
+
+        _revenue_task = asyncio.create_task(_revenue_loop(), name="revenue_autopilot")
+        logger.info("Revenue autopilot initialized and scheduled")
+    except Exception as exc:
+        logger.error("Failed to initialize revenue autopilot: %s", exc)
 
     # Initialize dogfood agent if enabled
     if settings.dogfood_enabled:
@@ -266,6 +307,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     # Shutdown
+    if _health_task is not None:
+        _health_task.cancel()
+        try:
+            await _health_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Health monitor stopped")
+
+    if _revenue_task is not None:
+        _revenue_task.cancel()
+        try:
+            await _revenue_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Revenue autopilot stopped")
+
     if _inbox_task is not None:
         _inbox_task.cancel()
         try:
