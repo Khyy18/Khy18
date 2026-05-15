@@ -140,3 +140,9 @@ async def referral_page(request: Request):
 async def webhooks_page(request: Request):
     """Render the webhook deliveries page."""
     return templates.TemplateResponse("webhooks.html", {"request": request})
+
+
+@router.get("/costs", response_class=HTMLResponse)
+async def costs_page(request: Request):
+    """Render the P&L cost tracking dashboard page."""
+    return templates.TemplateResponse("costs.html", {"request": request})

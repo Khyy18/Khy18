@@ -427,3 +427,16 @@ class WebhookDelivery(Base):
     last_attempt_at = Column(DateTime(timezone=True), nullable=True)
     response_code = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class CostRecord(Base):
+    """Tracks per-tenant costs by type (LLM, email, API, proxy)."""
+
+    __tablename__ = "cost_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    cost_type = Column(String, nullable=False)  # "llm", "email", "api", "proxy"
+    amount_cents = Column(Integer, nullable=False)
+    description = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)

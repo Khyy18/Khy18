@@ -19,6 +19,7 @@ from core.models import (
     Campaign,
     CampaignStatus,
     ChannelType,
+    CostRecord,
     Event,
     EventType,
     Lead,
