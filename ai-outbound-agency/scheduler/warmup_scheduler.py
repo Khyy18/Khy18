@@ -251,7 +251,8 @@ class WarmupScheduler:
         # Add slight variation to avoid being flagged as identical content
         message_id = str(uuid.uuid4())
 
-        result = await self._email_sender.send_email(
+        result = await self._email_sender.send_email_from_domain(
+            domain=domain,
             to=recipient,
             subject=subject,
             html_body=f"<p>{body}</p>",

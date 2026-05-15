@@ -24,6 +24,9 @@ from integrations.calendar import CalendarIntegration
 
 logger = logging.getLogger(__name__)
 
+# Confidence threshold below which automated responses are suppressed
+_CONFIDENCE_THRESHOLD = 0.3
+
 CLASSIFICATION_SYSTEM_PROMPT = """\
 You are an AI assistant that classifies the intent of email replies in a B2B outreach context.
 
@@ -84,11 +87,13 @@ class ConversationAgent:
         settings: Settings,
         calendar: CalendarIntegration,
         session_factory: async_sessionmaker[AsyncSession],
+        email_sender: Any | None = None,
     ) -> None:
         self._llm = llm_client
         self._settings = settings
         self._calendar = calendar
         self._session_factory = session_factory
+        self._email_sender = email_sender
 
     async def classify_reply(
         self,
@@ -124,16 +129,16 @@ class ConversationAgent:
             )
             result = json.loads(response)
             return {
-                "classification": result.get("classification", "question"),
+                "classification": result.get("classification", "needs_review"),
                 "confidence": float(result.get("confidence", 0.5)),
                 "details": result.get("details", ""),
             }
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             logger.error("Failed to parse classification response: %s", exc)
             return {
-                "classification": "question",
+                "classification": "needs_review",
                 "confidence": 0.0,
-                "details": "Failed to classify - defaulting to question",
+                "details": "Failed to classify - requires manual review",
             }
 
     async def generate_response(
@@ -167,7 +172,7 @@ class ConversationAgent:
             value_proposition=campaign_context.get("value_proposition", ""),
             sender_name=campaign_context.get("sender_name", ""),
             sender_title=campaign_context.get("sender_title", ""),
-            classification=classification.get("classification", "question"),
+            classification=classification.get("classification", "needs_review"),
             booking_link=booking_link or "N/A",
         )
 
@@ -202,7 +207,7 @@ class ConversationAgent:
             return {
                 "subject": "Re: Follow up",
                 "body": "",
-                "action": "send_reply",
+                "action": "needs_review",
                 "follow_up_days": None,
             }
 
@@ -210,7 +215,8 @@ class ConversationAgent:
         """Main entry point for processing an inbound reply.
 
         Loads message context, classifies the reply, generates a response,
-        and updates lead status accordingly.
+        and updates lead status accordingly. Sends the generated response
+        if classification confidence is above threshold and action warrants it.
 
         Args:
             message_id: UUID string of the inbound message to process.
@@ -260,6 +266,26 @@ class ConversationAgent:
                 campaign_context=campaign_context,
             )
 
+            # Check confidence threshold - if below threshold, skip auto-response
+            confidence = classification.get("confidence", 0.0)
+            if confidence < _CONFIDENCE_THRESHOLD:
+                logger.warning(
+                    "Classification confidence %.2f below threshold %.2f for message %s, "
+                    "skipping automated response",
+                    confidence,
+                    _CONFIDENCE_THRESHOLD,
+                    message_id,
+                )
+                classification["classification"] = "needs_review"
+                await session.commit()
+                return {
+                    "message_id": message_id,
+                    "classification": classification,
+                    "response": None,
+                    "lead_status": lead.status.value if lead.status else None,
+                    "skipped": "confidence_below_threshold",
+                }
+
             # Build lead data dict
             lead_data: dict[str, Any] = {
                 "first_name": lead.first_name,
@@ -295,11 +321,50 @@ class ConversationAgent:
 
             await session.commit()
 
+            # Send the generated response if action warrants it
+            action = response.get("action", "")
+            response_sent = False
+            if (
+                action in ("send_reply", "book_meeting")
+                and response.get("body")
+                and self._email_sender is not None
+            ):
+                try:
+                    reply_msg_id = str(uuid.uuid4())
+                    send_result = await self._email_sender.send_email(
+                        to=lead.email,
+                        subject=response["subject"],
+                        html_body=f"<p>{response['body']}</p>",
+                        message_id=reply_msg_id,
+                        tracking_pixel_url=None,
+                        tracked_links=None,
+                    )
+                    response_sent = send_result.get("success", False)
+                    if response_sent:
+                        logger.info(
+                            "Sent automated reply to %s for message %s",
+                            lead.email,
+                            message_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Failed to send automated reply to %s for message %s",
+                            lead.email,
+                            message_id,
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "Error sending automated reply for message %s: %s",
+                        message_id,
+                        exc,
+                    )
+
             logger.info(
-                "Processed reply %s: classification=%s, action=%s",
+                "Processed reply %s: classification=%s, action=%s, sent=%s",
                 message_id,
                 classification.get("classification"),
                 response.get("action"),
+                response_sent,
             )
 
             return {
@@ -307,4 +372,5 @@ class ConversationAgent:
                 "classification": classification,
                 "response": response,
                 "lead_status": lead.status.value if lead.status else None,
+                "response_sent": response_sent,
             }

@@ -1,9 +1,10 @@
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -14,12 +15,13 @@ from channels.email.tracker import router as tracking_router
 logger = logging.getLogger(__name__)
 
 _scheduler = None
+_inbox_task: asyncio.Task | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application lifespan: startup and shutdown."""
-    global _scheduler
+    global _scheduler, _inbox_task
 
     # Startup: initialize scheduler if SMTP domains are configured
     smtp_domains_raw = settings.smtp_domains
@@ -27,6 +29,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         smtp_accounts = json.loads(smtp_domains_raw)
     except (json.JSONDecodeError, TypeError):
         smtp_accounts = []
+
+    email_sender = None
 
     if smtp_accounts:
         try:
@@ -43,7 +47,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 smtp_accounts=smtp_accounts,
                 redis_url=settings.redis_url,
             )
-            tracker = EmailTracker(tracking_base_url=settings.tracking_base_url)
+            tracker = EmailTracker(
+                tracking_base_url=settings.tracking_base_url,
+                secret=settings.tracking_secret,
+            )
             warmup_manager = DomainWarmupManager(
                 redis_url=settings.redis_url,
                 domains=[a.get("domain", "") for a in smtp_accounts],
@@ -78,9 +85,67 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.error("Failed to initialize scheduler: %s", exc)
 
+    # Initialize ConversationAgent and related singletons for webhook use
+    try:
+        from core.llm import LLMClient
+        from integrations.calendar import CalendarIntegration
+        from agents.conversation import ConversationAgent
+
+        webhook_llm_client = LLMClient(
+            provider="openai",
+            api_key=settings.openai_api_key,
+            model="gpt-4",
+        )
+        webhook_calendar = CalendarIntegration(
+            provider=settings.calendar_provider,
+            api_key=settings.calcom_api_key,
+            base_url=settings.calcom_base_url,
+        )
+        webhook_conversation_agent = ConversationAgent(
+            llm_client=webhook_llm_client,
+            settings=settings,
+            calendar=webhook_calendar,
+            session_factory=async_session_factory,
+            email_sender=email_sender,
+        )
+
+        app.state.llm_client = webhook_llm_client
+        app.state.calendar = webhook_calendar
+        app.state.conversation_agent = webhook_conversation_agent
+    except Exception as exc:
+        logger.error("Failed to initialize conversation agent singletons: %s", exc)
+        app.state.conversation_agent = None
+
+    # Start InboxListener if IMAP settings are configured
+    if settings.imap_host and settings.imap_user and settings.imap_password:
+        try:
+            from channels.email.inbox import InboxListener
+
+            inbox_listener = InboxListener(
+                imap_host=settings.imap_host,
+                imap_port=settings.imap_port,
+                imap_user=settings.imap_user,
+                imap_password=settings.imap_password,
+                session_factory=async_session_factory,
+            )
+            _inbox_task = asyncio.create_task(
+                inbox_listener.start_polling(interval_seconds=60)
+            )
+            logger.info("InboxListener polling started")
+        except Exception as exc:
+            logger.error("Failed to start InboxListener: %s", exc)
+
     yield
 
     # Shutdown
+    if _inbox_task is not None:
+        _inbox_task.cancel()
+        try:
+            await _inbox_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("InboxListener stopped")
+
     if _scheduler is not None:
         await _scheduler.stop()
         logger.info("Scheduler stopped")
@@ -105,28 +170,17 @@ class ReplyWebhookPayload(BaseModel):
 
 
 @app.post("/webhooks/reply")
-async def handle_reply_webhook(payload: ReplyWebhookPayload) -> JSONResponse:
+async def handle_reply_webhook(
+    payload: ReplyWebhookPayload,
+    request: Request,
+) -> JSONResponse:
     """Webhook endpoint for processing inbound replies via ConversationAgent."""
-    from agents.conversation import ConversationAgent
-    from core.llm import LLMClient
-    from integrations.calendar import CalendarIntegration
-
-    llm_client = LLMClient(
-        provider="openai",
-        api_key=settings.openai_api_key,
-        model="gpt-4",
-    )
-    calendar = CalendarIntegration(
-        provider=settings.calendar_provider,
-        api_key=settings.calcom_api_key,
-        base_url=settings.calcom_base_url,
-    )
-    conversation_agent = ConversationAgent(
-        llm_client=llm_client,
-        settings=settings,
-        calendar=calendar,
-        session_factory=async_session_factory,
-    )
+    conversation_agent = getattr(request.app.state, "conversation_agent", None)
+    if conversation_agent is None:
+        return JSONResponse(
+            content={"error": "Conversation agent not initialized"},
+            status_code=503,
+        )
 
     try:
         result = await conversation_agent.handle_reply(payload.message_id)

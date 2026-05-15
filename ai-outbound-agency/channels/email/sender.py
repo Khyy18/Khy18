@@ -137,6 +137,148 @@ class AsyncEmailSender:
                     "message_id_header": message_id_header,
                     "success": True,
                 }
+            except aiosmtplib.SMTPResponseException as exc:
+                if exc.code >= 500:
+                    logger.error(
+                        "Permanent SMTP failure (%d) sending to %s via %s: %s",
+                        exc.code,
+                        to,
+                        domain,
+                        str(exc),
+                    )
+                    break
+                wait_time = 2 ** attempt
+                logger.warning(
+                    "Transient SMTP error (%d) attempt %d/%d for %s: %s. Retrying in %ds...",
+                    exc.code,
+                    attempt + 1,
+                    max_attempts,
+                    domain,
+                    str(exc),
+                    wait_time,
+                )
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(wait_time)
+            except Exception as exc:
+                wait_time = 2 ** attempt
+                logger.warning(
+                    "Send attempt %d/%d failed for %s: %s. Retrying in %ds...",
+                    attempt + 1,
+                    max_attempts,
+                    domain,
+                    str(exc),
+                    wait_time,
+                )
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(wait_time)
+
+        logger.error("All send attempts failed for %s via %s", to, domain)
+        return {
+            "domain_used": domain,
+            "message_id_header": message_id_header,
+            "success": False,
+        }
+
+    async def send_email_from_domain(
+        self,
+        domain: str,
+        to: str,
+        subject: str,
+        html_body: str,
+        message_id: str,
+        tracking_pixel_url: str | None = None,
+        tracked_links: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Send an email from a specific domain, bypassing round-robin rotation.
+
+        Used by warmup scheduler to ensure warmup sends go through the intended domain.
+        """
+        account = None
+        for acct in self._accounts:
+            if acct.get("domain") == domain:
+                account = acct
+                break
+
+        if account is None:
+            logger.warning("Domain %s not found in configured accounts", domain)
+            return {
+                "domain_used": None,
+                "message_id_header": None,
+                "success": False,
+            }
+
+        # Check daily limit
+        daily_limit = account.get("daily_limit", 50)
+        current_count = await self._get_daily_send_count(domain)
+        if current_count >= daily_limit:
+            logger.warning("Domain %s has reached its daily limit", domain)
+            return {
+                "domain_used": domain,
+                "message_id_header": None,
+                "success": False,
+            }
+
+        from_addr = f"{account['user']}@{domain}" if "@" not in account["user"] else account["user"]
+        message_id_header = f"<{message_id}@{domain}>"
+
+        # Inject tracking into body
+        final_body = self._inject_tracking(html_body, tracking_pixel_url, tracked_links)
+
+        # Build MIME message
+        msg = MIMEMultipart("alternative")
+        msg["From"] = from_addr
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg["Message-ID"] = message_id_header
+        msg["Reply-To"] = from_addr
+        msg.attach(MIMEText(final_body, "html"))
+
+        # Retry logic with exponential backoff
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                async with aiosmtplib.SMTP(
+                    hostname=account["host"],
+                    port=account["port"],
+                    use_tls=True,
+                ) as smtp:
+                    await smtp.login(account["user"], account["password"])
+                    await smtp.send_message(msg)
+
+                await self._increment_send_count(domain)
+                logger.info(
+                    "Email sent to %s via %s (pinned domain, message_id=%s)",
+                    to,
+                    domain,
+                    message_id,
+                )
+                return {
+                    "domain_used": domain,
+                    "message_id_header": message_id_header,
+                    "success": True,
+                }
+            except aiosmtplib.SMTPResponseException as exc:
+                if exc.code >= 500:
+                    logger.error(
+                        "Permanent SMTP failure (%d) sending to %s via %s: %s",
+                        exc.code,
+                        to,
+                        domain,
+                        str(exc),
+                    )
+                    break
+                wait_time = 2 ** attempt
+                logger.warning(
+                    "Transient SMTP error (%d) attempt %d/%d for %s: %s. Retrying in %ds...",
+                    exc.code,
+                    attempt + 1,
+                    max_attempts,
+                    domain,
+                    str(exc),
+                    wait_time,
+                )
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(wait_time)
             except Exception as exc:
                 wait_time = 2 ** attempt
                 logger.warning(

@@ -15,8 +15,9 @@ _WARMUP_DAYS = 21
 class DomainWarmupManager:
     """Manages domain warmup schedules using Redis for state tracking."""
 
-    def __init__(self, redis_url: str) -> None:
+    def __init__(self, redis_url: str, domains: list[str] | None = None) -> None:
         self._redis = aioredis.from_url(redis_url, decode_responses=True)
+        self._domains = domains or []
 
     def _warmup_key(self, domain: str) -> str:
         return f"warmup:{domain}"

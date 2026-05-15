@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     # Tracking
     tracking_base_url: str = "http://localhost:8000"
+    tracking_secret: str = "change-me-in-production"
 
     # Calendar integration
     calendar_provider: str = "calcom"

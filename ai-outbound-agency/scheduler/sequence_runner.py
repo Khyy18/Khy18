@@ -289,10 +289,21 @@ class SequenceRunner:
     async def _get_campaign_leads(
         self, session: AsyncSession, campaign: Campaign
     ) -> list[Lead]:
-        """Query leads for the campaign's tenant that are eligible for messaging."""
+        """Query leads assigned to this campaign that are eligible for messaging.
+
+        A lead is considered assigned to this campaign if it has at least one
+        Message record (any status/direction) for this campaign_id.
+        """
+        # Subquery: lead IDs that have at least one message in this campaign
+        lead_ids_subq = (
+            select(Message.lead_id)
+            .where(Message.campaign_id == campaign.id)
+            .distinct()
+            .subquery()
+        )
         stmt = (
             select(Lead)
-            .where(Lead.tenant_id == campaign.tenant_id)
+            .where(Lead.id.in_(select(lead_ids_subq.c.lead_id)))
             .where(Lead.status.notin_([s.value for s in _SKIP_STATUSES]))
         )
         result = await session.execute(stmt)
