@@ -119,7 +119,7 @@ class HubSpotAdapter(CRMAdapter):
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
                 f"{self._base_url}/crm/v3/objects/contacts",
-                params={"limit": 100},
+                params=params,
                 headers=self._headers(),
             )
             if response.status_code == 200:

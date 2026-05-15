@@ -170,8 +170,9 @@ class WarmupNetwork:
             message_id: The message ID to simulate engagement for.
         """
         redis = await self._get_redis()
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        # Record open event
+        # Record open event (TTL: 48 hours)
         engagement_key = f"warmup_network:engagement:{message_id}"
         now = datetime.now(timezone.utc).isoformat()
         await redis.hset(engagement_key, mapping={
@@ -179,13 +180,15 @@ class WarmupNetwork:
             "opened_at": now,
             "message_id": message_id,
         })
+        await redis.expire(engagement_key, 172800)  # 48 hours
 
         # Update domain sends counter from the message metadata
         msg_key = f"warmup_network:message:{message_id}"
         domain = await redis.hget(msg_key, "sender_domain")
         if domain:
-            opens_key = f"warmup_network:{domain}:opens_today"
+            opens_key = f"warmup_network:{domain}:opens:{today}"
             await redis.incr(opens_key)
+            await redis.expire(opens_key, 172800)  # 48 hours
 
     async def get_network_health(self, domain: str) -> dict[str, Any]:
         """Return stats for a domain in the warmup network.
@@ -197,10 +200,11 @@ class WarmupNetwork:
             Dict with total_sends, opens, replies, and health_score (0-100).
         """
         redis = await self._get_redis()
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        sends_key = f"warmup_network:{domain}:sends_today"
-        opens_key = f"warmup_network:{domain}:opens_today"
-        replies_key = f"warmup_network:{domain}:replies_today"
+        sends_key = f"warmup_network:{domain}:sends:{today}"
+        opens_key = f"warmup_network:{domain}:opens:{today}"
+        replies_key = f"warmup_network:{domain}:replies:{today}"
 
         total_sends = int(await redis.get(sends_key) or 0)
         opens = int(await redis.get(opens_key) or 0)
@@ -233,12 +237,14 @@ class WarmupNetwork:
             receiver_email: Receiver email address.
         """
         redis = await self._get_redis()
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        # Track daily sends
-        sends_key = f"warmup_network:{domain}:sends_today"
+        # Track daily sends with date-partitioned key and TTL
+        sends_key = f"warmup_network:{domain}:sends:{today}"
         await redis.incr(sends_key)
+        await redis.expire(sends_key, 172800)  # 48 hours
 
-        # Store message metadata
+        # Store message metadata with TTL
         msg_key = f"warmup_network:message:{message_id}"
         await redis.hset(msg_key, mapping={
             "sender_domain": domain,
@@ -246,6 +252,7 @@ class WarmupNetwork:
             "receiver_email": receiver_email,
             "sent_at": datetime.now(timezone.utc).isoformat(),
         })
+        await redis.expire(msg_key, 172800)  # 48 hours
 
     async def close(self) -> None:
         """Close the Redis connection."""

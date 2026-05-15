@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from core.models import (
     ApiKey,
@@ -19,6 +20,7 @@ from core.models import (
     Event,
     Lead,
     LeadStatus,
+    Message,
     Tenant,
     Webhook,
     _utcnow,
@@ -26,6 +28,20 @@ from core.models import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["integrations"])
+
+# Module-level lazy-initialized Redis instance for rate limiting
+_rate_limit_redis = None
+
+
+async def _get_rate_limit_redis():
+    """Get or create a shared Redis connection for rate limiting."""
+    global _rate_limit_redis
+    if _rate_limit_redis is None:
+        import redis.asyncio as aioredis
+        from core.config import settings
+
+        _rate_limit_redis = aioredis.from_url(settings.redis_url)
+    return _rate_limit_redis
 
 
 async def _get_session():
@@ -62,22 +78,16 @@ async def get_api_key_tenant(
 
     # Rate limiting: 100 requests per minute
     try:
-        import redis.asyncio as aioredis
-        from core.config import settings
-
-        redis_client = aioredis.from_url(settings.redis_url)
+        redis_client = await _get_rate_limit_redis()
         rate_key = f"api_rate:{api_key.tenant_id}:{int(datetime.now(timezone.utc).timestamp()) // 60}"
-        try:
-            current = await redis_client.incr(rate_key)
-            if current == 1:
-                await redis_client.expire(rate_key, 60)
-            if current > 100:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Rate limit exceeded: 100 requests per minute",
-                )
-        finally:
-            await redis_client.close()
+        current = await redis_client.incr(rate_key)
+        if current == 1:
+            await redis_client.expire(rate_key, 60)
+        if current > 100:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded: 100 requests per minute",
+            )
     except HTTPException:
         raise
     except Exception:
@@ -250,10 +260,13 @@ async def get_events(
     tenant: Tenant = Depends(get_api_key_tenant),
     session: AsyncSession = Depends(_get_session),
 ) -> dict:
-    """Get recent events (last 24h, paginated)."""
+    """Get recent events (last 24h, paginated) for the authenticated tenant."""
     since = datetime.now(timezone.utc) - timedelta(hours=24)
     result = await session.execute(
         select(Event)
+        .join(Message, Event.message_id == Message.id)
+        .join(Campaign, Message.campaign_id == Campaign.id)
+        .where(Campaign.tenant_id == tenant.id)
         .where(Event.occurred_at >= since)
         .order_by(Event.occurred_at.desc())
         .limit(limit)

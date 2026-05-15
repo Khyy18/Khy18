@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -300,9 +301,9 @@ class MLLeadScorer:
         size_map = {"micro": 0, "small": 1, "medium": 2, "large": 3, "enterprise": 4}
         size_val = size_map.get(features.get("company_size_bucket", "micro"), 0)
 
-        # Encode industry as hash-based numeric (simple approach)
+        # Encode industry as deterministic hash-based numeric
         industry = features.get("industry", "unknown")
-        industry_val = hash(industry) % 100 / 100.0
+        industry_val = int(hashlib.md5(industry.encode()).hexdigest()[:8], 16) % 1000 / 1000.0
 
         feature_array = [
             size_val,

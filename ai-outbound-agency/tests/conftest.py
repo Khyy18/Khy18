@@ -189,6 +189,7 @@ def mock_redis() -> AsyncMock:
     redis.delete = AsyncMock(side_effect=mock_delete)
     redis.setex = AsyncMock(side_effect=mock_setex)
     redis.eval = AsyncMock(side_effect=mock_eval)
+    redis.expire = AsyncMock(return_value=True)
     redis.pipeline = MagicMock(return_value=_make_pipeline())
     redis.close = AsyncMock()
     redis._store = store  # Expose for test assertions

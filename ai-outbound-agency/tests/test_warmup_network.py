@@ -153,6 +153,7 @@ async def test_simulate_engagement_records_open(warmup_network, mock_redis):
     mock_redis.hget = AsyncMock(side_effect=mock_hget)
     mock_redis.hset = AsyncMock(return_value=True)
     mock_redis.incr = AsyncMock(return_value=1)
+    mock_redis.expire = AsyncMock(return_value=True)
 
     await warmup_network.simulate_engagement(message_id)
 
@@ -162,14 +163,21 @@ async def test_simulate_engagement_records_open(warmup_network, mock_redis):
     call_args = mock_redis.hset.call_args_list[0]
     assert call_args[0][0] == engagement_key
 
+    # Verify expire was called for TTL
+    mock_redis.expire.assert_called()
+
 
 @pytest.mark.asyncio
 async def test_get_network_health(warmup_network, mock_redis):
     """Test get_network_health returns correct stats."""
-    # Pre-set Redis values
-    mock_redis._store["warmup_network:test.com:sends_today"] = "20"
-    mock_redis._store["warmup_network:test.com:opens_today"] = "15"
-    mock_redis._store["warmup_network:test.com:replies_today"] = "5"
+    from datetime import datetime, timezone
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Pre-set Redis values with date-partitioned keys
+    mock_redis._store[f"warmup_network:test.com:sends:{today}"] = "20"
+    mock_redis._store[f"warmup_network:test.com:opens:{today}"] = "15"
+    mock_redis._store[f"warmup_network:test.com:replies:{today}"] = "5"
 
     health = await warmup_network.get_network_health("test.com")
 
