@@ -1,8 +1,21 @@
-def _card(title: str, emoji: str, body_lines: list) -> str:
-    """Returns HTML string with pre tag containing formatted card."""
-    separator = "\u2501" * 24
+def divider() -> str:
+    """Return 24-char separator line using U+2501 box-drawing character."""
+    return "\u2501" * 24
+
+
+def _card(title: str, emoji: str, body_lines: list, status: str = None) -> str:
+    """Returns HTML string with pre tag containing formatted card.
+
+    Args:
+        title: Card title text.
+        emoji: Emoji prefix for the title.
+        body_lines: List of body text lines.
+        status: Optional status level (good/warning/bad/neutral) shown after title.
+    """
+    separator = divider()
+    status_str = f" {status_indicator(status)}" if status else ""
     body = "\n".join(body_lines)
-    return f"<pre>{emoji} {title}\n{separator}\n{body}\n{separator}</pre>"
+    return f"<pre>{emoji} {title}{status_str}\n{separator}\n{body}\n{separator}</pre>"
 
 
 def format_money(amount: float) -> str:
