@@ -115,23 +115,29 @@ def build_grid_levels(
     qty_per_level: float,
     best_bid: float = 0.0,
     best_ask: float = 0.0,
+    buy_levels_count: int = 0,
+    sell_levels_count: int = 0,
 ) -> list[GridLevel]:
     """Построить уровни сетки вокруг mid_price.
+
+    Если buy_levels_count / sell_levels_count заданы — asymmetric grid.
+    Иначе symmetric: n_levels с каждой стороны.
 
     Если best_bid/best_ask заданы — Buy-уровни строятся от best_bid вниз,
     Sell-уровни от best_ask вверх. Это гарантирует что ордера попадают
     в стакан как maker (не taker).
-
-    Возвращает список уровней: n_levels ниже (Buy) и n_levels выше (Sell).
     """
     levels: list[GridLevel] = []
+
+    # Asymmetric: если задано — используем, иначе symmetric
+    n_buy = buy_levels_count if buy_levels_count > 0 else n_levels
+    n_sell = sell_levels_count if sell_levels_count > 0 else n_levels
 
     # Базовые точки: если bid/ask не заданы — fallback на mid
     buy_base = best_bid if best_bid > 0 else mid_price
     sell_base = best_ask if best_ask > 0 else mid_price
 
-    for i in range(1, n_levels + 1):
-        # Buy уровни ниже bid
+    for i in range(1, n_buy + 1):
         buy_price = buy_base * (1 - step_pct * i)
         levels.append(GridLevel(
             price=buy_price,
@@ -139,8 +145,7 @@ def build_grid_levels(
             qty=qty_per_level,
         ))
 
-    for i in range(1, n_levels + 1):
-        # Sell уровни выше ask
+    for i in range(1, n_sell + 1):
         sell_price = sell_base * (1 + step_pct * i)
         levels.append(GridLevel(
             price=sell_price,
@@ -148,7 +153,6 @@ def build_grid_levels(
             qty=qty_per_level,
         ))
 
-    # Сортируем по цене
     levels.sort(key=lambda lv: lv.price)
     return levels
 
@@ -290,19 +294,61 @@ async def _process_symbol(
     if not levels or is_grid_out_of_range(mid_price, levels):
         # Отменяем все старые ордера
         cancelled = await _cancel_all_grid_orders(session, adapter, symbol, levels)
-        # Строим сетку от bid/ask (не от mid) — offset для maker-only
+
+        # #8: Fresh price после cancel — цена могла двинуться за время отмены
+        top_fresh = await adapter.get_orderbook_top(session, symbol)
+        if top_fresh is not None:
+            best_bid, best_ask = top_fresh
+            mid_price = (best_bid + best_ask) / 2
+
+        # #1: Динамический шаг на основе ATR
+        step_pct = cfg.GRID_STEP_PCT
+        if cfg.GRID_ATR_MULTIPLIER > 0:
+            klines = await adapter.get_klines(session, symbol, "15", limit=20)
+            if klines and len(klines) > 15:
+                from momentum_engine import calc_atr
+                atr = calc_atr(klines, period=14)
+                if mid_price > 0 and atr > 0:
+                    atr_step = (atr / mid_price) * cfg.GRID_ATR_MULTIPLIER
+                    # Ограничиваем: min 0.1%, max 2%
+                    step_pct = max(0.001, min(0.02, atr_step))
+
+        # #4: Asymmetric grid — bias по тренду (EMA50 на 4h)
+        n_buy = cfg.GRID_LEVELS
+        n_sell = cfg.GRID_LEVELS
+        if cfg.GRID_TREND_BIAS_LEVELS > 0:
+            klines_4h = await adapter.get_klines(session, symbol, "240", limit=60)
+            if klines_4h and len(klines_4h) >= 50:
+                from momentum_engine import calc_ema
+                closes_4h = [float(k["close"]) for k in klines_4h]
+                ema50 = calc_ema(closes_4h, 50)
+                if ema50 and mid_price > ema50[-1]:
+                    # Uptrend: больше sell (фиксируем прибыль), меньше buy
+                    n_sell = cfg.GRID_LEVELS + cfg.GRID_TREND_BIAS_LEVELS
+                    n_buy = cfg.GRID_LEVELS - cfg.GRID_TREND_BIAS_LEVELS
+                elif ema50 and mid_price < ema50[-1]:
+                    # Downtrend: больше buy (набираем), меньше sell
+                    n_buy = cfg.GRID_LEVELS + cfg.GRID_TREND_BIAS_LEVELS
+                    n_sell = cfg.GRID_LEVELS - cfg.GRID_TREND_BIAS_LEVELS
+            n_buy = max(2, n_buy)
+            n_sell = max(2, n_sell)
+
+        # Строим сетку
         levels = build_grid_levels(
             mid_price=mid_price,
             n_levels=cfg.GRID_LEVELS,
-            step_pct=cfg.GRID_STEP_PCT,
+            step_pct=step_pct,
             qty_per_level=qty_per_level,
             best_bid=best_bid,
             best_ask=best_ask,
+            buy_levels_count=n_buy,
+            sell_levels_count=n_sell,
         )
         # Размещаем ордера
         placed = await _place_grid_orders(session, adapter, symbol, levels, info)
         sym_state["levels"] = [lv.to_dict() for lv in levels]
         sym_state["mid_price"] = mid_price
+        sym_state["step_pct_actual"] = step_pct
         sym_state["last_rebuild_epoch"] = time.time()
         return f"пересоздано {placed} ордеров (отменено {cancelled})"
 

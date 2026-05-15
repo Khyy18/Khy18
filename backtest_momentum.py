@@ -125,6 +125,9 @@ def run_backtest(
     min_atr_pct: float,
     trail_activate_pct: float,
     trail_distance_pct: float,
+    fee_per_side: float = 0.00055,
+    leverage: int = 3,
+    confirmation_bar: bool = True,
 ) -> dict[str, Any]:
     """Прогнать momentum-стратегию на исторических свечах.
 
@@ -201,13 +204,16 @@ def run_backtest(
             if should_close:
                 position["exit"] = price
                 position["exit_i"] = i
-                position["pnl_pct"] = pnl_pct
+                # #10: Вычитаем комиссии (open + close) и slippage
+                raw_pnl = pnl_pct
+                fee_drag = fee_per_side * 2  # open + close
+                position["pnl_pct"] = raw_pnl - fee_drag
                 position["reason"] = reason
                 trades.append(position)
                 position = None
 
-                # Обновляем equity
-                eq = equity_curve[-1] * (1 + pnl_pct * 3)  # leverage 3x
+                # Обновляем equity с leverage и комиссиями
+                eq = equity_curve[-1] * (1 + (raw_pnl - fee_drag) * leverage)
                 equity_curve.append(eq)
             else:
                 equity_curve.append(equity_curve[-1])
@@ -215,6 +221,13 @@ def run_backtest(
         else:
             # Ищем сигнал
             signal = momentum_engine.detect_crossover(fast_ema[:i + 1], slow_ema[:i + 1])
+
+            # #2: Confirmation bar — кросс должен быть на предыдущем баре
+            if signal and confirmation_bar and i > ema_slow + 2:
+                prev_signal = momentum_engine.detect_crossover(fast_ema[:i], slow_ema[:i])
+                if prev_signal != signal:
+                    signal = None  # Кросс только что, ждём confirmation
+
             if signal and atr_pct >= min_atr_pct:
                 if signal == "LONG":
                     sl = price * (1 - stop_loss_pct)
@@ -347,6 +360,9 @@ async def async_main() -> None:
         min_atr_pct=cfg.MOMENTUM_MIN_ATR_PCT,
         trail_activate_pct=cfg.MOMENTUM_TRAIL_ACTIVATE_PCT,
         trail_distance_pct=cfg.MOMENTUM_TRAIL_DISTANCE_PCT,
+        fee_per_side=0.00055,  # Bybit taker fee
+        leverage=cfg.MOMENTUM_LEVERAGE,
+        confirmation_bar=cfg.MOMENTUM_CONFIRMATION_BAR,
     )
 
     print_results(args.symbol, args.days, results)

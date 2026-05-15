@@ -160,9 +160,20 @@ async def _funding_executor_tick(
 
     # Мониторинг и закрытие
     try:
-        await arb_executor.monitor_and_maybe_close(
+        closed = await arb_executor.monitor_and_maybe_close(
             session, _FUNDING_ADAPTERS, snapshots, None
         )
+        # #3: Sync funding PnL в capital_allocator
+        if closed:
+            try:
+                recent = arb_storage.get_recent_closed(limit=5)
+                for r in recent:
+                    pnl = float(r.get("pnl_total") or 0.0)
+                    if pnl != 0 and r.get("_synced_combo") is None:
+                        capital_allocator.record_pnl(state, "funding", pnl)
+                        r["_synced_combo"] = True
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMBO] funding pnl sync: {exc}")
     except Exception as exc:  # noqa: BLE001
         print(f"[COMBO] arb monitor error: {exc}")
 
@@ -291,6 +302,33 @@ async def _main_loop(
 
             # 6. Persist state
             await _persist_tick(state)
+
+            # #9: Heartbeat в Telegram (раз в HEARTBEAT_INTERVAL_SEC)
+            g = state.get("global", {})
+            last_hb = float(g.get("last_heartbeat_epoch", 0))
+            if (time.time() - last_hb) >= cfg.HEARTBEAT_INTERVAL_SEC:
+                g["last_heartbeat_epoch"] = time.time()
+                summary = capital_allocator.get_allocation_summary(state)
+                dd = summary["drawdown_pct"]
+                eq = summary["current_equity"]
+                await _notify(session, combo_telegram._card(
+                    "Heartbeat", "\U0001f49a", [
+                        f"Equity: ${eq:.2f}  |  DD: {dd*100:.1f}%",
+                        f"Grid cycles: {state.get('grid', {}).get('total_cycles', 0)}",
+                        f"Mom trades: {state.get('momentum', {}).get('total_trades', 0)}",
+                    ]
+                ))
+
+            # #7: Сброс daily PnL counters на границе UTC-суток
+            from datetime import datetime, timezone
+            now_dt = datetime.now(tz=timezone.utc)
+            last_day = g.get("_daily_reset_day", "")
+            today = now_dt.strftime("%Y-%m-%d")
+            if today != last_day:
+                g["_daily_reset_day"] = today
+                g["daily_pnl_grid"] = 0.0
+                g["daily_pnl_momentum"] = 0.0
+                g["daily_pnl_funding"] = 0.0
 
         except Exception as exc:  # noqa: BLE001
             print(f"[COMBO] main_loop tick exception: {exc}")

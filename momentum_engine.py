@@ -144,6 +144,59 @@ def _calc_position_size(state: dict[str, Any], price: float) -> float:
     return notional / price if price > 0 else 0.0
 
 
+def _get_symbol_exposure(state: dict[str, Any], symbol: str) -> float:
+    """Суммарная нетто-экспозиция по символу по всем стратегиям (USDT).
+
+    Grid: считаем кол-во filled buy - filled sell * mid_price * qty.
+    Momentum: открытые позиции notional.
+    """
+    exposure = 0.0
+
+    # Grid exposure
+    grid_state = state.get("grid", {})
+    sym_grid = grid_state.get("symbols", {}).get(symbol, {})
+    levels_raw = sym_grid.get("levels", [])
+    mid = float(sym_grid.get("mid_price", 0.0))
+    for d in levels_raw:
+        if d.get("filled", False):
+            # Filled buy = long exposure, filled sell = short exposure
+            qty = float(d.get("qty", 0))
+            if d.get("side") == "Buy":
+                exposure += qty * mid
+            elif d.get("side") == "Sell":
+                exposure -= qty * mid
+
+    # Momentum exposure
+    mom_state = state.get("momentum", {})
+    for pos in mom_state.get("positions", []):
+        if pos.get("status") == "OPEN" and pos.get("symbol") == symbol:
+            notional = float(pos.get("notional_usdt", 0))
+            if pos.get("side") == "LONG":
+                exposure += notional
+            else:
+                exposure -= notional
+
+    return abs(exposure)
+
+
+def _is_daily_loss_exceeded(
+    state: dict[str, Any], strategy: str, limit_pct: float
+) -> bool:
+    """Проверить, превышен ли дневной лимит убытков для стратегии.
+
+    Считает PnL за текущие UTC-сутки из state["daily_pnl_{strategy}"].
+    """
+    if limit_pct <= 0:
+        return False
+    g = state.get("global", {})
+    daily_key = f"daily_pnl_{strategy}"
+    daily_pnl = float(g.get(daily_key, 0.0))
+    equity = capital_allocator.get_current_equity(state)
+    if equity <= 0:
+        return False
+    return daily_pnl <= -(equity * limit_pct)
+
+
 # ─── Инициализация state ──────────────────────────────────────────────
 
 def init_momentum_state(state: dict[str, Any]) -> None:
@@ -241,16 +294,56 @@ async def _process_symbol(
     if signal is None:
         return "нет сигнала"
 
+    # #2: Confirmation bar — проверяем что кросс подтверждён закрытием
+    # предыдущей свечи (не текущей). Смотрим на [-3:-1] вместо [-2:]
+    if cfg.MOMENTUM_CONFIRMATION_BAR:
+        # Проверяем кросс на предыдущем баре, а текущий бар подтверждает
+        if len(fast_ema) >= 3 and len(slow_ema) >= 3:
+            # Кросс должен был случиться на пред-предыдущем → предыдущем
+            prev_signal = detect_crossover(fast_ema[:-1], slow_ema[:-1])
+            if prev_signal != signal:
+                # Кросс только на текущем баре — ждём confirmation
+                # Сохраняем pending signal
+                mom_state.setdefault("pending_signals", {})[symbol] = {
+                    "signal": signal,
+                    "epoch": time.time(),
+                }
+                return f"сигнал {signal}, ждём confirmation"
+            # Проверяем pending — если был на прошлом тике и совпадает
+            pending = mom_state.get("pending_signals", {}).get(symbol)
+            if not pending or pending.get("signal") != signal:
+                mom_state.setdefault("pending_signals", {})[symbol] = {
+                    "signal": signal,
+                    "epoch": time.time(),
+                }
+                return f"сигнал {signal}, ждём confirmation"
+            # Confirmation получен — удаляем pending
+            mom_state.get("pending_signals", {}).pop(symbol, None)
+
     # ATR-фильтр: не входим если волатильность слишком низкая (боковик)
     atr = calc_atr(klines, period=14)
     if current_price > 0 and atr / current_price < cfg.MOMENTUM_MIN_ATR_PCT:
         return f"сигнал {signal}, но ATR слишком мал ({atr/current_price*100:.2f}%)"
+
+    # #6: Cross-strategy exposure check
+    max_exposure = cfg.RISK_MAX_EXPOSURE_PER_SYMBOL_PCT
+    if max_exposure > 0:
+        equity = capital_allocator.get_current_equity(state)
+        # Считаем текущую экспозицию по символу (grid + momentum)
+        existing_exposure = _get_symbol_exposure(state, symbol)
+        new_notional = _calc_position_size(state, current_price) * current_price
+        if equity > 0 and (existing_exposure + new_notional) / equity > max_exposure:
+            return f"сигнал {signal}, но exposure limit ({(existing_exposure + new_notional)/equity*100:.0f}%)"
 
     # Проверяем лимит позиций
     positions = mom_state.get("positions", [])
     open_count = sum(1 for p in positions if p.get("status") == "OPEN")
     if open_count >= cfg.MOMENTUM_MAX_POSITIONS:
         return f"сигнал {signal}, но макс. позиций ({cfg.MOMENTUM_MAX_POSITIONS})"
+
+    # #7: Per-strategy daily loss check
+    if _is_daily_loss_exceeded(state, "momentum", cfg.RISK_DAILY_LOSS_MOMENTUM_PCT):
+        return f"сигнал {signal}, но daily loss limit"
 
     # Открываем позицию
     return await _open_position(

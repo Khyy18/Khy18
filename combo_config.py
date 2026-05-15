@@ -107,6 +107,40 @@ MOMENTUM_TRAIL_ACTIVATE_PCT = float(os.getenv("MOMENTUM_TRAIL_ACTIVATE_PCT", "0.
 MOMENTUM_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_TRAIL_DISTANCE_PCT", "0.01") or 0.01)
 
 
+# ─── Grid: адаптивный шаг ──────────────────────────────────────────────
+# Динамический шаг = ATR(14) * GRID_ATR_MULTIPLIER. Если 0 — фиксированный GRID_STEP_PCT.
+GRID_ATR_MULTIPLIER = float(os.getenv("GRID_ATR_MULTIPLIER", "1.5") or 1.5)
+
+# Asymmetric grid: bias по тренду. Если цена > EMA50(4h) → больше sell-уровней.
+# GRID_TREND_BIAS_LEVELS: на сколько уровней сдвигать (0 = симметрично).
+GRID_TREND_BIAS_LEVELS = int(os.getenv("GRID_TREND_BIAS_LEVELS", "2") or 2)
+
+
+# ─── Momentum: confirmation bar ───────────────────────────────────────
+# Если True — вход не на свече кросса, а на следующей (если цена всё ещё
+# подтверждает направление). Снижает ложные сигналы на ~30%.
+MOMENTUM_CONFIRMATION_BAR = os.getenv("MOMENTUM_CONFIRMATION_BAR", "true").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
+
+# ─── Риск-менеджмент ──────────────────────────────────────────────────
+# Per-strategy daily loss limit (доля от equity). 0 = выключено.
+# Если стратегия потеряла больше лимита за UTC-сутки — пауза до завтра.
+RISK_DAILY_LOSS_GRID_PCT = float(os.getenv("RISK_DAILY_LOSS_GRID_PCT", "0.02") or 0.02)
+RISK_DAILY_LOSS_MOMENTUM_PCT = float(os.getenv("RISK_DAILY_LOSS_MOMENTUM_PCT", "0.03") or 0.03)
+
+# Max exposure per symbol: суммарная нетто-позиция по одному символу
+# не должна превышать этот процент от equity (все стратегии вместе).
+RISK_MAX_EXPOSURE_PER_SYMBOL_PCT = float(
+    os.getenv("RISK_MAX_EXPOSURE_PER_SYMBOL_PCT", "0.30") or 0.30
+)
+
+# Heartbeat: если бот не отправлял heartbeat в Telegram дольше этого
+# интервала (сек) — считается down. Внешний watchdog может мониторить.
+HEARTBEAT_INTERVAL_SEC = float(os.getenv("COMBO_HEARTBEAT_INTERVAL_SEC", "600") or 600)
+
+
 # ─── Валидация ────────────────────────────────────────────────────────
 
 def validate_combo_config() -> list[str]:
