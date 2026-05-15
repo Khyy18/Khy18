@@ -31,6 +31,56 @@
 
 ---
 
+## Strategies (Regime-Adaptive)
+
+The bot dynamically selects strategy based on market regime (ADX indicator):
+
+### Mean-Reversion (ADX < 25 - ranging/sideways market)
+- Enters on RSI extremes: LONG when RSI < 25, SHORT when RSI > 75
+- Exits on RSI reversion to 55 or time stop (20 bars)
+- Dynamic stop-loss: max(1.5% fixed, ATR * 1.5)
+- Break-even: moves SL to entry after +0.5% profit
+- Session filter: trades only 08:00-22:00 UTC (peak liquidity)
+
+### Breakout (ADX >= 50 - strong trend)
+- Enters on N-bar high/low breakout with volume confirmation (1.5x avg)
+- Trailing stop: activates at +1.5%, trails at 1.0% distance
+- Max hold: 96 bars (24 hours on 15m)
+
+### Dead Zone (25 <= ADX < 50)
+- No entries - market is transitioning, high false signal risk
+
+---
+
+## 6 Enhancements (MR Strategy)
+
+| # | Enhancement | Description | Default |
+|---|-------------|-------------|---------|
+| 1 | RSI Momentum Filter | Blocks entries when RSI delta (3 bars) exceeds threshold - protects from breakdowns | threshold=20 |
+| 2 | Break-Even Stop | Moves SL to entry price after reaching +0.5% profit | auto |
+| 3 | Asymmetric RSI | Oversold=25, Overbought=75 (optimized via backtest, +3.7% vs +1.3% with 78) | 25/75 |
+| 4 | Volume Confirmation | Requires elevated volume for entry (capitulation signal) | disabled (0) |
+| 5 | BB Width Filter | Only enters when Bollinger Bands are narrow (range-bound) | disabled (0) |
+| 6 | Dynamic ATR Stop-Loss | SL = max(fixed 1.5%, ATR(14) * 1.5) - adapts to volatility | auto |
+
+---
+
+## Filters and Protections
+
+| Guard | Description | Default |
+|-------|-------------|---------|
+| Global Kill-Switch | Stops ALL strategies when total drawdown > threshold | 15% |
+| File-Based Kill | `touch /app/data/KILL` stops bot even if Telegram API is down | enabled |
+| Per-Strategy Daily Loss | Each strategy has independent daily loss limit | grid 2%, momentum 3% |
+| Spread Guard | Blocks orders when spread > threshold (liquidity dried up) | 0.5% |
+| Correlation Guard | Max 1 same-direction position in correlated group (BTC+ETH) | 1 |
+| Macro Blackout | No entries 30min before / 60min after major macro events | enabled |
+| Announcement Monitor | Monitors exchange announcements for delistings/maintenance | every 10 min |
+| Session Filter | MR trades only during 08:00-22:00 UTC (peak hours) | enabled |
+| Circuit Breaker | Disables strategy after consecutive losses | configurable |
+
+---
+
 ## AI-модули
 
 | Файл                   | Назначение                                      |
@@ -40,16 +90,6 @@
 | `ml_curator.py`       | ML-курирование символов для стратегий            |
 | `signal_scorer.py`    | Скоринг торговых сигналов                        |
 | `anomaly_detector.py` | Детектор аномалий (объем, спред, волатильность)  |
-
----
-
-## Защита от рисков (Risk Guards)
-
-| Файл                    | Назначение                                                  |
-|-------------------------|-------------------------------------------------------------|
-| `circuit_breaker.py`    | Автоматическое отключение стратегии при серии убытков        |
-| `global_kill_switch.py` | Глобальный стоп всех стратегий при drawdown > порога         |
-| `capital_allocator.py`  | Контроль аллокации; `GLOBAL_MAX_DRAWDOWN_PCT` (по умолчанию 15%) останавливает все стратегии |
 
 ---
 
