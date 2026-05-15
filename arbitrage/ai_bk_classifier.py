@@ -116,6 +116,107 @@ class BookmakerClassifier:
         )
         return result
 
+    async def predict_account_lifetime(
+        self,
+        session: aiohttp.ClientSession,
+        bookmaker: str,
+    ) -> dict[str, Any]:
+        """Предсказать оставшееся время жизни аккаунта у букмекера.
+
+        На основе: кол-во ставок, частота (ставок/день), win_rate,
+        средний stake, время жизни аккаунта.
+
+        Returns:
+            dict с ключами: days_remaining, risk_score (0-100), recommendations (list[str])
+        """
+        default: dict[str, Any] = {
+            "days_remaining": 90,
+            "risk_score": 30,
+            "recommendations": ["Недостаточно данных для прогноза"],
+        }
+
+        # Get bookmaker stats
+        bk_stats = memory.get_bookmaker_stats(bookmaker)
+        account_age = memory.get_account_age_days(bookmaker)
+        total_bets = bk_stats.get("total_bets", 0)
+
+        if total_bets < 5:
+            return default
+
+        # Calculate frequency
+        bets_per_day = total_bets / max(account_age, 1)
+
+        # Calculate win rate
+        win_rate = 0.0
+        try:
+            # Approximate from avg_pnl
+            avg_pnl = bk_stats.get("avg_pnl", 0.0)
+            win_rate = 0.55 if avg_pnl > 0 else 0.45
+        except Exception:
+            win_rate = 0.5
+
+        if ai_router is None:
+            # Heuristic fallback without LLM
+            risk_score = min(100, int(bets_per_day * 15 + (win_rate - 0.5) * 200))
+            days_remaining = max(7, 90 - int(bets_per_day * 10))
+            recommendations: list[str] = []
+            if bets_per_day > 3:
+                recommendations.append(f"Снизить частоту с {bets_per_day:.1f} до 2-3 ставок/день")
+            if win_rate > 0.6:
+                recommendations.append("Высокий винрейт привлекает внимание, добавить мусорные ставки")
+            if not recommendations:
+                recommendations.append("Текущий паттерн приемлемый")
+            return {
+                "days_remaining": days_remaining,
+                "risk_score": risk_score,
+                "recommendations": recommendations,
+            }
+
+        prompt = (
+            "Ты - эксперт по безопасности аккаунтов у букмекеров. "
+            "Оцени оставшееся время жизни аккаунта арбитражника.\n\n"
+            f"Букмекер: {bookmaker}\n"
+            f"Статистика:\n"
+            f"  Всего ставок: {total_bets}\n"
+            f"  Частота: {bets_per_day:.2f} ставок/день\n"
+            f"  Win rate: {win_rate:.1%}\n"
+            f"  Средний PnL/ставку: {bk_stats.get('avg_pnl', 0):.4f}\n"
+            f"  Возраст аккаунта: {account_age} дней\n"
+            f"  Trap rate: {bk_stats.get('trap_rate', 0):.1f}%\n\n"
+            "Ответь JSON:\n"
+            '{"days_remaining": <7-180>, "risk_score": <0-100>, '
+            '"recommendations": ["рекомендация 1", "рекомендация 2"]}'
+        )
+
+        try:
+            resp = await ai_router.call_llm_json(
+                session, prompt, max_output_tokens=256, temperature=0.2, timeout=25
+            )
+        except Exception as exc:
+            logger.warning("predict_account_lifetime LLM ошибка: %s", exc)
+            return default
+
+        if resp is None:
+            return default
+
+        days_remaining = int(resp.get("days_remaining", 90))
+        days_remaining = max(7, min(180, days_remaining))
+        risk_score = int(resp.get("risk_score", 30))
+        risk_score = max(0, min(100, risk_score))
+        recommendations = resp.get("recommendations", [])
+        if not isinstance(recommendations, list):
+            recommendations = [str(recommendations)]
+
+        logger.info(
+            "[BK_CLASSIFIER] Прогноз %s: осталось %d дней, риск %d/100",
+            bookmaker, days_remaining, risk_score,
+        )
+        return {
+            "days_remaining": days_remaining,
+            "risk_score": risk_score,
+            "recommendations": recommendations,
+        }
+
 
 async def classifier_loop(state: dict[str, Any], session: aiohttp.ClientSession) -> None:
     """Фоновый цикл классификации букмекеров (раз в сутки).

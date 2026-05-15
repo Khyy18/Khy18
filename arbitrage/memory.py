@@ -538,6 +538,34 @@ def get_bookmaker_stats(bookmaker: str) -> dict[str, Any]:
     return stats
 
 
+def get_account_age_days(bookmaker: str) -> int:
+    """Вычислить возраст аккаунта (дней с первой ставки) у букмекера."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT MIN(ts) AS first_bet_ts
+                FROM bets
+                WHERE bookmaker = ?
+                """,
+                (str(bookmaker),),
+            ).fetchone()
+            if row and row["first_bet_ts"]:
+                first_ts = row["first_bet_ts"]
+                try:
+                    first_dt = datetime.fromisoformat(first_ts)
+                    if first_dt.tzinfo is None:
+                        first_dt = first_dt.replace(tzinfo=timezone.utc)
+                    now = datetime.now(tz=timezone.utc)
+                    delta = now - first_dt
+                    return max(0, delta.days)
+                except (ValueError, TypeError):
+                    return 0
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка вычисления возраста аккаунта {bookmaker}: {exc}")
+    return 0
+
+
 def get_pending_bets_for_settlement() -> list[dict[str, Any]]:
     """Получить PENDING/SIMULATED ставки старше 3 часов для расчёта."""
     try:

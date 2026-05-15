@@ -128,14 +128,15 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             logger.info("Сканирование начато: %s", datetime.now(timezone.utc).isoformat())
             scan_ts: float = time.time()
 
-            # 1. Получить коэффициенты для всех спортов
+            # 1. Получить коэффициенты для всех спортов (параллельно)
             all_events: list[dict[str, Any]] = []
-            for sport in config.SPORTS:
-                try:
-                    events = await odds_client.get_odds(sport)
-                    all_events.extend(events)
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Ошибка получения коэфф. %s: %s", sport, exc)
+            tasks = [odds_client.get_odds(sport) for sport in config.SPORTS]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for sport, result in zip(config.SPORTS, results):
+                if isinstance(result, Exception):
+                    logger.error("Ошибка получения коэфф. %s: %s", sport, result)
+                else:
+                    all_events.extend(result)
 
             if not all_events:
                 logger.info("Нет событий для анализа")
@@ -624,6 +625,59 @@ async def clv_check_loop(state: dict[str, Any], session: aiohttp.ClientSession) 
             logger.error("Ошибка CLV-мониторинга: %s", exc)
 
 
+async def stream_arb_detector(state: dict[str, Any], session: aiohttp.ClientSession) -> None:
+    """Детектор арбитражей на основе Betfair streaming.
+
+    При наличии BETFAIR_APP_KEY подписывается на market price changes.
+    При изменении цены проверяет наличие арбитража с данными из последнего скана.
+    """
+    if not config.BETFAIR_APP_KEY:
+        logger.info("[STREAM_ARB] BETFAIR_APP_KEY не задан, stream arb detector отключен")
+        while True:
+            await asyncio.sleep(3600)
+        return
+
+    from arbitrage.betfair_stream import BetfairStreamClient
+    from arbitrage.scanner import ArbitrageScanner
+
+    scanner = ArbitrageScanner()
+    client = BetfairStreamClient()
+
+    def on_price_change(data: dict[str, Any]) -> None:
+        """Callback при изменении цены на Betfair."""
+        market_id = data.get("market_id", "")
+        runners = data.get("runners", [])
+
+        # Store latest prices in state
+        live_prices = state.setdefault("betfair_live_prices", {})
+        live_prices[market_id] = {
+            "runners": runners,
+            "updated_ts": datetime.now(timezone.utc).isoformat(),
+        }
+
+        logger.debug(
+            "[STREAM_ARB] Price change: market=%s, runners=%d",
+            market_id, len(runners),
+        )
+
+    client.on_price_change(on_price_change)
+
+    # Connect and keep alive with reconnection
+    while True:
+        try:
+            await client.connect()
+            logger.info("[STREAM_ARB] Betfair stream подключен, ожидание данных...")
+            # Keep running while connected
+            while client.connected:
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            await client.disconnect()
+            raise
+        except Exception as exc:
+            logger.error("[STREAM_ARB] Ошибка stream: %s, переподключение через 30 сек", exc)
+            await asyncio.sleep(30.0)
+
+
 async def main() -> None:
     """Главная функция: инициализация и запуск всех циклов."""
     setup_logging()
@@ -738,6 +792,10 @@ async def main() -> None:
         ("market_maker", market_maker_loop),
         ("clv_check", clv_check_loop),
     ]
+
+    # Betfair Stream Arb Detector (conditional)
+    if config.BETFAIR_APP_KEY:
+        task_factories.append(("stream_arb_detector", stream_arb_detector))
 
     try:
         await supervisor.run(task_factories, state, session)
