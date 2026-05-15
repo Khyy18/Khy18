@@ -2,10 +2,10 @@ from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 from uuid import UUID
 
+import bcrypt as _bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,7 +15,6 @@ from dashboard.schemas import TokenResponse, UserCreate, UserLogin, UserResponse
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
@@ -30,11 +29,17 @@ async def _get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    """Hash a password using bcrypt with automatic salt generation."""
+    pwd_bytes = password.encode("utf-8")[:72]
+    salt = _bcrypt.gensalt()
+    return _bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a plain password against a bcrypt hash."""
+    pwd_bytes = plain_password.encode("utf-8")[:72]
+    hash_bytes = hashed_password.encode("utf-8")
+    return _bcrypt.checkpw(pwd_bytes, hash_bytes)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:

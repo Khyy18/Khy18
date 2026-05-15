@@ -52,24 +52,24 @@ class AlertingEngine:
         },
         {
             "name": "llm_error_rate_high",
-            "threshold": 10.0,
+            "threshold": 20.0,
             "channels": ["telegram", "slack"],
             "cooldown_seconds": 3600,
-            "description": "LLM API error rate exceeds 10% of requests in the last hour",
+            "description": "LLM API error rate exceeds 20% of requests in the last hour",
         },
         {
             "name": "no_sends_business_hours",
             "threshold": 0,
             "channels": ["telegram", "slack", "email"],
             "cooldown_seconds": 3600,
-            "description": "Zero emails sent during business hours (9am-6pm) in the last hour",
+            "description": "Zero emails sent during business hours (9am-6pm) in the last 6 hours",
         },
         {
             "name": "disk_usage_high",
-            "threshold": 85.0,
+            "threshold": 80.0,
             "channels": ["telegram"],
             "cooldown_seconds": 3600,
-            "description": "Disk usage exceeds 85%",
+            "description": "Disk usage exceeds 80%",
         },
         {
             "name": "memory_usage_high",
@@ -80,17 +80,17 @@ class AlertingEngine:
         },
         {
             "name": "linkedin_session_failures",
-            "threshold": 3,
+            "threshold": 0,
             "channels": ["telegram", "slack"],
             "cooldown_seconds": 3600,
-            "description": "More than 3 LinkedIn session failures in the last hour",
+            "description": "All LinkedIn sessions restricted in the last hour",
         },
         {
             "name": "mrr_drop",
-            "threshold": 10.0,
+            "threshold": 20.0,
             "channels": ["telegram", "slack", "email"],
             "cooldown_seconds": 3600,
-            "description": "MRR dropped more than 10% day-over-day",
+            "description": "MRR dropped more than 20% day-over-day",
         },
         {
             "name": "db_pool_exhaustion",
@@ -320,7 +320,7 @@ class AlertingEngine:
         return is_triggered, error_rate, message
 
     async def _check_no_sends_business_hours(self, threshold: float) -> CheckResult:
-        """Check if zero emails sent during business hours (9am-6pm).
+        """Check if zero emails sent during business hours (9am-6pm) in last 6 hours.
 
         Args:
             threshold: Not used (always checks for zero sends).
@@ -338,19 +338,19 @@ class AlertingEngine:
         if current_hour < 9 or current_hour >= 18:
             return False, 0.0, "Outside business hours"
 
-        one_hour_ago = now - timedelta(hours=1)
+        six_hours_ago = now - timedelta(hours=6)
 
         async with self._session_factory() as session:
             sent_result = await session.execute(
                 select(func.count(Message.id)).where(
-                    Message.sent_at >= one_hour_ago,
+                    Message.sent_at >= six_hours_ago,
                     Message.status == MessageStatus.sent,
                 )
             )
             sent_count = sent_result.scalar() or 0
 
         is_triggered = sent_count == 0
-        message = f"Emails sent in last hour during business hours: {sent_count}"
+        message = f"Emails sent in last 6 hours during business hours: {sent_count}"
         return is_triggered, float(sent_count), message
 
     async def _check_disk_usage(self, threshold: float) -> CheckResult:
@@ -390,21 +390,26 @@ class AlertingEngine:
             return False, 0.0, "psutil not available, skipping memory check"
 
     async def _check_linkedin_failures(self, threshold: float) -> CheckResult:
-        """Check if LinkedIn session failures exceed threshold.
+        """Check if all LinkedIn sessions are restricted.
 
-        Uses Redis counter for LinkedIn failures.
+        Uses Redis counters for LinkedIn total sessions and failures.
 
         Args:
-            threshold: Maximum acceptable number of failures.
+            threshold: Not used (triggers when all sessions have failed).
 
         Returns:
             Tuple of (is_triggered, current_value, message).
         """
         failures_str = await self._redis.get("linkedin_failures_1h")
+        total_str = await self._redis.get("linkedin_sessions_total")
         failures = int(failures_str) if failures_str else 0
+        total_sessions = int(total_str) if total_str else 0
 
-        is_triggered = failures > threshold
-        message = f"LinkedIn session failures in last hour: {failures}"
+        if total_sessions == 0:
+            return False, 0.0, "No LinkedIn sessions configured"
+
+        is_triggered = failures >= total_sessions
+        message = f"LinkedIn sessions restricted: {failures}/{total_sessions}"
         return is_triggered, float(failures), message
 
     async def _check_mrr_drop(self, threshold: float) -> CheckResult:
