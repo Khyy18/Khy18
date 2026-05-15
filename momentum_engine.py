@@ -286,7 +286,7 @@ async def _process_symbol(
     if existing:
         # Управляем открытой позицией (trailing stop + выход)
         return await _manage_position(
-            session, state, adapter, symbol, existing, fast_ema, slow_ema, current_price
+            session, state, adapter, symbol, existing, fast_ema, slow_ema, current_price, klines
         )
 
     # Нет позиции — ищем сигнал
@@ -344,6 +344,17 @@ async def _process_symbol(
     # #7: Per-strategy daily loss check
     if _is_daily_loss_exceeded(state, "momentum", cfg.RISK_DAILY_LOSS_MOMENTUM_PCT):
         return f"сигнал {signal}, но daily loss limit"
+
+    # #4: AI Signal scoring — фильтр слабых сигналов
+    try:
+        import ai_integration
+        should_enter, score = ai_integration.score_momentum_entry(
+            klines, fast_ema, slow_ema, signal, min_score=0.35
+        )
+        if not should_enter:
+            return f"сигнал {signal}, но score={score:.2f} < 0.35"
+    except Exception:  # noqa: BLE001
+        score = 0.5  # fallback — входим без scoring
 
     # Открываем позицию
     return await _open_position(
@@ -446,6 +457,7 @@ async def _manage_position(
     fast_ema: list[float],
     slow_ema: list[float],
     current_price: float,
+    klines: list[dict[str, Any]] | None = None,
 ) -> str:
     """Управление открытой позицией: trailing stop + проверка выхода."""
     signal = detect_crossover(fast_ema, slow_ema)
@@ -510,6 +522,16 @@ async def _manage_position(
         elif cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 and pnl_pct >= cfg.MOMENTUM_TAKE_PROFIT_PCT:
             should_close = True
             close_reason = f"тейк-профит ({pnl_pct*100:.1f}%)"
+
+    if not should_close:
+        # #6: Volume anomaly early exit
+        try:
+            import ai_integration
+            if klines and ai_integration.check_volume_anomaly_exit(klines, pos_side):
+                should_close = True
+                close_reason = "volume anomaly (institutional exit)"
+        except Exception:  # noqa: BLE001
+            pass
 
     if not should_close:
         held_h = (time.time() - float(position.get("opened_epoch", 0))) / 3600

@@ -265,6 +265,29 @@ async def _main_loop(
                 await _funding_scan_tick(session, state)
                 await _funding_executor_tick(session, state)
 
+            # 2.5. AI Regime routing (раз в 5 мин)
+            try:
+                import ai_integration
+                grid_adapter = grid_engine._get_adapter()
+                regime_result = await ai_integration.apply_regime_routing(
+                    session, state, grid_adapter
+                )
+                if regime_result.get("regime"):
+                    # Логируем смену режима
+                    prev_regime = state.get("global", {}).get("_prev_regime", "")
+                    new_regime = regime_result["regime"]
+                    if new_regime != prev_regime:
+                        state["global"]["_prev_regime"] = new_regime
+                        await _notify(session, combo_telegram._card(
+                            "Режим рынка", "\U0001f9e0", [
+                                f"Новый режим: {new_regime}",
+                                f"ADX: {regime_result.get('adx', 0):.1f}",
+                                f"Confidence: {regime_result.get('confidence', 0):.0%}",
+                            ]
+                        ))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMBO] regime routing: {exc}")
+
             # 3. Grid-тик
             try:
                 grid_result = await grid_engine.grid_tick(session, state)
