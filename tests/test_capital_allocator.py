@@ -21,23 +21,23 @@ def test_init_allocator_state():
     assert "capital_allocation" in g
     assert "strategy_pnl" in g
     assert "hwm_equity" in g
-    assert g["capital_allocation"]["funding"] == 0.50
-    assert g["capital_allocation"]["grid"] == 0.30
-    assert g["capital_allocation"]["momentum"] == 0.20
+    assert g["capital_allocation"]["funding"] == 0.70
+    assert g["capital_allocation"]["grid"] == 0.25
+    assert g["capital_allocation"]["momentum"] == 0.05
 
 
 def test_get_strategy_capital():
     """Правильно считает долю капитала."""
     state = _make_state()
-    # total_capital = 550, funding = 50%
+    # total_capital = 550, funding = 70%
     cap = capital_allocator.get_strategy_capital(state, "funding")
-    assert abs(cap - 275.0) < 0.01
+    assert abs(cap - 385.0) < 0.01
 
     cap_grid = capital_allocator.get_strategy_capital(state, "grid")
-    assert abs(cap_grid - 165.0) < 0.01
+    assert abs(cap_grid - 137.5) < 0.01
 
     cap_mom = capital_allocator.get_strategy_capital(state, "momentum")
-    assert abs(cap_mom - 110.0) < 0.01
+    assert abs(cap_mom - 27.5) < 0.01
 
 
 def test_get_current_equity():

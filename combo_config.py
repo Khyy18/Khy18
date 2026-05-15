@@ -12,10 +12,15 @@ import config  # noqa: F401 — base config, все ключи доступны 
 
 
 # ─── Аллокация капитала ───────────────────────────────────────────────
-# Доли от общего equity. Сумма должна быть <= 1.0.
-ALLOC_FUNDING_PCT = float(os.getenv("ALLOC_FUNDING_PCT", "0.50") or 0.50)
-ALLOC_GRID_PCT = float(os.getenv("ALLOC_GRID_PCT", "0.30") or 0.30)
-ALLOC_MOMENTUM_PCT = float(os.getenv("ALLOC_MOMENTUM_PCT", "0.20") or 0.20)
+# Funding-арб 70%: delta-neutral, 15-30% APR, стабильный доход.
+# Grid 25%: зарабатывает в боковике (70-80% времени).
+# Momentum 5%: спекулятивный модуль, ОТКЛЮЧЁН по умолчанию.
+# Бэктест 180 дней показал: MR убыточна. Включать только если
+# подтверждено на testnet. Equity curve protection ставит на паузу
+# при losing streak автоматически.
+ALLOC_FUNDING_PCT = float(os.getenv("ALLOC_FUNDING_PCT", "0.70") or 0.70)
+ALLOC_GRID_PCT = float(os.getenv("ALLOC_GRID_PCT", "0.25") or 0.25)
+ALLOC_MOMENTUM_PCT = float(os.getenv("ALLOC_MOMENTUM_PCT", "0.05") or 0.05)
 
 # Стартовый капитал (USDT). Если 0 — берётся из суммы балансов на биржах.
 TOTAL_CAPITAL_USDT = float(os.getenv("TOTAL_CAPITAL_USDT", "550") or 550)
@@ -94,7 +99,7 @@ MOMENTUM_TICK_INTERVAL_SEC = float(os.getenv("MOMENTUM_TICK_INTERVAL_SEC", "60")
 MOMENTUM_MAX_POSITIONS = int(os.getenv("MOMENTUM_MAX_POSITIONS", "2") or 2)
 
 # Включена ли momentum-стратегия.
-MOMENTUM_ENABLED = os.getenv("MOMENTUM_ENABLED", "true").strip().lower() in (
+MOMENTUM_ENABLED = os.getenv("MOMENTUM_ENABLED", "false").strip().lower() in (
     "1", "true", "yes", "on",
 )
 

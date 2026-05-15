@@ -8,10 +8,10 @@ import combo_config as cfg
 
 
 def test_default_allocations():
-    """Дефолтные аллокации = 50/30/20."""
-    assert cfg.ALLOC_FUNDING_PCT == 0.50
-    assert cfg.ALLOC_GRID_PCT == 0.30
-    assert cfg.ALLOC_MOMENTUM_PCT == 0.20
+    """Дефолтные аллокации = 70/25/5."""
+    assert cfg.ALLOC_FUNDING_PCT == 0.70
+    assert cfg.ALLOC_GRID_PCT == 0.25
+    assert cfg.ALLOC_MOMENTUM_PCT == 0.05
 
 
 def test_allocations_sum_to_one():

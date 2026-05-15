@@ -124,11 +124,11 @@ def test_find_position_none():
 def test_calc_position_size():
     """Размер позиции с учётом leverage."""
     state = _make_state()
-    # momentum = 20% of 550 = 110, max_positions = 2 → 55 per pos
-    # leverage 3x → notional = 165
-    # price = 50000 → qty = 165/50000 = 0.0033
+    # momentum = 5% of 550 = 27.5, max_positions = 2 → 13.75 per pos
+    # leverage 3x → notional = 41.25
+    # price = 50000 → qty = 41.25/50000 = 0.000825
     qty = momentum_engine._calc_position_size(state, 50000.0)
-    assert 0.002 < qty < 0.005
+    assert 0.0005 < qty < 0.002
 
 
 def test_get_momentum_status():
