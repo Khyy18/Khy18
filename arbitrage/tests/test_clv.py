@@ -71,3 +71,47 @@ class TestCLVTracker:
         clv_pct = (placement_odds / closing_odds - 1.0) * 100.0
         assert clv_pct < 0
         assert abs(clv_pct - (-10.0)) < 1e-6
+
+    def test_extract_best_odds_with_outcome_filter(self) -> None:
+        """Filters Pinnacle odds by outcome name when provided."""
+        tracker = CLVTracker()
+        event_data = {
+            "bookmakers": [
+                {
+                    "key": "pinnacle",
+                    "markets": [{"key": "h2h", "outcomes": [
+                        {"name": "Home", "price": 2.10},
+                        {"name": "Away", "price": 3.50},
+                        {"name": "Draw", "price": 3.20},
+                    ]}],
+                },
+            ]
+        }
+        # Filter by "Home" - should return 2.10
+        best_home = tracker._extract_best_odds(event_data, outcome="Home")
+        assert best_home == 2.10
+
+        # Filter by "Away" - should return 3.50
+        best_away = tracker._extract_best_odds(event_data, outcome="Away")
+        assert best_away == 3.50
+
+        # Filter by "Draw" - should return 3.20
+        best_draw = tracker._extract_best_odds(event_data, outcome="Draw")
+        assert best_draw == 3.20
+
+    def test_extract_best_odds_outcome_not_found(self) -> None:
+        """Returns None when outcome not found in data."""
+        tracker = CLVTracker()
+        event_data = {
+            "bookmakers": [
+                {
+                    "key": "pinnacle",
+                    "markets": [{"key": "h2h", "outcomes": [
+                        {"name": "Home", "price": 2.10},
+                        {"name": "Away", "price": 3.50},
+                    ]}],
+                },
+            ]
+        }
+        best = tracker._extract_best_odds(event_data, outcome="Nonexistent")
+        assert best is None

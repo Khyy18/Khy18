@@ -87,6 +87,46 @@ def compute_poisson_probability(corridor_low: float, corridor_high: float, sport
         return max(0.0, min(1.0, total_prob))
 
 
+# Empirical goal difference distribution for soccer (symmetric around 0)
+GOAL_DIFF_PROBS: dict[int, float] = {
+    0: 0.25,
+    1: 0.22, -1: 0.22,
+    2: 0.12, -2: 0.12,
+    3: 0.04, -3: 0.04,
+    4: 0.01, -4: 0.01,
+    5: 0.005, -5: 0.005,
+}
+
+
+def compute_spread_probability(corridor_low: float, corridor_high: float, sport: str) -> float:
+    """Вычислить вероятность попадания разницы голов в коридор [low, high].
+
+    Для футбола: суммирует empirical goal difference probabilities для целых k в коридоре.
+    Для баскетбола: нормальное приближение (mean=0, std~10 pts).
+    Для неизвестных: наивная формула.
+    """
+    if sport.startswith("basketball"):
+        # Normal approximation: margin mean ~ 0, std ~ 10
+        mean = 0.0
+        std = 10.0
+        z_low = (corridor_low - mean) / std if std > 0 else 0
+        z_high = (corridor_high - mean) / std if std > 0 else 0
+        prob = _norm_cdf(z_high) - _norm_cdf(z_low)
+        return max(0.0, min(1.0, prob))
+    elif sport.startswith("soccer") or sport.startswith("football"):
+        # Sum empirical probabilities for integer k strictly inside corridor
+        total = 0.0
+        k_start = int(math.floor(corridor_low)) + 1 if corridor_low == int(corridor_low) else int(math.ceil(corridor_low))
+        k_end = int(math.ceil(corridor_high)) - 1 if corridor_high == int(corridor_high) else int(math.floor(corridor_high))
+        for k in range(k_start, k_end + 1):
+            total += GOAL_DIFF_PROBS.get(k, 0.001)  # tiny prob for extreme values
+        return max(0.0, min(1.0, total))
+    else:
+        # Naive fallback
+        width = corridor_high - corridor_low
+        return width / corridor_high if corridor_high > 0 else 0.0
+
+
 @dataclass
 class MiddleOpportunity:
     """Возможность middle (коридор) между линиями разных букмекеров."""
@@ -296,7 +336,7 @@ class MiddleScanner:
                                 best_case_profit_pct = (best_case_profit / stake_total) * 100.0
 
                                 corridor_width = corridor_high - corridor_low
-                                middle_probability = compute_poisson_probability(
+                                middle_probability = compute_spread_probability(
                                     corridor_low, corridor_high, sport
                                 )
 

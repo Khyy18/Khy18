@@ -34,6 +34,7 @@ from arbitrage.cashout import CashoutEngine
 from arbitrage.clv_tracker import CLVTracker
 from arbitrage.dedup import ArbDeduplicator
 from arbitrage.executor import BetExecutor
+from arbitrage.healthcheck import HealthcheckServer
 from arbitrage.logging_config import setup_logging
 from arbitrage.middles import MiddleScanner
 from arbitrage.odds_api import OddsAPIClient
@@ -206,7 +207,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
 
             # Cashout: проверяем PENDING ставки на возможность кэшаута
             try:
-                pending_bets = memory.get_pending_bets_for_settlement()
+                pending_bets = memory.get_active_bets_for_cashout()
                 # Преобразуем в формат, ожидаемый CashoutEngine
                 pre_match_bets: list[dict[str, Any]] = []
                 for bet in pending_bets:
@@ -472,8 +473,13 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                             # CLV Tracking
                             if opp_event_id:
                                 bet_odds = opp.get("best_odds", opp.get("odds", [2.0])[0] if opp.get("odds") else 2.0)
+                                opp_outcome = opp.get("outcome", opp.get("selection", ""))
+                                if not opp_outcome:
+                                    # Попытка извлечь из details или первого leg
+                                    opp_outcome = opp.get("details", {}).get("outcome", "")
                                 _clv_tracker.record_bet_placement(
-                                    arb_id, opp_event_id, bet_odds, opp.get("sport", "")
+                                    arb_id, opp_event_id, bet_odds, opp.get("sport", ""),
+                                    outcome=opp_outcome,
                                 )
 
                             # Записываем в anti-ban
@@ -499,6 +505,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                                     logger.error("Ошибка отправки алерта: %s", exc)
 
             logger.info("Цикл завершён. Исполнено: %d", len(valid_allocations))
+            state["last_scan_ts"] = datetime.now(timezone.utc).isoformat()
 
         except asyncio.CancelledError:
             raise
@@ -707,6 +714,10 @@ async def main() -> None:
             # Windows не поддерживает add_signal_handler
             pass
 
+    # Healthcheck HTTP-сервер
+    healthcheck = HealthcheckServer(state)
+    await healthcheck.start()
+
     # Запуск через TaskSupervisor
     supervisor = TaskSupervisor()
 
@@ -733,6 +744,7 @@ async def main() -> None:
     except asyncio.CancelledError:
         pass
     finally:
+        await healthcheck.stop()
         await session.close()
         logger.info("Бот остановлен")
 

@@ -29,6 +29,7 @@ class CLVTracker:
         event_id: str,
         odds: float,
         sport: str,
+        outcome: str = "",
     ) -> Optional[int]:
         """Записывает ставку в момент размещения для последующего CLV-анализа.
 
@@ -37,6 +38,7 @@ class CLVTracker:
             event_id: уникальный идентификатор события.
             odds: коэффициент в момент размещения.
             sport: ключ вида спорта (например 'soccer_epl').
+            outcome: название исхода (например 'Home', 'Away', 'Draw').
 
         Returns:
             ID записи в clv_records или None при ошибке.
@@ -46,13 +48,15 @@ class CLVTracker:
             event_id=event_id,
             sport=sport,
             placement_odds=odds,
+            outcome=outcome,
         )
         if record_id:
             logger.info(
-                "[CLV] Записана ставка #%d, event=%s, odds=%.3f",
+                "[CLV] Записана ставка #%d, event=%s, odds=%.3f, outcome=%s",
                 bet_id,
                 event_id,
                 odds,
+                outcome,
             )
         return record_id
 
@@ -110,8 +114,9 @@ class CLVTracker:
                     )
                     continue
 
-                # Берём лучший коэффициент из всех букмекеров как closing line
-                closing_odds = self._extract_best_odds(event_data)
+                # Берём закрывающую линию Pinnacle для конкретного исхода
+                record_outcome = record.get("outcome", "") or None
+                closing_odds = self._extract_best_odds(event_data, outcome=record_outcome)
                 if closing_odds is None or closing_odds <= 1.0:
                     continue
 
@@ -141,12 +146,14 @@ class CLVTracker:
         return memory.get_clv_stats()
 
     @staticmethod
-    def _extract_best_odds(event_data: dict[str, Any]) -> Optional[float]:
+    def _extract_best_odds(
+        event_data: dict[str, Any], outcome: Optional[str] = None
+    ) -> Optional[float]:
         """Извлекает закрывающий коэффициент из данных события (Pinnacle).
 
         Использует Pinnacle как эталон закрывающей линии.
+        Если outcome указан, фильтрует по имени исхода.
         Если Pinnacle недоступен, берёт максимальный среди sharp-бк.
-        Возвращает лучший (наибольший) Pinnacle-коэффициент для h2h рынка.
         """
         pinnacle_best: Optional[float] = None
         fallback_best: Optional[float] = None
@@ -160,9 +167,12 @@ class CLVTracker:
                 if market.get("key") != "h2h":
                     continue
                 outcomes = market.get("outcomes", [])
-                for outcome in outcomes:
-                    price = outcome.get("price")
+                for oc in outcomes:
+                    price = oc.get("price")
                     if price and isinstance(price, (int, float)) and price > 1.0:
+                        # Если outcome указан, фильтруем по имени
+                        if outcome and oc.get("name") != outcome:
+                            continue
                         if is_pinnacle:
                             if pinnacle_best is None or price > pinnacle_best:
                                 pinnacle_best = float(price)

@@ -179,10 +179,18 @@ def init_db() -> None:
                     closing_odds REAL,
                     clv_pct REAL,
                     checked_ts TEXT,
-                    created_ts TEXT
+                    created_ts TEXT,
+                    outcome TEXT
                 )
                 """
             )
+            # Добавляем outcome если таблица уже существовала без этого столбца
+            try:
+                conn.execute(
+                    "ALTER TABLE clv_records ADD COLUMN outcome TEXT"
+                )
+            except sqlite3.OperationalError:
+                pass  # столбец уже существует
             conn.commit()
         print(f"[ARB_MEMORY] База данных инициализирована: {DB_PATH}")
     except sqlite3.Error as exc:
@@ -537,6 +545,27 @@ def get_pending_bets_for_settlement() -> list[dict[str, Any]]:
         return []
 
 
+def get_active_bets_for_cashout() -> list[dict[str, Any]]:
+    """Получить активные ставки для проверки cashout (без фильтра по времени)."""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT b.id, b.arb_id, b.ts, b.bookmaker, b.event,
+                       b.outcome, b.stake, b.odds, b.result, b.pnl,
+                       a.arb_type, a.commence_time, a.sport, a.event_id
+                FROM bets b
+                LEFT JOIN arbs a ON a.id = b.arb_id
+                WHERE b.result IN ('PENDING', 'SIMULATED')
+                ORDER BY b.id DESC
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения ставок для cashout: {exc}")
+        return []
+
+
 def get_arb_by_id(arb_id: int) -> Optional[dict[str, Any]]:
     """Получить запись арбитража по id."""
     try:
@@ -827,16 +856,17 @@ def save_clv_record(
     event_id: str,
     sport: str,
     placement_odds: float,
+    outcome: str = "",
 ) -> Optional[int]:
     """Сохранить запись CLV при размещении ставки. Возвращает id записи."""
     try:
         with _connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO clv_records (bet_id, event_id, sport, placement_odds, created_ts)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO clv_records (bet_id, event_id, sport, placement_odds, created_ts, outcome)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (int(bet_id), str(event_id), str(sport), float(placement_odds), _now_iso()),
+                (int(bet_id), str(event_id), str(sport), float(placement_odds), _now_iso(), str(outcome)),
             )
             conn.commit()
             return cur.lastrowid
@@ -868,7 +898,7 @@ def get_pending_clv_checks() -> list[dict[str, Any]]:
         with _connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, bet_id, event_id, sport, placement_odds
+                SELECT id, bet_id, event_id, sport, placement_odds, outcome
                 FROM clv_records
                 WHERE closing_odds IS NULL
                   AND created_ts <= datetime('now', '-30 minutes')
