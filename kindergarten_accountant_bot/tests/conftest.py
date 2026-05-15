@@ -17,6 +17,8 @@ async def test_db(tmp_path):
          patch("kindergarten_accountant_bot.models.employee.DB_PATH", db_file), \
          patch("kindergarten_accountant_bot.models.timesheet.DB_PATH", db_file), \
          patch("kindergarten_accountant_bot.models.child.DB_PATH", db_file), \
-         patch("kindergarten_accountant_bot.models.payment.DB_PATH", db_file):
+         patch("kindergarten_accountant_bot.models.payment.DB_PATH", db_file), \
+         patch("kindergarten_accountant_bot.models.journal.DB_PATH", db_file), \
+         patch("kindergarten_accountant_bot.models.reminder.DB_PATH", db_file):
         await init_db()
         yield db_file
