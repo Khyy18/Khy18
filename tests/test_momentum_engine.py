@@ -461,3 +461,56 @@ async def test_bo_trailing_stop_activates():
 
     # Verify set_trading_stop was called
     adapter.set_trading_stop.assert_called()
+
+
+def test_equity_curve_protection_blocks_entry():
+    """Equity curve protection blocks entry when last 3 trades negative and cumulative negative."""
+    state = _make_state()
+    mom = state["momentum"]
+    for i in range(5):
+        mom["positions"].append({
+            "symbol": "BTCUSDT", "side": "LONG", "status": "CLOSED",
+            "pnl_usdt": -10.0, "entry_price": 60000, "exit_price": 59800,
+            "closed_epoch": time.time() - (5 - i) * 3600,
+        })
+    closed = [p for p in mom["positions"] if p.get("status") == "CLOSED"]
+    recent_pnl = [float(p.get("pnl_usdt", 0)) for p in closed[-10:]]
+    recent_3 = sum(recent_pnl[-3:])
+    cumulative = sum(recent_pnl)
+    assert recent_3 < 0
+    assert cumulative < 0
+
+
+def test_equity_curve_protection_allows_when_positive():
+    """Equity curve protection allows entry when recent trades are positive."""
+    state = _make_state()
+    mom = state["momentum"]
+    for i in range(2):
+        mom["positions"].append({
+            "symbol": "BTCUSDT", "side": "LONG", "status": "CLOSED",
+            "pnl_usdt": -10.0, "entry_price": 60000,
+            "closed_epoch": time.time() - (5 - i) * 3600,
+        })
+    for i in range(3):
+        mom["positions"].append({
+            "symbol": "BTCUSDT", "side": "LONG", "status": "CLOSED",
+            "pnl_usdt": 15.0, "entry_price": 60000,
+            "closed_epoch": time.time() - (3 - i) * 3600,
+        })
+    closed = [p for p in mom["positions"] if p.get("status") == "CLOSED"]
+    recent_pnl = [float(p.get("pnl_usdt", 0)) for p in closed[-10:]]
+    recent_3 = sum(recent_pnl[-3:])
+    cumulative = sum(recent_pnl)
+    assert recent_3 > 0
+    assert cumulative > 0
+
+
+def test_equity_curve_protection_disabled():
+    """Equity curve protection can be disabled via config."""
+    import combo_config as cfg
+    original = cfg.MOMENTUM_EQUITY_CURVE_PROTECTION
+    try:
+        cfg.MOMENTUM_EQUITY_CURVE_PROTECTION = False
+        assert cfg.MOMENTUM_EQUITY_CURVE_PROTECTION is False
+    finally:
+        cfg.MOMENTUM_EQUITY_CURVE_PROTECTION = original

@@ -157,6 +157,10 @@ MOMENTUM_CONFIRMATION_BAR = os.getenv("MOMENTUM_CONFIRMATION_BAR", "false").stri
 )
 
 
+# ─── Momentum: Equity curve protection ────────────────────────────────
+# If True, pause trading after losing streak (last 3 trades negative AND cumulative last 10 negative)
+MOMENTUM_EQUITY_CURVE_PROTECTION = os.getenv("MOMENTUM_EQUITY_CURVE_PROTECTION", "true").strip().lower() in ("1", "true", "yes", "on")
+
 # ─── Momentum: адаптивные стопы и фильтры ─────────────────────────────
 # ATR-based SL/TP: если True — SL и TP рассчитываются из ATR * multiplier.
 MOMENTUM_USE_ATR_STOPS = os.getenv("MOMENTUM_USE_ATR_STOPS", "true").strip().lower() in ("1", "true", "yes", "on")

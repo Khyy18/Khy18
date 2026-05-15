@@ -332,6 +332,19 @@ async def _process_symbol(
         if hour < cfg.MOMENTUM_SESSION_START_UTC or hour >= cfg.MOMENTUM_SESSION_END_UTC:
             return f"вне торговой сессии ({hour}:00 UTC)"
 
+    # Equity curve protection: pause if losing streak
+    if cfg.MOMENTUM_EQUITY_CURVE_PROTECTION:
+        positions = mom_state.get("positions", [])
+        closed = [p for p in positions if p.get("status") == "CLOSED"]
+        if len(closed) >= 5:
+            recent_pnl = [float(p.get("pnl_usdt", 0)) for p in closed[-10:]]
+            if len(recent_pnl) >= 5:
+                recent_3 = sum(recent_pnl[-3:])
+                cumulative = sum(recent_pnl)
+                # If last 3 trades are net negative AND overall trend is down - pause
+                if recent_3 < 0 and cumulative < 0:
+                    return f"equity curve protection: losing streak (last3={recent_3:.2f}, cum10={cumulative:.2f})"
+
     # Regime routing
     signal = None
     strategy_type = "BO"
