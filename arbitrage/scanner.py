@@ -49,6 +49,57 @@ class ArbitrageScanner:
     ) -> None:
         self._min_arb_profit: float = min_arb_profit
         self._min_value_edge: float = min_value_edge
+        # Кэш коэффициентов: {event_id::outcome -> (timestamp, odds)}
+        self._odds_cache: dict[str, tuple[float, float]] = {}
+
+    def _cache_odds(self, event_id: str, outcome: str, odds_val: float) -> None:
+        """Сохранить текущие коэффициенты в кэш с меткой времени."""
+        import time
+        key = f"{event_id}::{outcome}"
+        self._odds_cache[key] = (time.time(), odds_val)
+
+    def get_line_velocity(self, event_id: str, outcome: str) -> Optional[float]:
+        """Вычислить скорость изменения линии (delta odds / second).
+
+        Возвращает None если предыдущий снимок отсутствует.
+        """
+        import time
+        key = f"{event_id}::{outcome}"
+        cached = self._odds_cache.get(key)
+        if cached is None:
+            return None
+        prev_ts, prev_odds = cached
+        elapsed = time.time() - prev_ts
+        if elapsed <= 0:
+            return None
+        # Текущие коэффициенты ещё не известны в этом контексте
+        # velocity будет вычислена при сравнении с новым значением
+        return None
+
+    def compute_line_velocity(
+        self, event_id: str, outcome: str, current_odds: float
+    ) -> Optional[float]:
+        """Вычислить скорость изменения линии относительно кэша.
+
+        Args:
+            event_id: идентификатор события
+            outcome: название исхода
+            current_odds: текущий коэффициент
+
+        Returns:
+            delta_odds_per_second или None если нет предыдущих данных
+        """
+        import time
+        key = f"{event_id}::{outcome}"
+        cached = self._odds_cache.get(key)
+        if cached is None:
+            return None
+        prev_ts, prev_odds = cached
+        elapsed = time.time() - prev_ts
+        if elapsed <= 0:
+            return None
+        velocity = (current_odds - prev_odds) / elapsed
+        return velocity
 
     def find_surebets(self, events: list[dict[str, Any]]) -> list[ArbOpportunity]:
         """Ищет surebets среди событий.
@@ -63,6 +114,8 @@ class ArbitrageScanner:
         Returns:
             Список найденных ArbOpportunity с type="surebet"
         """
+        import time as _time
+
         opportunities: list[ArbOpportunity] = []
 
         for event in events:
@@ -70,6 +123,8 @@ class ArbitrageScanner:
             home: str = event.get("home_team", "")
             away: str = event.get("away_team", "")
             event_name: str = f"{home} vs {away}"
+            event_id: str = event.get("id", "")
+            commence_time: str = event.get("commence_time", "")
 
             # Собираем лучшие коэффициенты по каждому исходу (h2h)
             h2h_data = self._extract_h2h_outcomes(event)
@@ -103,6 +158,26 @@ class ArbitrageScanner:
                 profit_pct: float = (1.0 / inverse_sum - 1.0) * 100.0
 
                 if profit_pct >= self._min_arb_profit:
+                    # Вычисляем line_velocity для первого исхода
+                    line_velocity: Optional[float] = None
+                    if event_id and outcome_names:
+                        line_velocity = self.compute_line_velocity(
+                            event_id, outcome_names[0], best_odds[0]
+                        )
+
+                    # Обновляем кэш
+                    for i, outcome in enumerate(outcome_names):
+                        if event_id:
+                            self._cache_odds(event_id, outcome, best_odds[i])
+
+                    details: dict[str, Any] = {
+                        "outcomes": outcome_names,
+                        "inverse_sum": inverse_sum,
+                        "commence_time": commence_time,
+                    }
+                    if line_velocity is not None:
+                        details["line_velocity"] = line_velocity
+
                     opp = ArbOpportunity(
                         type="surebet",
                         sport=sport,
@@ -112,10 +187,7 @@ class ArbitrageScanner:
                         bookmakers=best_bookmakers,
                         odds=best_odds,
                         profit_pct=profit_pct,
-                        details={
-                            "outcomes": outcome_names,
-                            "inverse_sum": inverse_sum,
-                        },
+                        details=details,
                     )
                     opportunities.append(opp)
                     logger.info(
@@ -154,6 +226,7 @@ class ArbitrageScanner:
             away: str = event.get("away_team", "")
             event_name: str = f"{home} vs {away}"
             fair_probs: list[float] = sharp_probs[event_id]
+            commence_time: str = event.get("commence_time", "")
 
             for bm in event.get("bookmakers", []):
                 bm_key: str = bm.get("key", "")
@@ -187,6 +260,25 @@ class ArbitrageScanner:
                         edge: float = (implied_value - 1.0) * 100.0
 
                         if edge >= self._min_value_edge:
+                            outcome_name: str = outcome.get("name", "")
+                            # Вычисляем line_velocity
+                            line_velocity: Optional[float] = None
+                            if event_id and outcome_name:
+                                line_velocity = self.compute_line_velocity(
+                                    event_id, outcome_name, odds
+                                )
+                                self._cache_odds(event_id, outcome_name, odds)
+
+                            details: dict[str, Any] = {
+                                "outcome": outcome_name,
+                                "bookmaker_prob": round(bk_prob, 4),
+                                "sharp_prob": round(sharp_prob, 4),
+                                "implied_value": round(implied_value, 4),
+                                "commence_time": commence_time,
+                            }
+                            if line_velocity is not None:
+                                details["line_velocity"] = line_velocity
+
                             opp = ArbOpportunity(
                                 type="value_bet",
                                 sport=sport,
@@ -196,18 +288,13 @@ class ArbitrageScanner:
                                 bookmakers=[bm_key],
                                 odds=[odds],
                                 edge_pct=edge,
-                                details={
-                                    "outcome": outcome.get("name", ""),
-                                    "bookmaker_prob": round(bk_prob, 4),
-                                    "sharp_prob": round(sharp_prob, 4),
-                                    "implied_value": round(implied_value, 4),
-                                },
+                                details=details,
                             )
                             opportunities.append(opp)
                             logger.info(
                                 "Value bet: %s | %s @ %.2f | edge %.2f%% | %s",
                                 event_name,
-                                outcome.get("name", ""),
+                                outcome_name,
                                 odds,
                                 edge,
                                 bm_key,
@@ -268,6 +355,8 @@ class ArbitrageScanner:
             home: str = event.get("home_team", "")
             away: str = event.get("away_team", "")
             event_name: str = f"{home} vs {away}"
+            event_id: str = event.get("id", "")
+            commence_time: str = event.get("commence_time", "")
 
             # Извлекаем исходы по рынку
             outcomes_map = self._extract_market_outcomes(event, market_key)
@@ -299,6 +388,27 @@ class ArbitrageScanner:
                 profit_pct: float = (1.0 / inverse_sum - 1.0) * 100.0
 
                 if profit_pct >= self._min_arb_profit:
+                    # Вычисляем line_velocity
+                    line_velocity: Optional[float] = None
+                    if event_id and outcome_names:
+                        line_velocity = self.compute_line_velocity(
+                            event_id, outcome_names[0], best_odds[0]
+                        )
+
+                    # Обновляем кэш
+                    for i, outcome in enumerate(outcome_names):
+                        if event_id:
+                            self._cache_odds(event_id, outcome, best_odds[i])
+
+                    details: dict[str, Any] = {
+                        "outcomes": outcome_names,
+                        "inverse_sum": inverse_sum,
+                        "market": market_key,
+                        "commence_time": commence_time,
+                    }
+                    if line_velocity is not None:
+                        details["line_velocity"] = line_velocity
+
                     opp = ArbOpportunity(
                         type=arb_type,
                         sport=sport,
@@ -308,11 +418,7 @@ class ArbitrageScanner:
                         bookmakers=best_bookmakers,
                         odds=best_odds,
                         profit_pct=profit_pct,
-                        details={
-                            "outcomes": outcome_names,
-                            "inverse_sum": inverse_sum,
-                            "market": market_key,
-                        },
+                        details=details,
                     )
                     opportunities.append(opp)
                     logger.info(

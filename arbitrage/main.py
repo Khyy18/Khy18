@@ -27,6 +27,7 @@ from arbitrage.pinnacle_api import PinnacleClient
 from arbitrage.ranker import ArbRanker
 from arbitrage.recheck import RecheckEngine
 from arbitrage.scanner import ArbitrageScanner
+from arbitrage.settlement import SettlementEngine
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     "away": opp.away,
                     "event_name": opp.event_name,
                     "details": getattr(opp, "details", {}),
+                    "commence_time": getattr(opp, "details", {}).get("commence_time", ""),
                 }
                 try:
                     evaluation = await ai_filter.evaluate(opp_dict)
@@ -296,6 +298,39 @@ async def stats_loop(state: dict[str, Any], session: aiohttp.ClientSession) -> N
             print(f"[STATS] Ошибка обновления статистики: {exc}")
 
 
+async def settlement_loop(state: dict[str, Any], session: aiohttp.ClientSession) -> None:
+    """Периодический расчёт ставок (каждые 30 мин) и обучение (раз в 24ч)."""
+    print("[SETTLEMENT] Цикл расчёта ставок запущен")
+    engine = SettlementEngine()
+    last_learn_time: float = 0.0
+    learn_interval: float = 86400.0  # 24 часа
+    settle_interval: float = 1800.0  # 30 минут
+
+    while True:
+        try:
+            await asyncio.sleep(settle_interval)
+
+            # Расчёт ставок
+            try:
+                await engine.settle_bets(session)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[SETTLEMENT] Ошибка расчёта: {exc}")
+
+            # Обучение раз в 24 часа
+            now = time.time()
+            if now - last_learn_time >= learn_interval:
+                try:
+                    await engine.learn(session)
+                    last_learn_time = now
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[SETTLEMENT] Ошибка обучения: {exc}")
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            print(f"[SETTLEMENT] Критическая ошибка: {exc}")
+
+
 async def main() -> None:
     """Главная функция: инициализация и запуск всех циклов."""
     print(BANNER)
@@ -341,6 +376,7 @@ async def main() -> None:
         asyncio.create_task(scanner_loop(state, session)),
         asyncio.create_task(telegram_bot.run_bot(state, session)),
         asyncio.create_task(stats_loop(state, session)),
+        asyncio.create_task(settlement_loop(state, session)),
     ]
 
     try:

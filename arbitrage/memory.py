@@ -1,9 +1,10 @@
 """Хранилище арбитражного модуля на SQLite.
 
 Таблицы:
-  - arbs:      найденные арбитражные возможности
-  - bets:      размещённые ставки
-  - daily_pnl: ежедневная статистика прибыли/убытков
+  - arbs:         найденные арбитражные возможности
+  - bets:         размещённые ставки
+  - daily_pnl:    ежедневная статистика прибыли/убытков
+  - ai_learnings: выученные правила AI-фильтра
 
 Паттерны взяты из корневого memory.py: _connect(), _now_iso(), row_factory.
 """
@@ -55,10 +56,18 @@ def init_db() -> None:
                     profit_pct REAL,
                     edge_pct REAL,
                     ai_score INTEGER,
-                    status TEXT NOT NULL DEFAULT 'FOUND'
+                    status TEXT NOT NULL DEFAULT 'FOUND',
+                    commence_time TEXT
                 )
                 """
             )
+            # Добавляем commence_time если таблица уже существовала без этого столбца
+            try:
+                conn.execute(
+                    "ALTER TABLE arbs ADD COLUMN commence_time TEXT"
+                )
+            except sqlite3.OperationalError:
+                pass  # столбец уже существует
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS bets (
@@ -85,6 +94,18 @@ def init_db() -> None:
                     total_won REAL NOT NULL DEFAULT 0,
                     pnl REAL NOT NULL DEFAULT 0,
                     roi_pct REAL NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_learnings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    rule_type TEXT NOT NULL,
+                    rule_text TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 0.5,
+                    source TEXT
                 )
                 """
             )
@@ -318,3 +339,143 @@ def get_recent_bets(limit: int = 20) -> list[dict[str, Any]]:
     except sqlite3.Error as exc:
         print(f"[ARB_MEMORY] Ошибка чтения ставок: {exc}")
         return []
+
+
+def save_ai_learning(
+    rule_type: str,
+    rule_text: str,
+    confidence: float,
+    source: str,
+) -> Optional[int]:
+    """Сохранить выученное правило AI-фильтра."""
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO ai_learnings (ts, rule_type, rule_text, confidence, source)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (_now_iso(), str(rule_type), str(rule_text), float(confidence), str(source)),
+            )
+            conn.commit()
+            return cur.lastrowid
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Не удалось сохранить AI-правило: {exc}")
+        return None
+
+
+def get_ai_learnings(limit: int = 20) -> list[dict[str, Any]]:
+    """Получить последние выученные правила AI-фильтра."""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, ts, rule_type, rule_text, confidence, source
+                FROM ai_learnings
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения AI-правил: {exc}")
+        return []
+
+
+def get_bookmaker_stats(bookmaker: str) -> dict[str, Any]:
+    """Получить статистику букмекера: total_bets, cancelled_pct, avg_pnl, trap_rate.
+
+    trap_rate - доля проигранных ставок типа surebet (ловушки букмекера).
+    """
+    stats: dict[str, Any] = {
+        "total_bets": 0,
+        "cancelled_pct": 0.0,
+        "avg_pnl": 0.0,
+        "trap_rate": 0.0,
+    }
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN result='VOID' THEN 1 ELSE 0 END) AS cancelled,
+                    COALESCE(AVG(pnl), 0.0) AS avg_pnl
+                FROM bets
+                WHERE bookmaker = ?
+                """,
+                (str(bookmaker),),
+            ).fetchone()
+            if row and row["total"]:
+                total = int(row["total"])
+                stats["total_bets"] = total
+                stats["cancelled_pct"] = round(
+                    int(row["cancelled"] or 0) / total * 100.0, 2
+                )
+                stats["avg_pnl"] = round(float(row["avg_pnl"] or 0.0), 4)
+
+            # trap_rate: LOST bets where arb_type is surebet
+            trap_row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS surebet_total,
+                    SUM(CASE WHEN b.result='LOST' THEN 1 ELSE 0 END) AS lost
+                FROM bets b
+                JOIN arbs a ON a.id = b.arb_id
+                WHERE b.bookmaker = ? AND a.arb_type LIKE 'surebet%'
+                """,
+                (str(bookmaker),),
+            ).fetchone()
+            if trap_row and trap_row["surebet_total"]:
+                surebet_total = int(trap_row["surebet_total"])
+                if surebet_total > 0:
+                    stats["trap_rate"] = round(
+                        int(trap_row["lost"] or 0) / surebet_total * 100.0, 2
+                    )
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения статистики букмекера: {exc}")
+    return stats
+
+
+def get_pending_bets_for_settlement() -> list[dict[str, Any]]:
+    """Получить PENDING/SIMULATED ставки старше 3 часов для расчёта."""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT b.id, b.arb_id, b.ts, b.bookmaker, b.event,
+                       b.outcome, b.stake, b.odds, b.result, b.pnl,
+                       a.arb_type, a.commence_time
+                FROM bets b
+                LEFT JOIN arbs a ON a.id = b.arb_id
+                WHERE b.result IN ('PENDING', 'SIMULATED')
+                  AND b.ts <= datetime('now', '-3 hours')
+                ORDER BY b.id ASC
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения ставок для settlement: {exc}")
+        return []
+
+
+def update_daily_pnl(date: str, staked: float, won: float, pnl: float, roi: float) -> None:
+    """Обновить или вставить запись daily_pnl за указанную дату."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO daily_pnl (date, total_staked, total_won, pnl, roi_pct)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(date) DO UPDATE SET
+                    total_staked = excluded.total_staked,
+                    total_won = excluded.total_won,
+                    pnl = excluded.pnl,
+                    roi_pct = excluded.roi_pct
+                """,
+                (str(date), float(staked), float(won), float(pnl), float(roi)),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка обновления daily_pnl: {exc}")
