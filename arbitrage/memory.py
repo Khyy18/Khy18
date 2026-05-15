@@ -191,6 +191,21 @@ def init_db() -> None:
                 )
             except sqlite3.OperationalError:
                 pass  # столбец уже существует
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS accounts_pool (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bookmaker TEXT NOT NULL,
+                    account_name TEXT NOT NULL,
+                    balance REAL DEFAULT 0,
+                    daily_limit REAL DEFAULT 1000,
+                    daily_used REAL DEFAULT 0,
+                    status TEXT DEFAULT 'active',
+                    last_bet_ts TEXT,
+                    cooldown_until TEXT
+                )
+                """
+            )
             conn.commit()
         print(f"[ARB_MEMORY] База данных инициализирована: {DB_PATH}")
     except sqlite3.Error as exc:
@@ -941,3 +956,87 @@ def get_clv_stats() -> dict[str, Any]:
     except sqlite3.Error as exc:
         print(f"[ARB_MEMORY] Ошибка чтения CLV статистики: {exc}")
     return stats
+
+
+# --- Accounts Pool ---
+
+
+def add_account_to_pool(
+    bookmaker: str,
+    account_name: str,
+    balance: float = 0.0,
+    daily_limit: float = 1000.0,
+) -> Optional[int]:
+    """Добавить аккаунт в пул. Возвращает id записи."""
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO accounts_pool (bookmaker, account_name, balance, daily_limit)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(bookmaker), str(account_name), float(balance), float(daily_limit)),
+            )
+            conn.commit()
+            return cur.lastrowid
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Не удалось добавить аккаунт в пул: {exc}")
+        return None
+
+
+def get_pool_accounts(bookmaker: Optional[str] = None) -> list[dict[str, Any]]:
+    """Получить аккаунты из пула. Фильтр по букмекеру опционален."""
+    try:
+        with _connect() as conn:
+            if bookmaker:
+                rows = conn.execute(
+                    """
+                    SELECT id, bookmaker, account_name, balance, daily_limit,
+                           daily_used, status, last_bet_ts, cooldown_until
+                    FROM accounts_pool
+                    WHERE bookmaker = ?
+                    ORDER BY id
+                    """,
+                    (str(bookmaker),),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, bookmaker, account_name, balance, daily_limit,
+                           daily_used, status, last_bet_ts, cooldown_until
+                    FROM accounts_pool
+                    ORDER BY id
+                    """
+                ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения пула аккаунтов: {exc}")
+        return []
+
+
+def update_pool_account_bet(account_id: int, stake: float) -> None:
+    """Обновить аккаунт после ставки (увеличить daily_used, установить last_bet_ts)."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE accounts_pool
+                SET daily_used = daily_used + ?,
+                    last_bet_ts = ?
+                WHERE id = ?
+                """,
+                (float(stake), _now_iso(), int(account_id)),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка обновления аккаунта #{account_id}: {exc}")
+
+
+def reset_daily_used_pool() -> None:
+    """Сбросить daily_used для всех аккаунтов (вызывается ежедневно)."""
+    try:
+        with _connect() as conn:
+            conn.execute("UPDATE accounts_pool SET daily_used = 0")
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка сброса daily_used: {exc}")
