@@ -9,6 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
+from data.sources.job_boards import JobBoardsClient
+from data.sources.technographic import TechnographicClient
+
 if TYPE_CHECKING:
     from core.config import Settings
     from core.llm import LLMClient
@@ -116,6 +119,20 @@ class EnricherAgent:
             **enrichment,
             "enriched_at": datetime.now(timezone.utc).isoformat(),
         }
+
+        # Enhanced enrichment (technographic + intent signals)
+        try:
+            redis_url = self._settings.redis_url
+            enriched_lead = await self.enrich_technographic(enriched_lead, redis_url)
+            enriched_lead = await self.enrich_intent_signals(enriched_lead, redis_url)
+        except Exception as exc:
+            logger.error(
+                "Enhanced enrichment failed for %s %s: %s",
+                first_name,
+                last_name,
+                exc,
+            )
+
         return enriched_lead
 
     async def enrich_batch(
@@ -270,3 +287,152 @@ class EnricherAgent:
             "company_news": [],
             "recent_activity": "",
         }
+
+    async def enrich_technographic(
+        self, lead: dict[str, Any], redis_url: str
+    ) -> dict[str, Any]:
+        """Add technographic data to lead's enrichment_data.
+
+        Extracts company domain from email or company name.
+        Calls TechnographicClient.get_tech_stack().
+        Stores result in enrichment_data["tech_stack"].
+        """
+        domain = self._extract_domain(lead)
+        if not domain:
+            return lead
+
+        client = TechnographicClient(redis_url=redis_url)
+        try:
+            tech_stack = await client.get_tech_stack(domain)
+            enriched = {**lead}
+            enriched["enrichment_data"] = {
+                **enriched.get("enrichment_data", {}),
+                "tech_stack": tech_stack,
+            }
+            return enriched
+        finally:
+            await client.close()
+
+    async def enrich_intent_signals(
+        self, lead: dict[str, Any], redis_url: str
+    ) -> dict[str, Any]:
+        """Add intent signals to lead's enrichment_data.
+
+        Calls JobBoardsClient.search_jobs() for hiring signals.
+        Searches web for "{company} funding round" for funding events.
+
+        Stores:
+        - enrichment_data["hiring_signals"]: list of relevant job titles
+        - enrichment_data["funding_events"]: list of funding-related snippets
+        - enrichment_data["intent_score"]: float 0-100
+        """
+        company = lead.get("company", "")
+        if not company:
+            return lead
+
+        # Get hiring signals
+        client = JobBoardsClient(redis_url=redis_url)
+        try:
+            job_listings = await client.search_jobs(company)
+        finally:
+            await client.close()
+
+        # Filter for relevant hiring roles
+        relevant_keywords = [
+            "sales", "growth", "marketing", "business development",
+            "sdr", "bdr", "account executive",
+        ]
+        hiring_signals = [
+            job["title"]
+            for job in job_listings
+            if any(kw in job["title"].lower() for kw in relevant_keywords)
+        ]
+
+        # Search for funding events
+        funding_snippets: list[str] = []
+        async with aiohttp.ClientSession() as session:
+            result = await self._search_web(session, f"{company} funding round")
+            if result:
+                for line in result.split("\n"):
+                    line = line.strip()
+                    if line and any(
+                        kw in line.lower()
+                        for kw in ["funding", "raised", "series", "investment", "round"]
+                    ):
+                        funding_snippets.append(line)
+
+        # Calculate intent score
+        tech_stack = lead.get("enrichment_data", {}).get("tech_stack", {})
+        intent_score = self._calculate_intent_score(
+            hiring_signals, funding_snippets, tech_stack
+        )
+
+        enriched = {**lead}
+        enriched["enrichment_data"] = {
+            **enriched.get("enrichment_data", {}),
+            "hiring_signals": hiring_signals,
+            "funding_events": funding_snippets,
+            "intent_score": intent_score,
+        }
+        return enriched
+
+    def _calculate_intent_score(
+        self,
+        hiring_signals: list[str],
+        funding_events: list[str],
+        tech_stack: dict[str, Any],
+    ) -> float:
+        """Calculate intent score from signals.
+
+        Scoring:
+        - Hiring for relevant roles: +30
+        - Recent funding mentions: +25
+        - Tech stack exists and has items: +15
+        - Multiple signal categories present: +10 bonus
+        """
+        score = 0.0
+        categories_present = 0
+
+        if hiring_signals:
+            score += 30.0
+            categories_present += 1
+
+        if funding_events:
+            score += 25.0
+            categories_present += 1
+
+        # Check if tech_stack has any items
+        has_tech = any(
+            bool(v) for v in tech_stack.values() if isinstance(v, list)
+        )
+        if has_tech:
+            score += 15.0
+            categories_present += 1
+
+        # Compound bonus for multiple signal categories
+        if categories_present >= 3:
+            score += 10.0
+
+        return min(score, 100.0)
+
+    def _extract_domain(self, lead: dict[str, Any]) -> str:
+        """Extract company domain from email or company name."""
+        email = lead.get("email", "")
+        if email and "@" in email:
+            domain = email.split("@")[1]
+            # Skip generic email providers
+            generic = {
+                "gmail.com", "yahoo.com", "hotmail.com",
+                "outlook.com", "aol.com", "icloud.com",
+            }
+            if domain.lower() not in generic:
+                return domain
+
+        # Fallback: use company name as a domain guess
+        company = lead.get("company", "")
+        if company:
+            # Simple domain guess: lowercase, remove spaces, add .com
+            clean = company.lower().replace(" ", "").replace(",", "")
+            return f"{clean}.com"
+
+        return ""
