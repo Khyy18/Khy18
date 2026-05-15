@@ -11,6 +11,22 @@ import subscriptions
 import lead_parser
 import auto_posting
 
+# Интеграция backup, CRM и мониторинга (graceful)
+try:
+    import backup
+except ImportError:
+    backup = None
+
+try:
+    import crm
+except ImportError:
+    crm = None
+
+try:
+    import monitoring
+except ImportError:
+    monitoring = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,6 +156,63 @@ async def auto_posting_check(bot: Bot) -> None:
         await asyncio.sleep(3600)  # 1 час
 
 
+async def backup_check() -> None:
+    """
+    Задача бэкапа: ежедневно создаёт резервную копию БД
+    и удаляет старые бэкапы.
+    """
+    while True:
+        try:
+            if backup:
+                await backup.backup_database()
+                await backup.cleanup_old_backups()
+                logger.info("Бэкап выполнен успешно")
+        except Exception as e:
+            logger.error("Ошибка backup_check: %s", e)
+
+        await asyncio.sleep(86400)  # 24 часа
+
+
+async def crm_segment_update() -> None:
+    """
+    Задача обновления сегментов CRM: каждые 6 часов
+    пересчитывает сегменты всех клиентов.
+    """
+    while True:
+        try:
+            if crm:
+                stats = await crm.update_segments()
+                logger.info("CRM сегменты обновлены: %s", stats)
+        except Exception as e:
+            logger.error("Ошибка crm_segment_update: %s", e)
+
+        await asyncio.sleep(21600)  # 6 часов
+
+
+async def monitoring_watchdog() -> None:
+    """
+    Задача мониторинга: каждые 5 минут проверяет здоровье системы
+    и отправляет алерт если какой-то компонент не работает.
+    """
+    while True:
+        try:
+            if monitoring:
+                health = await monitoring.health_check()
+                if health.get("status") != "healthy":
+                    # Формируем сообщение об ошибках
+                    failed_checks = []
+                    for name, check in health.get("checks", {}).items():
+                        if check.get("status") not in ("ok", "skipped"):
+                            failed_checks.append(f"{name}: {check.get('detail', 'unknown')}")
+                    if failed_checks:
+                        alert_msg = "Проблемы с компонентами:\n" + "\n".join(failed_checks)
+                        await monitoring.send_alert_to_admin(alert_msg)
+        except Exception as e:
+            logger.error("Ошибка monitoring_watchdog: %s", e)
+
+        await asyncio.sleep(300)  # 5 минут
+
+
 def start_scheduler(bot: Bot) -> None:
     """
     Запустить все фоновые задачи в текущем event loop.
@@ -161,4 +234,10 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(_staggered_start(subscription_expiry_check(), 20))
     loop.create_task(_staggered_start(lead_parser_check(bot), 30))
     loop.create_task(_staggered_start(auto_posting_check(bot), 60))
-    logger.info("Планировщик задач запущен (retention, upsell, subscription_expiry, lead_parser, auto_posting)")
+    loop.create_task(_staggered_start(backup_check(), 90))
+    loop.create_task(_staggered_start(crm_segment_update(), 120))
+    loop.create_task(_staggered_start(monitoring_watchdog(), 150))
+    logger.info(
+        "Планировщик задач запущен (retention, upsell, subscription_expiry, "
+        "lead_parser, auto_posting, backup, crm_segment_update, monitoring_watchdog)"
+    )

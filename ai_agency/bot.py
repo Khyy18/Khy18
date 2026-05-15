@@ -35,6 +35,24 @@ from models import ServiceType, OrderStatus
 from services import SERVICES, get_service
 from utils import _card, format_number, progress_bar, status_indicator
 
+# Интеграция rate_limiter и telegram_payments (graceful)
+try:
+    from rate_limiter import RateLimiter
+    _rate_limiter = RateLimiter()
+except ImportError:
+    _rate_limiter = None
+
+try:
+    import telegram_payments
+except ImportError:
+    telegram_payments = None
+
+try:
+    from queue_manager import OrderQueue
+    _order_queue: "OrderQueue | None" = None
+except ImportError:
+    _order_queue = None
+
 logger = logging.getLogger(__name__)
 
 # Состояния ConversationHandler
@@ -140,6 +158,8 @@ async def select_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return await show_referral(update, context)
     if data.startswith("topup_amount:"):
         return await handle_topup_amount(update, context)
+    if data.startswith("topup_stars:"):
+        return await handle_topup_stars(update, context)
     if data.startswith("sub_tier:"):
         return await handle_subscribe_tier(update, context)
 
@@ -178,6 +198,11 @@ async def enter_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["input_text"] = input_text
 
     user = update.effective_user
+
+    # Записываем сообщение в rate limiter
+    if _rate_limiter:
+        _rate_limiter.record_message(user.id)
+
     lang = await database.get_client_language(user.id)
     service_type = context.user_data["service_type"]
     service = get_service(service_type)
@@ -279,6 +304,17 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     user = update.effective_user
+
+    # Проверка rate limit перед обработкой заказа
+    if _rate_limiter:
+        allowed, limit_msg = _rate_limiter.check_rate_limit(user.id)
+        if not allowed:
+            await query.edit_message_text(
+                f"\u23f3 {limit_msg}\n\nПопробуйте позже.",
+                parse_mode=ParseMode.HTML,
+            )
+            return ConversationHandler.END
+
     lang = await database.get_client_language(user.id)
     service_type = context.user_data["service_type"]
     input_text = context.user_data["input_text"]
@@ -339,6 +375,10 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         input_text=input_text,
         price=0.0 if is_free_trial else price,
     )
+
+    # Записываем заказ в rate limiter
+    if _rate_limiter:
+        _rate_limiter.record_order(user.id)
 
     # Если это бесплатный триал - отмечаем использованным
     if is_free_trial:
@@ -609,6 +649,15 @@ async def show_topup_options(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
         ])
 
+    # Кнопка оплаты через Telegram Stars
+    if telegram_payments:
+        keyboard.append([
+            InlineKeyboardButton(
+                "\u2b50 Оплатить через Telegram Stars",
+                callback_data="topup_stars:100",
+            )
+        ])
+
     await query.edit_message_text(
         text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
     )
@@ -650,6 +699,42 @@ async def handle_topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await query.edit_message_text(
             "\u274c Ошибка создания платежа. Попробуйте позже.",
+            parse_mode=ParseMode.HTML,
+        )
+
+    return ConversationHandler.END
+
+
+# --- Оплата через Telegram Stars ---
+
+async def handle_topup_stars(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка оплаты через Telegram Stars."""
+    query = update.callback_query
+    user = update.effective_user
+
+    stars_str = query.data.replace("topup_stars:", "")
+    try:
+        stars_amount = int(stars_str)
+    except ValueError:
+        stars_amount = 100
+
+    if telegram_payments:
+        rub_equivalent = int(stars_amount * config.STARS_TO_RUB_RATE)
+        await telegram_payments.create_stars_invoice(
+            chat_id=user.id,
+            title=f"Пополнение баланса",
+            description=f"Пополнение на {rub_equivalent} руб. ({stars_amount} Stars)",
+            price_stars=stars_amount,
+            payload=f"topup_{user.id}_{stars_amount}",
+            bot=context.bot,
+        )
+        await query.edit_message_text(
+            "\u2b50 Инвойс для оплаты Stars отправлен!",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await query.edit_message_text(
+            "\u274c Оплата через Stars временно недоступна.",
             parse_mode=ParseMode.HTML,
         )
 
@@ -946,6 +1031,10 @@ def create_application() -> Application:
 
     # Команда /lang
     application.add_handler(CommandHandler("lang", lang_command))
+
+    # Регистрация обработчиков Telegram Stars платежей
+    if telegram_payments:
+        telegram_payments.register_payment_handlers(application)
 
     return application
 

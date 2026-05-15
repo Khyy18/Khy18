@@ -4,6 +4,8 @@ trades.db
 bot.log
 bot_dry.log
 *.log
+logs/
+backups/
 
 # Python
 __pycache__/

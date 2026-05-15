@@ -26,10 +26,21 @@ import billing
 import analytics
 from utils import _card, format_number, status_indicator
 
+# Интеграция CRM и мониторинга (graceful)
+try:
+    import crm
+except ImportError:
+    crm = None
+
+try:
+    import monitoring
+except ImportError:
+    monitoring = None
+
 logger = logging.getLogger(__name__)
 
-# Состояния для пополнения баланса
-TOPUP_CLIENT_ID, TOPUP_AMOUNT = range(2)
+# Состояния для пополнения баланса и CRM
+TOPUP_CLIENT_ID, TOPUP_AMOUNT, CRM_CLIENT_ID = range(3)
 
 
 def admin_only(func):
@@ -78,6 +89,8 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         [InlineKeyboardButton("\U0001f4cb Последние заказы", callback_data="recent_orders")],
         [InlineKeyboardButton("\U0001f465 Клиенты", callback_data="clients")],
         [InlineKeyboardButton("\U0001f4b3 Пополнить баланс", callback_data="topup")],
+        [InlineKeyboardButton("\U0001f4c7 CRM", callback_data="crm")],
+        [InlineKeyboardButton("\U0001f6e1\ufe0f Мониторинг", callback_data="monitoring")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -107,6 +120,16 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return await show_recent_orders(update, context)
     elif action == "clients":
         return await show_clients(update, context)
+    elif action == "crm":
+        return await show_crm(update, context)
+    elif action == "crm_timeline":
+        await query.edit_message_text(
+            "\U0001f4c7 Введите Telegram ID клиента для просмотра таймлайна:",
+            parse_mode=ParseMode.HTML,
+        )
+        return CRM_CLIENT_ID
+    elif action == "monitoring":
+        return await show_monitoring(update, context)
     elif action == "topup":
         await query.edit_message_text(
             "\U0001f4b3 Введите Telegram ID клиента для пополнения:",
@@ -259,6 +282,122 @@ async def topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
+# --- CRM ---
+
+async def show_crm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показать CRM: статистику сегментов."""
+    query = update.callback_query
+
+    if crm is None:
+        await query.edit_message_text(
+            "\u274c Модуль CRM недоступен.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+
+    segments = await crm.update_segments()
+    body = [
+        "<b>Сегменты клиентов:</b>",
+        "",
+        f"\U0001f195 Новые: {segments.get('new', 0)}",
+        f"\U0001f525 Активные: {segments.get('active', 0)}",
+        f"\U0001f451 VIP: {segments.get('vip', 0)}",
+        f"\U0001f634 Спящие: {segments.get('sleeping', 0)}",
+    ]
+    text = _card("CRM", "\U0001f4c7", body)
+
+    keyboard = [
+        [InlineKeyboardButton("\U0001f4cb Timeline клиента", callback_data="crm_timeline")],
+    ]
+    await query.edit_message_text(
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+    )
+    return SELECT_ACTION
+
+
+async def crm_client_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получение ID клиента для CRM таймлайна."""
+    try:
+        client_id = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text(
+            "\u274c Введите корректный числовой Telegram ID.",
+            parse_mode=ParseMode.HTML,
+        )
+        return CRM_CLIENT_ID
+
+    if crm is None:
+        await update.message.reply_text(
+            "\u274c Модуль CRM недоступен.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+
+    segment = await crm.get_client_segment(client_id)
+    timeline = await crm.get_client_timeline(client_id)
+
+    body = [
+        f"<b>Клиент:</b> {client_id}",
+        f"<b>Сегмент:</b> {segment}",
+        "",
+        "<b>Последние события:</b>",
+    ]
+    for event in timeline[:10]:
+        event_type = event.get("type", "")
+        amount = event.get("amount", 0)
+        ts = event.get("timestamp", "")[:16]
+        if event_type == "order":
+            body.append(f"  \U0001f4e6 Заказ #{event['id']} | {event.get('status', '')} | {amount} \u20bd | {ts}")
+        elif event_type == "payment":
+            body.append(f"  \U0001f4b3 Платёж #{event['id']} | {event.get('method', '')} | {amount} \u20bd | {ts}")
+
+    if not timeline:
+        body.append("  Нет событий.")
+
+    text = _card("Timeline", "\U0001f4c7", body)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+# --- Мониторинг ---
+
+async def show_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показать мониторинг: health check и метрики."""
+    query = update.callback_query
+
+    if monitoring is None:
+        await query.edit_message_text(
+            "\u274c Модуль мониторинга недоступен.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+
+    health = await monitoring.health_check()
+    metrics = monitoring.metrics.get_metrics()
+
+    status_emoji = "\u2705" if health["status"] == "healthy" else "\u26a0\ufe0f"
+    body = [
+        f"<b>Статус:</b> {status_emoji} {health['status']}",
+        "",
+        "<b>Компоненты:</b>",
+    ]
+    for name, check in health.get("checks", {}).items():
+        indicator = "\u2705" if check["status"] == "ok" else "\u274c"
+        body.append(f"  {indicator} {name}: {check['status']}")
+
+    body.extend([
+        "",
+        "<b>Метрики:</b>",
+        f"  Заказов в очереди: {metrics.get('orders_in_queue', 0)}",
+        f"  Среднее время обработки: {metrics.get('avg_processing_time', 0)} сек",
+        f"  Ошибок (rate): {metrics.get('error_rate', 0)}%",
+        f"  Uptime: {int(metrics.get('uptime_seconds', 0) / 3600)} ч",
+        f"  Всего обработано: {metrics.get('total_orders_processed', 0)}",
+        f"  Всего ошибок: {metrics.get('total_errors', 0)}",
+    ])
+
+    text = _card("Мониторинг", "\U0001f6e1\ufe0f", body)
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
 # --- Отмена ---
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -285,6 +424,9 @@ def create_admin_application() -> Application:
             ],
             TOPUP_AMOUNT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, topup_amount),
+            ],
+            CRM_CLIENT_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, crm_client_id),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],

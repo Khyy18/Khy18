@@ -6,10 +6,40 @@ import logging
 import signal
 import sys
 
+# Настройка логирования в первую очередь
+try:
+    from logging_config import setup_logging
+    setup_logging()
+except ImportError:
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.INFO,
+    )
+
 import config
 import database
 from bot import create_application as create_main_application
 from bot_factory import create_bot_application
+
+# Интеграция модулей отказоустойчивости и очереди (graceful)
+try:
+    from resilience import GracefulShutdown, recover_stale_orders
+    _graceful_shutdown = GracefulShutdown()
+except ImportError:
+    GracefulShutdown = None
+    _graceful_shutdown = None
+    recover_stale_orders = None
+
+try:
+    from queue_manager import OrderQueue
+    _order_queue = OrderQueue()
+except ImportError:
+    _order_queue = None
+
+try:
+    import monitoring
+except ImportError:
+    monitoring = None
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +62,26 @@ async def run_multi() -> None:
     # Инициализация БД
     await database.init_db()
 
+    # Восстановление зависших заказов
+    if recover_stale_orders:
+        recovered = await recover_stale_orders()
+        if recovered:
+            logger.info("Восстановлено %d зависших заказов при старте", recovered)
+
     # Инициализация таблиц API
     from api.auth import init_api_tables
     await init_api_tables()
+
+    # Запуск очереди заказов
+    if _order_queue:
+        await _order_queue.start()
+        logger.info("Очередь заказов запущена")
+
+    # Запуск watchdog мониторинга
+    monitoring_task = None
+    if monitoring:
+        monitoring_task = asyncio.create_task(monitoring.watchdog(interval=300))
+        logger.info("Watchdog мониторинга запущен")
 
     # Основной бот
     main_app = create_main_application()
@@ -64,17 +111,24 @@ async def run_multi() -> None:
     # Собираем все задачи
     shutdown_event = asyncio.Event()
 
-    def _signal_handler() -> None:
-        logger.info("Received shutdown signal")
-        shutdown_event.set()
-
-    loop = asyncio.get_event_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    # Используем GracefulShutdown если доступен
+    if _graceful_shutdown:
         try:
-            loop.add_signal_handler(sig, _signal_handler)
-        except NotImplementedError:
-            # Windows не поддерживает add_signal_handler
+            _graceful_shutdown.register_signals()
+        except (NotImplementedError, RuntimeError):
             pass
+        shutdown_event = _graceful_shutdown.shutdown_event
+    else:
+        def _signal_handler() -> None:
+            logger.info("Received shutdown signal")
+            shutdown_event.set()
+
+        loop = asyncio.get_event_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _signal_handler)
+            except NotImplementedError:
+                pass
 
     # Запускаем все боты
     all_apps = [main_app] + niche_apps
@@ -110,14 +164,20 @@ async def run_multi() -> None:
         for task in tasks:
             if not task.done():
                 task.cancel()
+    finally:
+        # Останавливаем очередь и мониторинг
+        if _order_queue:
+            await _order_queue.stop()
+            logger.info("Очередь заказов остановлена")
+        if monitoring_task and not monitoring_task.done():
+            monitoring_task.cancel()
+        if _graceful_shutdown:
+            await _graceful_shutdown.wait_for_completion(timeout=30.0)
 
 
 def main() -> None:
     """Точка входа для запуска мульти-бот архитектуры."""
-    logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.INFO,
-    )
+    # Логирование уже настроено при импорте модуля (setup_logging выше)
 
     errors = config.validate_config()
     if errors:

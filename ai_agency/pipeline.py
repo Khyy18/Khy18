@@ -1,6 +1,7 @@
 """Пайплайн обработки заказов: мульти-агентная цепочка Writer->Editor->QA с Groq-фолбэком."""
 
 import logging
+import time
 from typing import Optional, List, Dict, Tuple
 
 from openai import AsyncOpenAI
@@ -10,6 +11,14 @@ import config
 from models import ServiceType
 from services import get_service
 import ab_testing
+
+# Интеграция модуля отказоустойчивости (graceful)
+try:
+    from resilience import retry_with_backoff, CircuitBreaker, CircuitState
+    _openai_circuit = CircuitBreaker(failure_threshold=5, cooldown_seconds=60, name="openai")
+except ImportError:
+    retry_with_backoff = None
+    _openai_circuit = None
 
 logger = logging.getLogger(__name__)
 
@@ -63,21 +72,27 @@ async def _call_llm(
     """
     Вызвать LLM с фолбэком на Groq.
 
-    Сначала пытается OpenAI, при ошибке переключается на Groq.
+    Сначала пытается OpenAI (если circuit breaker разрешает),
+    при ошибке переключается на Groq.
     Использует singleton-клиенты для переиспользования HTTP-соединений.
     """
-    # Попытка через OpenAI
-    try:
-        client = _get_openai_client()
-        response = await client.chat.completions.create(
-            model=config.DEFAULT_MODEL,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.warning("OpenAI API ошибка, переключение на Groq: %s", str(e))
+    # Проверяем circuit breaker - если open, сразу переходим к Groq
+    skip_openai = False
+    if _openai_circuit and not _openai_circuit.can_execute():
+        logger.warning("OpenAI circuit OPEN, переключение на Groq")
+        skip_openai = True
+
+    # Попытка через OpenAI (с retry)
+    if not skip_openai:
+        try:
+            result = await _call_openai(messages, temperature, max_tokens)
+            if _openai_circuit:
+                _openai_circuit.record_success()
+            return result
+        except Exception as e:
+            if _openai_circuit:
+                _openai_circuit.record_failure()
+            logger.warning("OpenAI API ошибка, переключение на Groq: %s", str(e))
 
     # Фолбэк на Groq
     groq_client = _get_groq_client()
@@ -96,6 +111,27 @@ async def _call_llm(
     except Exception as e:
         logger.error("Groq API ошибка: %s", str(e))
         return None
+
+
+async def _call_openai(
+    messages: List[Dict[str, str]],
+    temperature: float = 0.7,
+    max_tokens: int = 4000,
+) -> str:
+    """Вызов OpenAI API с retry."""
+    client = _get_openai_client()
+    response = await client.chat.completions.create(
+        model=config.DEFAULT_MODEL,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    return response.choices[0].message.content.strip()
+
+
+# Оборачиваем _call_openai в retry если модуль доступен
+if retry_with_backoff is not None:
+    _call_openai = retry_with_backoff(max_retries=3, base_delay=2.0, max_delay=60.0)(_call_openai)
 
 
 async def _writer_agent(system_prompt: str, user_prompt: str) -> Optional[str]:
@@ -166,6 +202,7 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
 
     Возвращает (result_text, variant_id). variant_id = None если A/B тест не использовался.
     """
+    start_time = time.time()
     service = get_service(service_type)
     quality = service.quality_checks
     simple_mode = service_type in SIMPLE_SERVICES
@@ -194,6 +231,12 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
         # Простой режим - пропускаем Editor и QA
         if simple_mode:
             if _check_quality(result_text, quality.min_words, quality.required_keywords):
+                duration = time.time() - start_time
+                logger.info(
+                    "process_order завершён: service=%s, duration=%.2fs (simple)",
+                    service_type.value, duration,
+                    extra={"duration": duration, "status": "completed"},
+                )
                 return (result_text, variant_id)
             if attempt < max_attempts - 1:
                 logger.warning(
@@ -205,6 +248,12 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
                     f"Расширь ответ, минимум {quality.min_words} слов."
                 )
                 continue
+            duration = time.time() - start_time
+            logger.info(
+                "process_order завершён: service=%s, duration=%.2fs (simple, fallback)",
+                service_type.value, duration,
+                extra={"duration": duration, "status": "completed"},
+            )
             return (result_text, variant_id)
 
         # 2. Editor agent
@@ -219,6 +268,12 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
 
         # Проверка качества
         if _check_quality(final_text, quality.min_words, quality.required_keywords):
+            duration = time.time() - start_time
+            logger.info(
+                "process_order завершён: service=%s, duration=%.2fs",
+                service_type.value, duration,
+                extra={"duration": duration, "status": "completed"},
+            )
             return (final_text, variant_id)
 
         if attempt < max_attempts - 1:
@@ -231,6 +286,20 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
                 f"Расширь ответ, минимум {quality.min_words} слов."
             )
         else:
+            duration = time.time() - start_time
+            logger.info(
+                "process_order завершён: service=%s, duration=%.2fs",
+                service_type.value,
+                duration,
+                extra={"duration": duration, "status": "completed"},
+            )
             return (final_text, variant_id)
 
+    duration = time.time() - start_time
+    logger.warning(
+        "process_order не удался: service=%s, duration=%.2fs",
+        service_type.value,
+        duration,
+        extra={"duration": duration, "status": "failed"},
+    )
     return (None, variant_id)
