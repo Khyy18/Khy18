@@ -137,11 +137,56 @@ async def write_node(state: PipelineState) -> dict[str, Any]:
 
 
 async def send_node(state: PipelineState) -> dict[str, Any]:
-    """Mark messages as sent (placeholder for email delivery)."""
+    """Send messages via AsyncEmailSender with tracking.
+
+    Expects campaign_config to contain 'email_sender' (AsyncEmailSender instance)
+    and 'tracker' (EmailTracker instance) for sending emails with open/click tracking.
+    """
     logger.info("Send node: sending %d message sequences", len(state["messages"]))
+    config = state["campaign_config"]
+    email_sender = config.get("email_sender")
+    tracker = config.get("tracker")
+
     updated_messages: list[dict[str, Any]] = []
     for msg in state["messages"]:
-        updated_messages.append({**msg, "status": "sent"})
+        if not email_sender:
+            # No email sender configured - mark as sent without actually sending
+            updated_messages.append({**msg, "status": "sent"})
+            continue
+
+        lead_email = msg.get("lead_email", "")
+        sequence = msg.get("sequence", [])
+
+        # Send the first message in the sequence
+        if sequence:
+            first_step = sequence[0] if isinstance(sequence, list) else sequence
+            subject = first_step.get("subject", "") if isinstance(first_step, dict) else ""
+            body = first_step.get("body", "") if isinstance(first_step, dict) else ""
+            message_id = msg.get("message_id", str(__import__("uuid").uuid4()))
+
+            # Generate tracking URLs if tracker is available
+            tracking_pixel_url = None
+            if tracker:
+                tracking_pixel_url = tracker.generate_tracking_pixel_url(message_id)
+
+            try:
+                result = await email_sender.send_email(
+                    to=lead_email,
+                    subject=subject,
+                    html_body=body,
+                    message_id=message_id,
+                    tracking_pixel_url=tracking_pixel_url,
+                    tracked_links=None,
+                )
+                status = "sent" if result.get("success") else "failed"
+            except Exception as exc:
+                logger.error("Failed to send email to %s: %s", lead_email, exc)
+                status = "failed"
+
+            updated_messages.append({**msg, "status": status, "message_id": message_id})
+        else:
+            updated_messages.append({**msg, "status": "sent"})
+
     return {"messages": updated_messages, "current_step": "send"}
 
 
@@ -152,11 +197,61 @@ async def wait_node(state: PipelineState) -> dict[str, Any]:
 
 
 async def handle_reply_node(state: PipelineState) -> dict[str, Any]:
-    """Classify reply sentiment and determine next action (placeholder)."""
+    """Classify reply sentiment using ConversationAgent and update messages.
+
+    Expects campaign_config to contain 'conversation_agent' (ConversationAgent instance).
+    Classifies replies and sets reply_sentiment on messages so _reply_router can route.
+    """
     logger.info("Handle reply node: processing replies")
-    # In production, this would check inbox for replies and classify sentiment
-    # For now, return state unchanged - the conditional edge will route accordingly
-    return {"current_step": "handle_reply"}
+    config = state["campaign_config"]
+    conversation_agent = config.get("conversation_agent")
+
+    if not conversation_agent:
+        # No conversation agent configured - cannot classify replies
+        logger.warning("No conversation_agent in campaign_config, skipping classification")
+        return {"current_step": "handle_reply"}
+
+    updated_messages: list[dict[str, Any]] = []
+    for msg in state.get("messages", []):
+        # Check if there is a reply to process
+        reply_content = msg.get("reply_content")
+        if not reply_content:
+            updated_messages.append(msg)
+            continue
+
+        # Classify the reply using ConversationAgent
+        campaign_context = {
+            "company_name": config.get("company_name", ""),
+            "value_proposition": config.get("value_proposition", ""),
+            "sender_name": config.get("sender_name", ""),
+            "sender_title": config.get("sender_title", ""),
+        }
+
+        try:
+            classification = await conversation_agent.classify_reply(
+                message_content=reply_content,
+                campaign_context=campaign_context,
+            )
+            intent = classification.get("classification", "")
+
+            # Map classification to reply_sentiment for _reply_router
+            if intent == "positive":
+                reply_sentiment = "positive"
+            elif intent in ("negative", "unsubscribe"):
+                reply_sentiment = "negative"
+            else:
+                reply_sentiment = None  # Will trigger follow-up via _reply_router
+
+            updated_messages.append({
+                **msg,
+                "reply_sentiment": reply_sentiment,
+                "classification": classification,
+            })
+        except Exception as exc:
+            logger.error("Failed to classify reply for message: %s", exc)
+            updated_messages.append(msg)
+
+    return {"messages": updated_messages, "current_step": "handle_reply"}
 
 
 async def book_node(state: PipelineState) -> dict[str, Any]:

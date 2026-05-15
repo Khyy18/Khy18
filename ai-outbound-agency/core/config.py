@@ -30,5 +30,11 @@ class Settings(BaseSettings):
     # Tracking
     tracking_base_url: str = "http://localhost:8000"
 
+    # Calendar integration
+    calendar_provider: str = "calcom"
+    calcom_api_key: str = ""
+    calcom_base_url: str = "https://api.cal.com/v1"
+    google_calendar_credentials_json: str = ""
+
 
 settings = Settings()  # type: ignore[call-arg]
