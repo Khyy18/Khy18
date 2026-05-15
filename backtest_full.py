@@ -2,12 +2,11 @@
 import asyncio
 import aiohttp
 import sys
-import time
 import math
 
 sys.path.insert(0, '.')
 from datetime import datetime, timezone
-from momentum_engine import calc_rsi, calc_atr, calc_ema
+from momentum_engine import calc_rsi, calc_atr
 from regime_classifier import calc_adx
 
 
@@ -131,7 +130,6 @@ def run_mr_backtest(klines, leverage=3):
 
     position = None  # {'side', 'entry', 'entry_bar', 'sl', 'be_moved'}
 
-    prev_equity = 1.0
     bars_per_day = 96  # 15m bars in a day
     day_start_equity = 1.0
     bar_count_in_day = 0
@@ -266,6 +264,16 @@ def run_mr_backtest(klines, leverage=3):
                     equity_curve.append(equity_curve[-1])
                     continue
                 if signal == "SHORT" and delta > 20:
+                    equity_curve.append(equity_curve[-1])
+                    continue
+
+            # Equity curve protection: skip entry if recent trades show losing streak
+            # Mirrors the production guard in momentum_engine._process_symbol
+            if len(trades) >= 5:
+                recent_pnl = [t["pnl_pct"] for t in trades[-10:]]
+                recent_3 = sum(recent_pnl[-3:])
+                cumulative = sum(recent_pnl)
+                if recent_3 < 0 and cumulative < 0:
                     equity_curve.append(equity_curve[-1])
                     continue
 

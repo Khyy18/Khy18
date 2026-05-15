@@ -333,6 +333,9 @@ async def _process_symbol(
             return f"вне торговой сессии ({hour}:00 UTC)"
 
     # Equity curve protection: pause if losing streak
+    # NOTE: This intentionally checks ALL symbols in aggregate (cross-symbol blocking).
+    # BTC and ETH are highly correlated, so a losing streak on one symbol signals
+    # adverse conditions for both. This is by design for a 2-symbol correlated portfolio.
     if cfg.MOMENTUM_EQUITY_CURVE_PROTECTION:
         positions = mom_state.get("positions", [])
         closed = [p for p in positions if p.get("status") == "CLOSED"]
