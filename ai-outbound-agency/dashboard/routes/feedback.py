@@ -1,6 +1,10 @@
 """Feedback summary API endpoints."""
 
+from typing import Optional
+from uuid import UUID
+
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +19,55 @@ async def _get_session():
 
     async for session in _gs():
         yield session
+
+
+class FeedbackCreateRequest(BaseModel):
+    """Schema for creating feedback via POST."""
+
+    lead_id: UUID
+    rating: int = Field(..., ge=1, le=5)
+    comment: Optional[str] = None
+    feedback_type: str = "general"
+    event_trigger: str = "manual"
+
+
+@router.post("/")
+async def create_feedback(
+    payload: FeedbackCreateRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Submit feedback for a lead.
+
+    Accepts {lead_id, rating, comment?, feedback_type?, event_trigger?} and stores
+    the feedback record via FeedbackCollector.
+    """
+    from core.db import async_session_factory
+    from core.config import settings
+    from agents.feedback_collector import FeedbackCollector
+
+    collector = FeedbackCollector(
+        session_factory=async_session_factory,
+        settings=settings,
+    )
+    feedback = await collector.collect_feedback(
+        lead_id=payload.lead_id,
+        tenant_id=current_user.tenant_id,
+        rating=payload.rating,
+        comment=payload.comment,
+        feedback_type=payload.feedback_type,
+        event_trigger=payload.event_trigger,
+    )
+    return {
+        "id": str(feedback.id),
+        "lead_id": str(feedback.lead_id),
+        "tenant_id": str(feedback.tenant_id),
+        "rating": feedback.rating,
+        "comment": feedback.comment,
+        "feedback_type": feedback.feedback_type,
+        "event_trigger": feedback.event_trigger,
+        "created_at": feedback.created_at.isoformat() if feedback.created_at else None,
+    }
 
 
 @router.get("/summary")

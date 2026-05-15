@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -33,15 +34,29 @@ class CompetitiveIntelScheduler:
             redis_client=redis_client,
         )
 
+    def _get_competitors(self) -> list[dict[str, str]]:
+        """Return the competitor list from settings if configured, else DEFAULT_COMPETITORS."""
+        if self._settings and hasattr(self._settings, "competitive_intel_competitors"):
+            raw = self._settings.competitive_intel_competitors
+            if raw and raw.strip() and raw.strip() != "[]":
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        return parsed
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Failed to parse competitive_intel_competitors setting, using defaults")
+        return CompetitiveIntelAgent.DEFAULT_COMPETITORS
+
     async def run_weekly_tick(self) -> dict[str, Any]:
         """Run weekly competitive intelligence collection.
 
-        Loops through DEFAULT_COMPETITORS, checks cache, and scrapes pricing
-        and changelog for uncached competitors.
+        Loops through configured competitors (from settings.competitive_intel_competitors
+        if available, falling back to DEFAULT_COMPETITORS), checks cache, and scrapes
+        pricing and changelog for uncached competitors.
 
         Returns {"competitors_checked": N, "scraped": N, "cached_skipped": N}.
         """
-        competitors = CompetitiveIntelAgent.DEFAULT_COMPETITORS
+        competitors = self._get_competitors()
         competitors_checked = 0
         scraped = 0
         cached_skipped = 0

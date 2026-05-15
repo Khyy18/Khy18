@@ -62,8 +62,9 @@ class RetentionEngine:
 
         milestone_hit: int | None = None
         for milestone in _MILESTONES:
-            if booked_count == milestone:
+            if booked_count >= milestone:
                 milestone_hit = milestone
+            else:
                 break
 
         if milestone_hit is not None:

@@ -84,7 +84,7 @@ async def test_milestone_detection_ten_meetings(async_session: AsyncSession, ret
 
 @pytest.mark.asyncio
 async def test_no_milestone_at_3_meetings(async_session: AsyncSession, retention_engine):
-    """3 booked leads should not trigger any milestone."""
+    """3 booked leads should return the highest reached milestone (1)."""
     tenant = make_tenant()
     async_session.add(tenant)
     await async_session.flush()
@@ -92,6 +92,43 @@ async def test_no_milestone_at_3_meetings(async_session: AsyncSession, retention
     for _ in range(3):
         lead = make_lead(tenant_id=tenant.id, status=LeadStatus.booked)
         async_session.add(lead)
+    await async_session.flush()
+
+    with patch("scheduler.retention._send_to_channels", new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = True
+        with patch("scheduler.retention._get_tenant_notification_config", new_callable=AsyncMock) as mock_config:
+            mock_config.return_value = ([], {})
+            result = await retention_engine.check_milestones(tenant.id, async_session)
+
+    assert result == 1
+
+
+@pytest.mark.asyncio
+async def test_milestone_skip_eleven_meetings(async_session: AsyncSession, retention_engine):
+    """11 booked leads (skipping exact 10) should still detect milestone 10."""
+    tenant = make_tenant()
+    async_session.add(tenant)
+    await async_session.flush()
+
+    for _ in range(11):
+        lead = make_lead(tenant_id=tenant.id, status=LeadStatus.booked)
+        async_session.add(lead)
+    await async_session.flush()
+
+    with patch("scheduler.retention._send_to_channels", new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = True
+        with patch("scheduler.retention._get_tenant_notification_config", new_callable=AsyncMock) as mock_config:
+            mock_config.return_value = ([], {})
+            result = await retention_engine.check_milestones(tenant.id, async_session)
+
+    assert result == 10
+
+
+@pytest.mark.asyncio
+async def test_no_milestone_at_zero_meetings(async_session: AsyncSession, retention_engine):
+    """0 booked leads should not trigger any milestone."""
+    tenant = make_tenant()
+    async_session.add(tenant)
     await async_session.flush()
 
     with patch("scheduler.retention._send_to_channels", new_callable=AsyncMock) as mock_send:

@@ -215,12 +215,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.error("Failed to initialize conversation agent singletons: %s", exc)
         app.state.conversation_agent = None
 
+    # Initialize circuit breaker registry once so /health/detailed shares state
+    from core.resilience import CircuitBreakerRegistry
+
+    circuit_breaker_registry = CircuitBreakerRegistry()
+    app.state.circuit_breaker_registry = circuit_breaker_registry
+    logger.info("Circuit breaker registry initialized")
+
     # Health Monitor and Revenue Autopilot
     # These are periodically invoked via asyncio background tasks.
     # Health monitor runs every health_check_interval_minutes.
     # Revenue autopilot runs daily to check lead pools, inactive clients, etc.
     _health_task: asyncio.Task | None = None
     _revenue_task: asyncio.Task | None = None
+    _retention_task: asyncio.Task | None = None
 
     if settings.health_telegram_alerts:
         try:
@@ -273,6 +281,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:
         logger.error("Failed to initialize revenue autopilot: %s", exc)
 
+    # Retention engine: run daily retention checks for all active tenants
+    try:
+        from scheduler.retention import RetentionEngine
+        from core.models import Tenant
+
+        retention_engine = RetentionEngine(
+            session_factory=async_session_factory,
+            settings=settings,
+        )
+        app.state.retention_engine = retention_engine
+
+        async def _retention_loop() -> None:
+            interval = 86400  # Run daily (24 hours)
+            while True:
+                try:
+                    async with async_session_factory() as session:
+                        from sqlalchemy import select as _select
+                        result = await session.execute(_select(Tenant.id))
+                        tenant_ids = [row[0] for row in result.all()]
+                    for tid in tenant_ids:
+                        try:
+                            await retention_engine.run_retention_check(tid)
+                        except Exception as exc:
+                            logger.error("Retention check error for tenant %s: %s", tid, exc)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error("Retention engine error: %s", exc)
+                await asyncio.sleep(interval)
+
+        _retention_task = asyncio.create_task(_retention_loop(), name="retention_engine")
+        logger.info("Retention engine initialized and scheduled")
+    except Exception as exc:
+        logger.error("Failed to initialize retention engine: %s", exc)
+
     # Initialize dogfood agent if enabled
     if settings.dogfood_enabled:
         try:
@@ -324,6 +367,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except asyncio.CancelledError:
             pass
         logger.info("Revenue autopilot stopped")
+
+    if _retention_task is not None:
+        _retention_task.cancel()
+        try:
+            await _retention_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Retention engine stopped")
 
     if _inbox_task is not None:
         _inbox_task.cancel()
@@ -422,8 +473,16 @@ async def health_detailed() -> JSONResponse:
 
     registry = getattr(app.state, "circuit_breaker_registry", None)
     if registry is None:
-        registry = CircuitBreakerRegistry()
-        app.state.circuit_breaker_registry = registry
+        # Should not happen since registry is initialized in lifespan,
+        # but provide a safe fallback.
+        return JSONResponse(
+            content={
+                "overall_status": "unknown",
+                "services": {},
+                "timestamp": _dt.now(_tz.utc).isoformat(),
+            },
+            status_code=503,
+        )
 
     all_status = registry.get_all_status()
 
