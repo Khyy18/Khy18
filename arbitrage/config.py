@@ -60,5 +60,9 @@ DRY_RUN: bool = os.getenv("ARB_DRY_RUN", "true").strip().lower() in (
 GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_URL: str = "https://api.groq.com/openai/v1/chat/completions"
 
+# --- AI Rate Limiter / Batch ---
+AI_RATE_LIMIT_RPM: int = 25          # запросов к LLM в минуту
+AI_BATCH_SIZE: int = 8               # размер батча для batch scoring
+
 # --- Telegram ---
 TELEGRAM_API_URL: str = "https://api.telegram.org"
