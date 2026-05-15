@@ -163,6 +163,7 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
                     status_code=429,
                 )
                 response.headers["Retry-After"] = str(retry_after)
+                response.headers["X-RateLimit-Limit"] = str(max_requests)
                 response.headers["X-RateLimit-Remaining"] = "0"
                 response.headers["X-RateLimit-Reset"] = str(reset_time)
                 return response
@@ -176,6 +177,7 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
 
             # Proceed with the request
             response = await call_next(request)
+            response.headers["X-RateLimit-Limit"] = str(max_requests)
             response.headers["X-RateLimit-Remaining"] = str(remaining - 1)
             response.headers["X-RateLimit-Reset"] = str(reset_time)
             return response

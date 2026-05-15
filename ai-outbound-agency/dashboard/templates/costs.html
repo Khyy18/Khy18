@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Costs &amp; P&amp;L - AI Outbound Agency{% endblock %}
-{% block page_title %}Costs &amp; P&amp;L Dashboard{% endblock %}
+{% block title %}Cost Tracking &amp; P&amp;L - AI Outbound Agency{% endblock %}
+{% block page_title %}Cost Tracking &amp; P&amp;L{% endblock %}
 
 {% block content %}
 <div id="costs-app" class="space-y-8">
@@ -21,9 +21,32 @@
         </div>
     </div>
 
-    <!-- P&L Table -->
+    <!-- Per-Tenant Cost Breakdown -->
     <div class="bg-white rounded-lg shadow p-6">
-        <h3 class="text-lg font-semibold text-gray-800 mb-4">Per-Tenant P&amp;L</h3>
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Per-Tenant Cost Breakdown</h3>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tenant</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">LLM</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">API</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Proxy</th>
+                    </tr>
+                </thead>
+                <tbody id="cost-breakdown-body" class="bg-white divide-y divide-gray-200">
+                    <tr>
+                        <td colspan="5" class="px-6 py-4 text-center text-gray-500">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- P&L Summary -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">P&amp;L Summary</h3>
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
@@ -65,17 +88,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (resp.ok) {
             const data = await resp.json();
             let totalRevenue = 0, totalCosts = 0;
-            const tbody = document.getElementById('pl-table-body');
-            tbody.innerHTML = '';
+            const plBody = document.getElementById('pl-table-body');
+            const costBody = document.getElementById('cost-breakdown-body');
+            plBody.innerHTML = '';
+            costBody.innerHTML = '';
 
             data.forEach(item => {
                 totalRevenue += item.revenue_cents;
                 totalCosts += item.cost_cents;
-                const row = document.createElement('tr');
-                row.innerHTML = `
+
+                // Cost breakdown row
+                const costRow = document.createElement('tr');
+                costRow.innerHTML = `
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.tenant_name}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${(item.revenue_cents / 100).toFixed(2)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${(item.cost_cents / 100).toFixed(2)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${((item.llm_cost_cents || 0) / 100).toFixed(2)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${((item.email_cost_cents || 0) / 100).toFixed(2)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${((item.api_cost_cents || 0) / 100).toFixed(2)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$${((item.proxy_cost_cents || 0) / 100).toFixed(2)}</td>
+                `;
+                costBody.appendChild(costRow);
+
+                // P&L row
+                const plRow = document.createElement('tr');
+                plRow.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${item.tenant_name}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-green-600">$${(item.revenue_cents / 100).toFixed(2)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-red-600">$${(item.cost_cents / 100).toFixed(2)}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm ${item.profit_cents >= 0 ? 'text-green-600' : 'text-red-600'}">$${(item.profit_cents / 100).toFixed(2)}</td>
                     <td class="px-6 py-4 whitespace-nowrap">
                         <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${item.is_profitable ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
@@ -83,7 +121,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         </span>
                     </td>
                 `;
-                tbody.appendChild(row);
+                plBody.appendChild(plRow);
             });
 
             const netProfit = totalRevenue - totalCosts;

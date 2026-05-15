@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -19,6 +20,48 @@ router = APIRouter(prefix="/api/trial", tags=["trial"])
 TRIAL_DURATION_DAYS = 14
 TRIAL_LEADS_LIMIT = 50
 TRIAL_EMAILS_LIMIT = 100
+
+
+async def check_trial_limits(
+    tenant_id: uuid.UUID,
+    session: AsyncSession,
+    resource: str = "leads",
+) -> None:
+    """Check if trial limits are exceeded. Raises HTTPException 403 if limit reached.
+
+    Args:
+        tenant_id: The tenant to check.
+        session: Database session.
+        resource: One of 'leads', 'emails', 'linkedin'.
+
+    Raises:
+        HTTPException: 403 if trial limit exceeded or resource not allowed.
+    """
+    result = await session.execute(
+        select(Trial).where(Trial.tenant_id == tenant_id)
+    )
+    trial = result.scalar_one_or_none()
+
+    if trial is None or trial.status != TrialStatus.active:
+        return
+
+    if resource == "linkedin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="LinkedIn not available during trial",
+        )
+
+    if resource == "leads" and trial.leads_used >= TRIAL_LEADS_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Trial leads limit reached",
+        )
+
+    if resource == "emails" and trial.emails_used >= TRIAL_EMAILS_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Trial emails limit reached",
+        )
 
 
 async def _get_session():

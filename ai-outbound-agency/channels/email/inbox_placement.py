@@ -151,6 +151,18 @@ class InboxPlacementMonitor:
             "total_tests": total,
         }
 
+    async def get_all_domain_stats(self) -> list[dict]:
+        """Get placement statistics for all tracked domains.
+
+        Returns:
+            List of domain stats dictionaries (same format as get_domain_stats).
+        """
+        results = []
+        for domain in self._domain_results:
+            stats = await self.get_domain_stats(domain)
+            results.append(stats)
+        return results
+
     async def alert_if_degraded(
         self, domain: str, threshold: float = 80.0
     ) -> bool:
