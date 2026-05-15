@@ -31,8 +31,8 @@ class TestDetectEdgeCases:
     """Tests for EdgeCaseDetector.detect_edge_case()."""
 
     def test_detect_language_switch(self, detector: EdgeCaseDetector, lead_data: dict) -> None:
-        """Message with non-English content should be detected as language_switch."""
-        message = "Bonjour, je voudrais discuter de votre offre."
+        """Message with multiple non-English words should be detected as language_switch."""
+        message = "Bonjour, merci pour votre offre."
         result = detector.detect_edge_case(message, lead_data)
         assert result == EdgeCaseType.LANGUAGE_SWITCH
 
@@ -145,6 +145,12 @@ class TestDetectEdgeCases:
     def test_detect_no_edge_case(self, detector: EdgeCaseDetector, lead_data: dict) -> None:
         """Normal business reply should not trigger any edge case."""
         message = "Thanks for reaching out. I am interested in learning more about your product."
+        result = detector.detect_edge_case(message, lead_data)
+        assert result is None
+
+    def test_no_false_positive_single_word(self, detector: EdgeCaseDetector, lead_data: dict) -> None:
+        """A single non-English word in a signature should not trigger language_switch."""
+        message = "Thanks for the update! Best regards,\nCiao"
         result = detector.detect_edge_case(message, lead_data)
         assert result is None
 

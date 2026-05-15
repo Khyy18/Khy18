@@ -142,10 +142,14 @@ class EdgeCaseDetector:
         """Detect if message is in a non-English language."""
         content_lower = message_content.lower()
 
-        # Check for common non-English words
+        # Check for common non-English words with word boundaries
+        # Require at least 2 matches to avoid false positives from signatures
+        match_count = 0
         for word in _NON_ENGLISH_WORDS:
-            if word in content_lower:
-                return True
+            if re.search(r"\b" + re.escape(word) + r"\b", content_lower):
+                match_count += 1
+                if match_count >= 2:
+                    return True
 
         # Check non-ASCII character ratio
         if len(message_content) > 0:

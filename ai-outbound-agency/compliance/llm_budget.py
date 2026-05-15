@@ -106,11 +106,6 @@ class LLMBudgetManager:
         # TTL: 35 days to cover the billing period plus buffer
         ttl = 35 * 24 * 3600
 
-        pipe = self._redis.pipeline()
-        pipe.incr(input_key)
-        pipe.expire(input_key, ttl)
-        await pipe.execute()
-
         # Increment input tokens
         await self._redis.incrby(input_key, input_tokens)
         await self._redis.expire(input_key, ttl)

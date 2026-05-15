@@ -110,10 +110,7 @@ class AsyncEmailSender:
 
         Returns a dict with domain_used, message_id_header, and success status.
         """
-        # Inject compliance footer if provided
-        if compliance_footer:
-            html_body = html_body + compliance_footer
-        # Pre-send spam check
+        # Pre-send spam check (run on original body before compliance footer)
         from channels.email.spam_checker import SpamChecker
 
         checker = SpamChecker()
@@ -140,6 +137,10 @@ class AsyncEmailSender:
                 spam_result.score,
                 [c.name for c in spam_result.breakdown],
             )
+
+        # Inject compliance footer after spam check passes
+        if compliance_footer:
+            html_body = html_body + compliance_footer
 
         account = await self._pick_account()
         if account is None:

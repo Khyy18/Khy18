@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -187,16 +188,17 @@ class GeoCompliance:
 
         # Sender identification
         if company_name:
-            parts.append(f"<p>Sent by {company_name}</p>")
+            parts.append(f"<p>Sent by {html.escape(company_name)}</p>")
 
         # Physical address (required by CAN-SPAM, GDPR, CASL, PECR, SPAM_ACT)
         if physical_address:
-            parts.append(f"<p>{physical_address}</p>")
+            parts.append(f"<p>{html.escape(physical_address)}</p>")
 
         # Unsubscribe link (required by all)
         if unsubscribe_url:
+            escaped_url = html.escape(unsubscribe_url, quote=True)
             parts.append(
-                f'<p><a href="{unsubscribe_url}">Unsubscribe</a></p>'
+                f'<p><a href="{escaped_url}">Unsubscribe</a></p>'
             )
 
         # GDPR / PECR specific: data processing notice and right to object
@@ -206,8 +208,9 @@ class GeoCompliance:
                 "You have the right to object to this processing.</p>"
             )
             if data_processing_url:
+                escaped_dp_url = html.escape(data_processing_url, quote=True)
                 parts.append(
-                    f'<p><a href="{data_processing_url}">Data Processing Information</a></p>'
+                    f'<p><a href="{escaped_dp_url}">Data Processing Information</a></p>'
                 )
 
         parts.append("</div>")
