@@ -266,6 +266,12 @@ ANOMALY_Z_THRESHOLD = float(os.getenv("ANOMALY_Z_THRESHOLD", "3.0") or 3.0)
 ANOMALY_WINDOW_SIZE = int(os.getenv("ANOMALY_WINDOW_SIZE", "100") or 100)
 ANOMALY_ALERT_COOLDOWN_SEC = float(os.getenv("ANOMALY_ALERT_COOLDOWN_SEC", "3600") or 3600)
 
+# --- Periodic position check ---
+# Раз в POSITION_CHECK_INTERVAL_SEC (default 10 минут) бот проверяет что
+# позиции из arb_storage.get_all_active() реально существуют на биржах.
+# Если биржа ликвидировала одну ногу — force_close другую + алерт.
+POSITION_CHECK_INTERVAL_SEC = float(os.getenv("POSITION_CHECK_INTERVAL_SEC", "600") or 600)
+
 # --- Веб-дашборд ------------------------------------------------------
 DASHBOARD_ENABLED = os.getenv("DASHBOARD_ENABLED", "true").strip().lower() not in (
     "0", "false", "no", "off",

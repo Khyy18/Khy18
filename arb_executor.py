@@ -1283,6 +1283,20 @@ async def reconcile_funding_payments(
                 incremental += -sign_for_us * snap.funding_rate * notional
 
         if abs(incremental) > 1e-6:
+            # AI-калибровка оценки (если модель доступна).
+            try:
+                import funding_calibrator
+                factor = funding_calibrator.get_correction_factor(
+                    exchange=long_ex,
+                    symbol=sym,
+                    held_hours=0.0,  # пока просто оценка, not exact
+                    rate_at_open=0.0,
+                    rate_at_close=long_snap.funding_rate if long_snap else 0.0,
+                    mark_price_change_pct=0.0,
+                )
+                incremental *= factor
+            except Exception:  # noqa: BLE001
+                pass
             arb_storage.add_funding(arb_id, incremental)
             print(
                 f"[ARB-EXEC] ESTIMATED funding {incremental:+.4f} USDT "

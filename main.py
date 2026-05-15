@@ -628,6 +628,94 @@ async def _anomaly_tick(
     g["anomaly_alert_seen"] = seen
 
 
+# --- Tick: periodic position check (orphaned leg detection) -----------
+
+async def _position_check_tick(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    now: datetime,
+) -> None:
+    """Раз в POSITION_CHECK_INTERVAL_SEC (default 600 = 10мин) проверяем
+    что позиции на биржах совпадают с записями в БД.
+
+    Если обнаруживаем что нога пропала (ликвидация / manual close на бирже):
+      - force_close оставшуюся ногу
+      - mark_failed с причиной "orphaned_leg_detected"
+      - алерт в Telegram
+    """
+    g = state["global"]
+    last = float(g.get("last_position_check_epoch") or 0)
+    interval = float(getattr(config, "POSITION_CHECK_INTERVAL_SEC", 600))
+    if (time.time() - last) < interval:
+        return
+    g["last_position_check_epoch"] = time.time()
+
+    positions = arb_storage.get_all_active()
+    if not positions:
+        return
+
+    for pos in positions:
+        if pos.get("status") != "OPEN":
+            continue
+        sym = pos["symbol"]
+        long_ex = pos["long_exchange"]
+        short_ex = pos["short_exchange"]
+        arb_id = int(pos["id"])
+        qty = float(pos.get("qty_base") or 0)
+        if qty <= 0:
+            continue
+
+        # Проверяем каждую ногу.
+        for ex_name, side_label in [(long_ex, "LONG"), (short_ex, "SHORT")]:
+            adapter = _FUNDING_ADAPTERS.get(ex_name)
+            if not adapter:
+                continue
+            try:
+                exchange_positions = await adapter.get_positions(session, sym)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[POS-CHECK] {ex_name}/{sym}: get_positions fail: {exc}")
+                continue
+
+            # Считаем что позиция есть, если хотя бы одна запись с size > 0.
+            has_position = False
+            for ep in (exchange_positions or []):
+                try:
+                    size = float(ep.get("size") or ep.get("qty") or 0)
+                except (TypeError, ValueError):
+                    size = 0.0
+                if size > 0:
+                    has_position = True
+                    break
+
+            if not has_position:
+                # ORPHANED LEG DETECTED!
+                print(f"[POS-CHECK] ORPHAN: #{arb_id} {sym} — {side_label}@{ex_name} пропала!")
+
+                # Закрываем оставшуюся ногу.
+                other_ex = short_ex if ex_name == long_ex else long_ex
+                other_adapter = _FUNDING_ADAPTERS.get(other_ex)
+                if other_adapter:
+                    other_side = "Buy" if ex_name == long_ex else "Sell"  # close opposite
+                    try:
+                        await arb_executor._close_leg(
+                            session, other_adapter, sym, other_side, qty,
+                            f"ORPHAN-CLOSE {side_label}@{other_ex}",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[POS-CHECK] orphan close fail: {exc}")
+
+                arb_storage.mark_failed(arb_id, f"orphaned_leg_{side_label}@{ex_name}_missing")
+
+                await _notify(session, (
+                    f"🚨 <b>Orphaned leg!</b>\n\n"
+                    f"Связка #{arb_id} {sym}:\n"
+                    f"{side_label}@{ex_name} — позиция ПРОПАЛА (ликвидация?)\n"
+                    f"Вторая нога закрыта reduce-only.\n\n"
+                    f"Проверьте биржу {ex_name} вручную!"
+                ))
+                break  # не проверяем вторую ногу — уже пометили FAILED
+
+
 # --- Tick: rebalancer (advisor) ---------------------------------------
 
 async def _rebalance_tick(
@@ -812,6 +900,7 @@ async def trading_loop(
             await _funding_scan_tick(session, state, now)
             await _arb_executor_tick(session, state, now)
             await _anomaly_tick(session, state, now)
+            await _position_check_tick(session, state, now)
             await _rebalance_tick(session, state, now)
             await _lending_tick(session, state, now)
             await _announcement_tick(session, state, now)
