@@ -13,6 +13,7 @@ from scheduler.warmup_scheduler import WarmupScheduler
 
 if TYPE_CHECKING:
     from agents.optimizer import OptimizerAgent
+    from scheduler.notifications_scheduler import NotificationsScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 _SEQUENCE_INTERVAL = 300   # 5 minutes
 _WARMUP_INTERVAL = 900     # 15 minutes
 _OPTIMIZER_INTERVAL = 3600  # 1 hour
+_NOTIFICATIONS_INTERVAL = 3600  # 1 hour
 _USAGE_RESET_INTERVAL = 86400  # 24 hours (checks daily if 1st of month)
 
 
@@ -31,11 +33,13 @@ class Scheduler:
         sequence_runner: SequenceRunner,
         warmup_scheduler: WarmupScheduler,
         optimizer: OptimizerAgent | None = None,
+        notifications_scheduler: NotificationsScheduler | None = None,
         redis_url: str = "",
     ) -> None:
         self._sequence_runner = sequence_runner
         self._warmup_scheduler = warmup_scheduler
         self._optimizer = optimizer
+        self._notifications_scheduler = notifications_scheduler
         self._redis_url = redis_url
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -70,6 +74,17 @@ class Scheduler:
                 name="scheduler:optimizer",
             )
             self._tasks.append(optimizer_task)
+
+        if self._notifications_scheduler is not None:
+            notifications_task = asyncio.create_task(
+                self._run_loop(
+                    self._notifications_scheduler.weekly_digest_tick,
+                    _NOTIFICATIONS_INTERVAL,
+                    "notifications",
+                ),
+                name="scheduler:notifications",
+            )
+            self._tasks.append(notifications_task)
 
         # Monthly usage reset task (checks daily, resets on 1st of month)
         if self._redis_url:
