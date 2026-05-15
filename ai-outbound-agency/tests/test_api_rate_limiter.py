@@ -277,3 +277,64 @@ class TestRateLimiterMiddleware:
         call_next.assert_awaited_once()
         # Redis pipeline should not have been called
         mock_redis.pipeline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unauthenticated_limit_is_20_per_minute(self, mock_redis):
+        """Test that unauthenticated requests to /api/* are blocked at 20/min."""
+        app = MagicMock()
+        middleware = RateLimiterMiddleware(app, redis_url="redis://localhost:6379/0")
+        middleware._redis = mock_redis
+
+        # Pipeline returns count at unauthenticated limit (20)
+        pipe_mock = AsyncMock()
+        pipe_mock.zremrangebyscore = MagicMock(return_value=pipe_mock)
+        pipe_mock.zcard = MagicMock(return_value=pipe_mock)
+        pipe_mock.execute = AsyncMock(return_value=[0, 20])  # At unauthenticated limit
+
+        mock_redis.pipeline = MagicMock(return_value=pipe_mock)
+
+        request = _make_request("/api/leads", authenticated=False)
+        call_next = AsyncMock()
+
+        response = await middleware.dispatch(request, call_next)
+
+        # Should be blocked at 20 requests for unauthenticated
+        assert response.status_code == 429
+        call_next.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_metrics_endpoint_not_rate_limited(self, mock_redis):
+        """Test that /metrics endpoint is not subject to rate limiting."""
+        app = MagicMock()
+        middleware = RateLimiterMiddleware(app, redis_url="redis://localhost:6379/0")
+        middleware._redis = mock_redis
+
+        request = _make_request("/metrics", authenticated=False)
+        response_mock = _make_response()
+        call_next = AsyncMock(return_value=response_mock)
+
+        response = await middleware.dispatch(request, call_next)
+
+        # Should pass through without checking Redis
+        call_next.assert_awaited_once()
+        # Redis pipeline should not have been called
+        mock_redis.pipeline.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_different_ips_have_separate_limits(self, mock_redis):
+        """Test that different client IPs are rate-limited independently."""
+        app = MagicMock()
+        middleware = RateLimiterMiddleware(app, redis_url="redis://localhost:6379/0")
+        middleware._redis = mock_redis
+
+        # Two requests from different IPs
+        request1 = _make_request("/api/leads", authenticated=False, client_ip="10.0.0.1")
+        request2 = _make_request("/api/leads", authenticated=False, client_ip="10.0.0.2")
+
+        # Verify they produce different rate keys
+        id1 = middleware._get_client_identifier(request1)
+        id2 = middleware._get_client_identifier(request2)
+
+        assert id1 != id2
+        assert "10.0.0.1" in id1
+        assert "10.0.0.2" in id2

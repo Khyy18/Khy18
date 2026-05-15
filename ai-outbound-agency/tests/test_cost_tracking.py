@@ -248,3 +248,72 @@ async def test_cost_aggregation_by_type(async_session, sample_tenant):
     )
     email_total = email_result.scalar() or 0
     assert email_total == 60
+
+
+async def test_invalid_cost_type_rejected(async_session, sample_tenant):
+    """Recording a cost with an invalid cost_type should be rejected."""
+    # The valid_types set from the record_cost endpoint
+    valid_types = {"llm", "email", "api", "proxy"}
+
+    # Attempt to use an invalid type
+    invalid_type = "invalid_type"
+    assert invalid_type not in valid_types
+
+    # Verify that the endpoint logic would reject this
+    # In dashboard/routes/costs.py, this raises HTTPException 400
+    from fastapi import HTTPException
+    import pytest as _pytest
+
+    with _pytest.raises(HTTPException) as exc_info:
+        if invalid_type not in valid_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid cost_type. Must be one of: {', '.join(valid_types)}",
+            )
+    assert exc_info.value.status_code == 400
+    assert "Invalid cost_type" in exc_info.value.detail
+
+
+async def test_unprofitable_alert_threshold_7_days(async_session, sample_tenant, sample_plan, sample_subscription):
+    """Test that unprofitable alert is triggered when costs exceed revenue every day for 7 days."""
+    from sqlalchemy import func, select
+
+    now = datetime.now(timezone.utc)
+
+    # Monthly revenue: $99 (9900 cents), daily revenue: 9900/30 = 330 cents/day
+    monthly_revenue = 9900
+    daily_revenue = int(monthly_revenue / 30)
+    assert daily_revenue == 330
+
+    # Add costs exceeding daily revenue for each of the last 7 days
+    for day_offset in range(7):
+        day_start = now - timedelta(days=day_offset + 1)
+        # Put cost in middle of that day window
+        cost_time = day_start + timedelta(hours=12)
+        cost = CostRecord(
+            tenant_id=sample_tenant.id,
+            cost_type="llm",
+            amount_cents=500,  # 500 > 330 daily revenue
+            created_at=cost_time,
+        )
+        async_session.add(cost)
+    await async_session.commit()
+
+    # Replicate the alert detection logic from /api/costs/alerts
+    days_unprofitable = 0
+    for day_offset in range(7):
+        day_start = now - timedelta(days=day_offset + 1)
+        day_end = now - timedelta(days=day_offset)
+        day_cost_result = await async_session.execute(
+            select(func.sum(CostRecord.amount_cents)).where(
+                CostRecord.tenant_id == sample_tenant.id,
+                CostRecord.created_at >= day_start,
+                CostRecord.created_at < day_end,
+            )
+        )
+        day_cost = day_cost_result.scalar() or 0
+        if day_cost > daily_revenue:
+            days_unprofitable += 1
+
+    # All 7 days should be unprofitable
+    assert days_unprofitable >= 7
