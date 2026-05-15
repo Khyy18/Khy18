@@ -159,7 +159,7 @@ class FallbackLLMClient:
         """
         # Use first provider's model for cache key
         model_name = self.providers[0]["model"] if self.providers else ""
-        cache_key_raw = json.dumps(messages, sort_keys=True) + model_name
+        cache_key_raw = json.dumps(messages, sort_keys=True) + model_name + str(temperature) + str(max_tokens)
         cache_key = hashlib.sha256(cache_key_raw.encode()).hexdigest()
         redis_key = f"llm_cache:{cache_key}"
 

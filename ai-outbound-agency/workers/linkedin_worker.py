@@ -33,9 +33,15 @@ async def linkedin_connect_task(
         rate_limiter=rate_limiter,
         tenant_id=tenant_id,
     )
-    result = await actions.send_connection_request(profile_url, note=note or "")
-    logger.info("LinkedIn connect task completed for %s: %s", profile_url, result)
-    return result
+    try:
+        result = await actions.send_connection_request(profile_url, note=note or "")
+        logger.info("LinkedIn connect task completed for %s: %s", profile_url, result)
+        return result
+    finally:
+        if hasattr(browser, "close"):
+            await browser.close()
+        if hasattr(session_pool, "close"):
+            await session_pool.close()
 
 
 async def linkedin_message_task(
@@ -63,9 +69,15 @@ async def linkedin_message_task(
         rate_limiter=rate_limiter,
         tenant_id=tenant_id,
     )
-    result = await actions.send_message(profile_url, message)
-    logger.info("LinkedIn message task completed for %s: %s", profile_url, result)
-    return result
+    try:
+        result = await actions.send_message(profile_url, message)
+        logger.info("LinkedIn message task completed for %s: %s", profile_url, result)
+        return result
+    finally:
+        if hasattr(browser, "close"):
+            await browser.close()
+        if hasattr(session_pool, "close"):
+            await session_pool.close()
 
 
 async def linkedin_view_task(
@@ -92,6 +104,12 @@ async def linkedin_view_task(
         rate_limiter=rate_limiter,
         tenant_id=tenant_id,
     )
-    result = await actions.view_profile(profile_url)
-    logger.info("LinkedIn view task completed for %s: %s", profile_url, result)
-    return result
+    try:
+        result = await actions.view_profile(profile_url)
+        logger.info("LinkedIn view task completed for %s: %s", profile_url, result)
+        return result
+    finally:
+        if hasattr(browser, "close"):
+            await browser.close()
+        if hasattr(session_pool, "close"):
+            await session_pool.close()

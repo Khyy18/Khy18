@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    # Metrics auth token (optional, protects /metrics endpoint in production)
+    metrics_auth_token: str = ""
+
     # Approval settings
     approval_required_company_size: int = 500
 

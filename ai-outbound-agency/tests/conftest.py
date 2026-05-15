@@ -213,6 +213,7 @@ def mock_settings() -> MagicMock:
     s.telegram_bot_token = ""
     s.telegram_chat_id = ""
     s.approval_required_company_size = 500
+    s.metrics_auth_token = ""
     return s
 
 

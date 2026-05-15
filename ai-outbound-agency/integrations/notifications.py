@@ -109,6 +109,7 @@ async def notify_human(
     lead_email = lead_data.get("email", "Unknown")
 
     # Send Slack notification
+    slack_success = True
     if settings.slack_webhook_url:
         blocks = [
             {
@@ -143,9 +144,17 @@ async def notify_human(
                 },
             },
         ]
-        await send_slack_notification(settings.slack_webhook_url, blocks)
+        slack_success = await send_slack_notification(settings.slack_webhook_url, blocks)
+        if not slack_success:
+            logger.warning(
+                "Failed to send Slack notification for lead %s (classification=%s). "
+                "Approval was still created but human may not be alerted.",
+                lead_email,
+                classification,
+            )
 
     # Send Telegram notification
+    telegram_success = True
     if settings.telegram_bot_token and settings.telegram_chat_id:
         text = (
             f"*Approval Required*\n\n"
@@ -157,8 +166,21 @@ async def notify_human(
             f"*Proposed Subject:* {proposed_response.get('subject', 'N/A')}\n"
             f"*Action:* {proposed_response.get('action', 'N/A')}"
         )
-        await send_telegram_notification(
+        telegram_success = await send_telegram_notification(
             settings.telegram_bot_token,
             settings.telegram_chat_id,
             text,
+        )
+        if not telegram_success:
+            logger.warning(
+                "Failed to send Telegram notification for lead %s (classification=%s). "
+                "Approval was still created but human may not be alerted.",
+                lead_email,
+                classification,
+            )
+
+    if not slack_success and not telegram_success:
+        logger.warning(
+            "All notification channels failed for lead %s. Human review required but no alert was delivered.",
+            lead_email,
         )

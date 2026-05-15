@@ -347,22 +347,12 @@ class AsyncEmailSender:
         return result == "1"
 
     async def _record_bounce(self, domain: str, bounce_type: str = "hard") -> None:
-        """Record a bounce event via Redis (mirrors BounceMonitor logic)."""
-        from datetime import date as _date
+        """Record a bounce event via BounceMonitor, triggering auto-pause if needed."""
+        from channels.email.bounce_monitor import BounceMonitor
 
-        today = _date.today().isoformat()
-        bounce_key = f"bounces:{domain}:{today}"
-        consecutive_key = f"consecutive_hard:{domain}"
-
-        pipe = self._redis.pipeline()
-        pipe.incr(bounce_key)
-        pipe.expire(bounce_key, 86400 * 7)
-
-        if bounce_type == "hard":
-            pipe.incr(consecutive_key)
-            pipe.expire(consecutive_key, 86400 * 7)
-
-        await pipe.execute()
+        monitor = BounceMonitor.__new__(BounceMonitor)
+        monitor._redis = self._redis
+        await monitor.record_bounce(domain, bounce_type)
 
     async def close(self) -> None:
         """Close the Redis connection."""

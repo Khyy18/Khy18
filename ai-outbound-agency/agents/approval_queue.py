@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -22,6 +22,36 @@ from dashboard.auth import get_current_user
 from core.models import User
 
 logger = logging.getLogger(__name__)
+
+
+class EmailSenderProtocol(Protocol):
+    """Protocol for email sender dependency."""
+
+    async def send_email(
+        self,
+        to: str,
+        subject: str,
+        html_body: str,
+        message_id: str,
+        tracking_pixel_url: str | None = None,
+        tracked_links: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        ...
+
+
+# Module-level email sender reference, set during app startup
+_email_sender: EmailSenderProtocol | None = None
+
+
+def set_email_sender(sender: EmailSenderProtocol | None) -> None:
+    """Set the module-level email sender used by ApprovalQueue to dispatch approved emails."""
+    global _email_sender
+    _email_sender = sender
+
+
+def get_email_sender() -> EmailSenderProtocol | None:
+    """Get the module-level email sender."""
+    return _email_sender
 
 router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
@@ -157,6 +187,10 @@ class ApprovalQueue:
         approval.reviewed_at = datetime.now(timezone.utc)
 
         await session.flush()
+
+        # Send the approved email to the lead
+        await ApprovalQueue._send_approved_email(session, approval)
+
         logger.info("Approved approval %s", approval_id)
         return approval
 
@@ -200,7 +234,7 @@ class ApprovalQueue:
         approval_id: uuid.UUID,
         edited_response: dict[str, Any],
     ) -> PendingApproval:
-        """Edit the proposed response and mark as approved.
+        """Edit the proposed response, mark as approved, and send it.
 
         Args:
             session: The database session.
@@ -225,8 +259,65 @@ class ApprovalQueue:
         approval.reviewed_at = datetime.now(timezone.utc)
 
         await session.flush()
+
+        # Send the edited email to the lead
+        await ApprovalQueue._send_approved_email(session, approval)
+
         logger.info("Edited and approved approval %s", approval_id)
         return approval
+
+    @staticmethod
+    async def _send_approved_email(
+        session: AsyncSession,
+        approval: PendingApproval,
+    ) -> None:
+        """Send the approved response email to the lead.
+
+        Args:
+            session: The database session.
+            approval: The approved PendingApproval instance.
+        """
+        sender = get_email_sender()
+        if sender is None:
+            logger.warning(
+                "Email sender not configured, cannot send approved response for approval %s",
+                approval.id,
+            )
+            return
+
+        # Fetch the lead's email
+        stmt = select(Lead).where(Lead.id == approval.lead_id)
+        result = await session.execute(stmt)
+        lead = result.scalar_one_or_none()
+
+        if lead is None:
+            logger.error("Lead %s not found for approval %s", approval.lead_id, approval.id)
+            return
+
+        proposed = approval.proposed_response
+        subject = proposed.get("subject", "")
+        body = proposed.get("body", "")
+        message_id = str(approval.id)
+
+        send_result = await sender.send_email(
+            to=lead.email,
+            subject=subject,
+            html_body=body,
+            message_id=message_id,
+        )
+
+        if send_result.get("success"):
+            logger.info(
+                "Approved email sent to %s for approval %s",
+                lead.email,
+                approval.id,
+            )
+        else:
+            logger.error(
+                "Failed to send approved email to %s for approval %s",
+                lead.email,
+                approval.id,
+            )
 
 
 # ---------- API Endpoints ----------

@@ -104,7 +104,7 @@ async def test_cache_hit(fallback_client):
     import json
 
     model_name = "gpt-4"
-    cache_key_raw = json.dumps(messages, sort_keys=True) + model_name
+    cache_key_raw = json.dumps(messages, sort_keys=True) + model_name + str(0.7) + str(1024)
     cache_key = hashlib.sha256(cache_key_raw.encode()).hexdigest()
     redis_key = f"llm_cache:{cache_key}"
 
@@ -137,12 +137,48 @@ async def test_cache_miss_stores_result(fallback_client):
     import json
 
     model_name = "gpt-4"
-    cache_key_raw = json.dumps(messages, sort_keys=True) + model_name
+    cache_key_raw = json.dumps(messages, sort_keys=True) + model_name + str(0.7) + str(1024)
     cache_key = hashlib.sha256(cache_key_raw.encode()).hexdigest()
     redis_key = f"llm_cache:{cache_key}"
 
     assert redis_key in fallback_client._redis._store
     assert fallback_client._redis._store[redis_key] == "Fresh response"
+
+
+@pytest.mark.asyncio
+async def test_cache_key_includes_temperature_and_max_tokens(fallback_client):
+    """Test that different temperature/max_tokens produce different cache keys."""
+    import hashlib
+    import json
+
+    messages = [{"role": "user", "content": "Hello"}]
+    model_name = "gpt-4"
+
+    # Cache key for temp=0.7, max_tokens=1024
+    key1_raw = json.dumps(messages, sort_keys=True) + model_name + str(0.7) + str(1024)
+    key1 = hashlib.sha256(key1_raw.encode()).hexdigest()
+
+    # Cache key for temp=0.0, max_tokens=1024
+    key2_raw = json.dumps(messages, sort_keys=True) + model_name + str(0.0) + str(1024)
+    key2 = hashlib.sha256(key2_raw.encode()).hexdigest()
+
+    # Cache key for temp=0.7, max_tokens=512
+    key3_raw = json.dumps(messages, sort_keys=True) + model_name + str(0.7) + str(512)
+    key3 = hashlib.sha256(key3_raw.encode()).hexdigest()
+
+    assert key1 != key2, "Different temperatures should produce different cache keys"
+    assert key1 != key3, "Different max_tokens should produce different cache keys"
+
+    # Verify by generating with different params - both should call the provider
+    primary_client, _ = fallback_client._clients[0]
+    primary_client.generate = AsyncMock(return_value="Response A")
+
+    result_a = await fallback_client.generate(messages=messages, temperature=0.7, max_tokens=1024)
+    assert result_a == "Response A"
+
+    primary_client.generate = AsyncMock(return_value="Response B")
+    result_b = await fallback_client.generate(messages=messages, temperature=0.0, max_tokens=1024)
+    assert result_b == "Response B"  # Should NOT get cached "Response A"
 
 
 def test_prompt_registry():

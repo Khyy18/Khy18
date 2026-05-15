@@ -61,11 +61,6 @@ class BounceMonitor:
         pipe.expire(send_key, 86400 * 7)
         await pipe.execute()
 
-        # Reset consecutive hard bounce counter on successful send
-        consecutive_key = f"consecutive_hard:{domain}"
-        await self._redis.set(consecutive_key, 0)
-        await self._redis.expire(consecutive_key, 86400 * 7)
-
     async def get_bounce_rate(self, domain: str) -> float:
         """Calculate the bounce rate for a domain today.
 

@@ -26,7 +26,7 @@ from dashboard.routes.analytics import router as analytics_router
 from dashboard.routes.optimizer import router as optimizer_router
 from dashboard.routes.billing import router as billing_router
 from dashboard.views import router as views_router
-from agents.approval_queue import router as approvals_router
+from agents.approval_queue import router as approvals_router, set_email_sender
 
 # Initialize structured logging
 setup_logging()
@@ -77,6 +77,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 smtp_accounts=smtp_accounts,
                 redis_url=settings.redis_url,
             )
+            # Register email sender with approval queue for dispatching approved responses
+            set_email_sender(email_sender)
             tracker = EmailTracker(
                 tracking_base_url=settings.tracking_base_url,
                 secret=settings.tracking_secret,
@@ -315,8 +317,17 @@ async def health_check() -> JSONResponse:
 
 
 @app.get("/metrics")
-async def metrics() -> Response:
-    """Prometheus metrics endpoint."""
+async def metrics(request: Request) -> Response:
+    """Prometheus metrics endpoint.
+
+    Protected by METRICS_AUTH_TOKEN when configured. Provide the token
+    via the Authorization header as 'Bearer <token>'.
+    """
+    if settings.metrics_auth_token:
+        auth_header = request.headers.get("Authorization", "")
+        expected = f"Bearer {settings.metrics_auth_token}"
+        if auth_header != expected:
+            return Response(content="Unauthorized", status_code=401)
     return metrics_response()
 
 
