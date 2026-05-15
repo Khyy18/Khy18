@@ -20,3 +20,5 @@ python-multipart
 jinja2
 itsdangerous
 email-validator
+playwright
+scipy

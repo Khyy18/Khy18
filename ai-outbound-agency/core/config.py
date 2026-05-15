@@ -41,5 +41,13 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
 
+    # LinkedIn settings
+    linkedin_session_dir: str = "./linkedin_sessions"
+    linkedin_max_connections_per_day: int = 25
+    linkedin_max_messages_per_day: int = 20
+    linkedin_max_profile_views_per_day: int = 50
+    linkedin_min_action_cooldown_hours: int = 2
+    linkedin_proxy_list: str = "[]"
+
 
 settings = Settings()  # type: ignore[call-arg]
