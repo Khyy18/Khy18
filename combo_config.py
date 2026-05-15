@@ -34,19 +34,20 @@ GLOBAL_MAX_DRAWDOWN_PCT = float(os.getenv("GLOBAL_MAX_DRAWDOWN_PCT", "0.15") or 
 
 # ─── Grid-бот ─────────────────────────────────────────────────────────
 # Символы для grid-торговли.
+# Altcoins (SOL, DOGE) дают в 3-5x больше grid-циклов из-за высокой волатильности
 GRID_SYMBOLS: list[str] = [
-    s.strip() for s in os.getenv("GRID_SYMBOLS", "BTCUSDT,ETHUSDT").split(",") if s.strip()
+    s.strip() for s in os.getenv("GRID_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT,DOGEUSDT").split(",") if s.strip()
 ]
 
 # Биржа для grid (одна). По умолчанию bybit.
 GRID_EXCHANGE = os.getenv("GRID_EXCHANGE", "bybit").strip().lower()
 
 # Количество уровней сетки (buy + sell ордера).
-GRID_LEVELS = int(os.getenv("GRID_LEVELS", "10") or 10)
+GRID_LEVELS = int(os.getenv("GRID_LEVELS", "12") or 12)
 
 # Шаг сетки в процентах от текущей цены.
-# 0.003 = 0.3% между уровнями. При 10 уровнях покрываем ±1.5%.
-GRID_STEP_PCT = float(os.getenv("GRID_STEP_PCT", "0.003") or 0.003)
+# 0.005 = 0.5% между уровнями. При 12 уровнях покрываем ±3%.
+GRID_STEP_PCT = float(os.getenv("GRID_STEP_PCT", "0.005") or 0.005)
 
 # Размер одного ордера в USDT (notional). Рассчитывается автоматически
 # из аллокации, но можно задать вручную.
@@ -68,7 +69,7 @@ GRID_ENABLED = os.getenv("GRID_ENABLED", "true").strip().lower() in (
 # ─── Momentum-стратегия ───────────────────────────────────────────────
 # Символы для momentum.
 MOMENTUM_SYMBOLS: list[str] = [
-    s.strip() for s in os.getenv("MOMENTUM_SYMBOLS", "BTCUSDT,ETHUSDT").split(",") if s.strip()
+    s.strip() for s in os.getenv("MOMENTUM_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT,DOGEUSDT").split(",") if s.strip()
 ]
 
 # Биржа для momentum.
@@ -79,7 +80,7 @@ MOMENTUM_EMA_FAST = int(os.getenv("MOMENTUM_EMA_FAST", "9") or 9)
 MOMENTUM_EMA_SLOW = int(os.getenv("MOMENTUM_EMA_SLOW", "21") or 21)
 
 # Плечо.
-MOMENTUM_LEVERAGE = int(os.getenv("MOMENTUM_LEVERAGE", "3") or 3)
+MOMENTUM_LEVERAGE = int(os.getenv("MOMENTUM_LEVERAGE", "5") or 5)
 
 # Таймфрейм для свечей.
 MOMENTUM_TIMEFRAME = os.getenv("MOMENTUM_TIMEFRAME", "15").strip()  # минуты
@@ -217,7 +218,7 @@ MOMENTUM_SESSION_END_UTC = int(os.getenv("MOMENTUM_SESSION_END_UTC", "22") or 22
 
 # --- Grid: Profit reinvestment ---
 GRID_REINVEST_ENABLED = os.getenv("GRID_REINVEST_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
-GRID_REINVEST_PCT = float(os.getenv("GRID_REINVEST_PCT", "0.5") or 0.5)
+GRID_REINVEST_PCT = float(os.getenv("GRID_REINVEST_PCT", "0.7") or 0.7)
 
 # --- Momentum: Regime-adaptive parameters ---
 

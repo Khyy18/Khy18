@@ -34,7 +34,9 @@ def test_grid_defaults():
     """Grid: дефолтные параметры."""
     assert "BTCUSDT" in cfg.GRID_SYMBOLS
     assert "ETHUSDT" in cfg.GRID_SYMBOLS
-    assert cfg.GRID_LEVELS == 10
+    assert "SOLUSDT" in cfg.GRID_SYMBOLS
+    assert "DOGEUSDT" in cfg.GRID_SYMBOLS
+    assert cfg.GRID_LEVELS == 12
     assert 0 < cfg.GRID_STEP_PCT < 0.05
     assert cfg.GRID_LEVERAGE >= 1
 
@@ -43,7 +45,7 @@ def test_momentum_defaults():
     """Momentum: дефолтные параметры."""
     assert "BTCUSDT" in cfg.MOMENTUM_SYMBOLS
     assert cfg.MOMENTUM_EMA_FAST < cfg.MOMENTUM_EMA_SLOW
-    assert cfg.MOMENTUM_LEVERAGE == 3
+    assert cfg.MOMENTUM_LEVERAGE == 5
     assert cfg.MOMENTUM_STOP_LOSS_PCT > 0
     assert cfg.MOMENTUM_MAX_POSITIONS >= 1
 
