@@ -15,6 +15,10 @@ class ServiceType(str, Enum):
     TRANSLATION = "translation"
     SUMMARY = "summary"
     BUSINESS_DOCS = "business_docs"
+    CONTENT_PLAN = "content_plan"
+    EMAIL_MARKETING = "email_marketing"
+    COMPETITOR_ANALYSIS = "competitor_analysis"
+    VIDEO_SCRIPT = "video_script"
 
 
 class OrderStatus(str, Enum):
@@ -23,6 +27,20 @@ class OrderStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SubscriptionTier(str, Enum):
+    """Уровни подписки."""
+    NONE = "none"
+    BASIC = "basic"
+    PRO = "pro"
+
+
+class SubscriptionStatus(str, Enum):
+    """Статусы подписки."""
+    ACTIVE = "active"
+    EXPIRED = "expired"
     CANCELLED = "cancelled"
 
 
@@ -47,6 +65,7 @@ class Order(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     price: float = 0.0
+    rating: Optional[int] = None
 
 
 class Payment(BaseModel):
@@ -55,4 +74,26 @@ class Payment(BaseModel):
     client_id: int
     amount: float
     method: str = "manual"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class Subscription(BaseModel):
+    """Модель подписки."""
+    id: Optional[int] = None
+    client_id: int
+    tier: SubscriptionTier = SubscriptionTier.NONE
+    status: SubscriptionStatus = SubscriptionStatus.ACTIVE
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: Optional[datetime] = None
+    orders_used: int = 0
+    yookassa_subscription_id: Optional[str] = None
+
+
+class Referral(BaseModel):
+    """Модель реферала."""
+    id: Optional[int] = None
+    referrer_id: int
+    referred_id: int
+    bonus_amount: float = 0.0
+    paid: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)

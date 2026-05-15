@@ -130,6 +130,77 @@ SERVICES: Dict[ServiceType, ServiceDefinition] = {
         ),
         quality_checks=QualityCheck(min_words=100),
     ),
+    ServiceType.CONTENT_PLAN: ServiceDefinition(
+        service_type=ServiceType.CONTENT_PLAN,
+        name="Контент-план",
+        description="Контент-план для соцсетей на неделю/месяц с темами и форматами",
+        price=200.0,
+        system_prompt=(
+            "Ты SMM-стратег и контент-маркетолог. Создаёшь детальные контент-планы "
+            "для социальных сетей. Учитываешь целевую аудиторию, тренды, "
+            "разнообразие форматов (посты, сторис, рилс, карусели). "
+            "План должен быть структурирован по дням с указанием тем, форматов и хештегов."
+        ),
+        user_prompt_template=(
+            "Создай контент-план по следующему заданию:\n\n{input_text}\n\n"
+            "Требования: структура по дням, указание формата контента, "
+            "темы постов, хештеги, рекомендации по времени публикации."
+        ),
+        quality_checks=QualityCheck(min_words=150),
+    ),
+    ServiceType.EMAIL_MARKETING: ServiceDefinition(
+        service_type=ServiceType.EMAIL_MARKETING,
+        name="Email-маркетинг",
+        description="Цепочки писем, рассылки, welcome-серии",
+        price=180.0,
+        system_prompt=(
+            "Ты эксперт по email-маркетингу. Создаёшь конверсионные цепочки писем, "
+            "welcome-серии и промо-рассылки. Используешь AIDA-формулу, "
+            "персонализацию, цепляющие заголовки. Письма должны быть "
+            "готовы к отправке через email-платформу."
+        ),
+        user_prompt_template=(
+            "Создай email-рассылку или цепочку писем по заданию:\n\n{input_text}\n\n"
+            "Требования: тема письма (subject), прехедер, тело письма, "
+            "призыв к действию (CTA). Если цепочка - укажи логику между письмами."
+        ),
+        quality_checks=QualityCheck(min_words=80),
+    ),
+    ServiceType.COMPETITOR_ANALYSIS: ServiceDefinition(
+        service_type=ServiceType.COMPETITOR_ANALYSIS,
+        name="Анализ конкурентов",
+        description="Анализ конкурентов с выводами и рекомендациями",
+        price=300.0,
+        system_prompt=(
+            "Ты бизнес-аналитик и маркетолог. Проводишь глубокий анализ конкурентов: "
+            "их сильные и слабые стороны, позиционирование, УТП, ценовая политика, "
+            "каналы продвижения. Даёшь конкретные рекомендации по отстройке."
+        ),
+        user_prompt_template=(
+            "Проведи анализ конкурентов по следующему запросу:\n\n{input_text}\n\n"
+            "Требования: таблица сравнения, SWOT-анализ, "
+            "конкретные рекомендации по позиционированию и отстройке."
+        ),
+        quality_checks=QualityCheck(min_words=200),
+    ),
+    ServiceType.VIDEO_SCRIPT: ServiceDefinition(
+        service_type=ServiceType.VIDEO_SCRIPT,
+        name="Сценарий видео",
+        description="Сценарии для YouTube, Reels, TikTok с таймкодами",
+        price=250.0,
+        system_prompt=(
+            "Ты сценарист для видеоконтента. Создаёшь сценарии для YouTube, "
+            "Reels и TikTok. Учитываешь хук в первые 3 секунды, структуру "
+            "удержания внимания, CTA. Указываешь таймкоды, визуальные подсказки "
+            "и текст для субтитров."
+        ),
+        user_prompt_template=(
+            "Напиши сценарий видео по заданию:\n\n{input_text}\n\n"
+            "Требования: хук (первые 3 сек), основная часть с таймкодами, "
+            "визуальные указания, финальный CTA. Укажи рекомендуемый хронометраж."
+        ),
+        quality_checks=QualityCheck(min_words=100),
+    ),
 }
 
 

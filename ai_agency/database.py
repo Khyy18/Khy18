@@ -26,7 +26,8 @@ async def init_db() -> None:
                 first_name TEXT,
                 registered_at TEXT NOT NULL DEFAULT (datetime('now')),
                 total_spent REAL NOT NULL DEFAULT 0.0,
-                balance REAL NOT NULL DEFAULT 0.0
+                balance REAL NOT NULL DEFAULT 0.0,
+                referred_by INTEGER
             )
         """)
         await db.execute("""
@@ -40,6 +41,7 @@ async def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 completed_at TEXT,
                 price REAL NOT NULL DEFAULT 0.0,
+                rating INTEGER,
                 FOREIGN KEY (client_id) REFERENCES clients(telegram_id)
             )
         """)
@@ -50,6 +52,31 @@ async def init_db() -> None:
                 amount REAL NOT NULL,
                 method TEXT NOT NULL DEFAULT 'manual',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (client_id) REFERENCES clients(telegram_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER NOT NULL,
+                referred_id INTEGER NOT NULL,
+                bonus_amount REAL NOT NULL DEFAULT 0.0,
+                paid INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (referrer_id) REFERENCES clients(telegram_id),
+                FOREIGN KEY (referred_id) REFERENCES clients(telegram_id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                tier TEXT NOT NULL DEFAULT 'none',
+                status TEXT NOT NULL DEFAULT 'active',
+                started_at TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at TEXT,
+                orders_used INTEGER NOT NULL DEFAULT 0,
+                yookassa_subscription_id TEXT,
                 FOREIGN KEY (client_id) REFERENCES clients(telegram_id)
             )
         """)
@@ -166,6 +193,16 @@ async def update_order_status(
         await db.commit()
 
 
+async def update_order_rating(order_id: int, rating: int) -> None:
+    """Обновить рейтинг заказа."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE orders SET rating = ? WHERE id = ?",
+            (rating, order_id),
+        )
+        await db.commit()
+
+
 async def get_orders_by_client(client_id: int, limit: int = 10) -> List[dict]:
     """Получить заказы клиента."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
@@ -202,6 +239,17 @@ async def get_stats_for_period(days: int) -> Tuple[int, float]:
         return (row[0], row[1]) if row else (0, 0.0)
 
 
+async def get_client_order_count(client_id: int) -> int:
+    """Получить количество заказов клиента."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM orders WHERE client_id = ?",
+            (client_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
 # --- Платежи ---
 
 async def add_payment(client_id: int, amount: float, method: str = "manual") -> int:
@@ -213,3 +261,188 @@ async def add_payment(client_id: int, amount: float, method: str = "manual") -> 
         )
         await db.commit()
         return cursor.lastrowid
+
+
+# --- Рефералы ---
+
+async def create_referral(referrer_id: int, referred_id: int, bonus_amount: float) -> int:
+    """Создать запись реферала."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        # Отмечаем referred_by у клиента
+        await db.execute(
+            "UPDATE clients SET referred_by = ? WHERE telegram_id = ?",
+            (referrer_id, referred_id),
+        )
+        cursor = await db.execute(
+            """INSERT INTO referrals (referrer_id, referred_id, bonus_amount)
+               VALUES (?, ?, ?)""",
+            (referrer_id, referred_id, bonus_amount),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def get_referral_stats(referrer_id: int) -> dict:
+    """Получить статистику рефералов пользователя."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) as total, COALESCE(SUM(bonus_amount), 0) as total_bonus "
+            "FROM referrals WHERE referrer_id = ?",
+            (referrer_id,),
+        )
+        row = await cursor.fetchone()
+        total = row[0] if row else 0
+        total_bonus = row[1] if row else 0.0
+        cursor2 = await db.execute(
+            "SELECT COALESCE(SUM(bonus_amount), 0) FROM referrals "
+            "WHERE referrer_id = ? AND paid = 0",
+            (referrer_id,),
+        )
+        row2 = await cursor2.fetchone()
+        unpaid = row2[0] if row2 else 0.0
+        return {"total": total, "total_bonus": total_bonus, "unpaid_bonus": unpaid}
+
+
+# --- Подписки ---
+
+async def get_subscription(client_id: int) -> Optional[dict]:
+    """Получить активную подписку клиента."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM subscriptions WHERE client_id = ? AND status = 'active' "
+            "ORDER BY started_at DESC LIMIT 1",
+            (client_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def create_subscription(
+    client_id: int,
+    tier: str,
+    expires_at: str,
+    yookassa_subscription_id: Optional[str] = None,
+) -> int:
+    """Создать подписку."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            """INSERT INTO subscriptions
+               (client_id, tier, status, expires_at, yookassa_subscription_id)
+               VALUES (?, ?, 'active', ?, ?)""",
+            (client_id, tier, expires_at, yookassa_subscription_id),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def update_subscription(subscription_id: int, **kwargs) -> None:
+    """Обновить поля подписки."""
+    if not kwargs:
+        return
+    fields = ", ".join(f"{k} = ?" for k in kwargs.keys())
+    values = list(kwargs.values())
+    values.append(subscription_id)
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            f"UPDATE subscriptions SET {fields} WHERE id = ?",
+            values,
+        )
+        await db.commit()
+
+
+# --- Аналитика ---
+
+async def get_clients_inactive_days(days: int) -> List[dict]:
+    """Получить клиентов, неактивных более N дней."""
+    threshold = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT c.* FROM clients c
+               WHERE c.telegram_id NOT IN (
+                   SELECT DISTINCT client_id FROM orders WHERE created_at >= ?
+               )""",
+            (threshold,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def get_revenue_last_n_days(days: int) -> List[Tuple[str, float]]:
+    """Получить выручку по дням за последние N дней."""
+    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            """SELECT DATE(created_at) as day, COALESCE(SUM(price), 0) as revenue
+               FROM orders
+               WHERE created_at >= ? AND status = 'completed'
+               GROUP BY DATE(created_at)
+               ORDER BY day""",
+            (since,),
+        )
+        rows = await cursor.fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+
+async def get_popular_services(limit: int = 5) -> List[Tuple[str, int]]:
+    """Получить самые популярные услуги."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            """SELECT service_type, COUNT(*) as cnt
+               FROM orders
+               GROUP BY service_type
+               ORDER BY cnt DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+
+async def get_conversion_stats() -> dict:
+    """Получить конверсию: зарегистрированные vs сделавшие заказ."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute("SELECT COUNT(*) FROM clients")
+        total_row = await cursor.fetchone()
+        total_clients = total_row[0] if total_row else 0
+
+        cursor2 = await db.execute(
+            "SELECT COUNT(DISTINCT client_id) FROM orders"
+        )
+        row2 = await cursor2.fetchone()
+        clients_with_orders = row2[0] if row2 else 0
+
+        return {
+            "total_clients": total_clients,
+            "clients_with_orders": clients_with_orders,
+            "conversion_rate": (
+                clients_with_orders / total_clients * 100
+                if total_clients > 0 else 0.0
+            ),
+        }
+
+
+async def get_avg_check() -> float:
+    """Получить средний чек по завершённым заказам."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "SELECT AVG(price) FROM orders WHERE status = 'completed'"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else 0.0
+
+
+async def get_all_clients_with_orders() -> List[dict]:
+    """Получить всех клиентов с количеством заказов."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT c.*, COUNT(o.id) as order_count
+               FROM clients c
+               LEFT JOIN orders o ON c.telegram_id = o.client_id
+               GROUP BY c.telegram_id
+               ORDER BY c.registered_at DESC"""
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]

@@ -75,3 +75,38 @@ def status_indicator(status: str) -> str:
         "cancelled": "\U0001f534",  # красный круг
     }
     return indicators.get(status, "\u26aa")
+
+
+def sparkline(values: List[float]) -> str:
+    """
+    Спарклайн из значений - мини-график из блочных символов.
+    Использует символы U+2581..U+2588 (8 уровней).
+    """
+    if not values:
+        return ""
+    chars = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+    mn = min(values)
+    mx = max(values)
+    rng = mx - mn
+    if rng == 0:
+        return chars[3] * len(values)
+    result = []
+    for v in values:
+        idx = int((v - mn) / rng * 7)
+        idx = min(idx, 7)
+        result.append(chars[idx])
+    return "".join(result)
+
+
+def progress_bar_slim(current: int, total: int) -> str:
+    """
+    Тонкий прогресс-бар из 10 символов.
+    Использует U+25B0 (заполненный) и U+25B1 (пустой).
+    """
+    if total <= 0:
+        ratio = 0.0
+    else:
+        ratio = min(current / total, 1.0)
+    filled = int(ratio * 10)
+    empty = 10 - filled
+    return "\u25b0" * filled + "\u25b1" * empty
