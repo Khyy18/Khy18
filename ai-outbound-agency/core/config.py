@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
 
+    # Stripe billing
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_publishable_key: str = ""
+
     # LinkedIn settings
     linkedin_session_dir: str = "./linkedin_sessions"
     linkedin_max_connections_per_day: int = 25

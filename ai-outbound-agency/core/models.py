@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -77,6 +78,20 @@ class ABTestStatus(str, enum.Enum):
     paused = "paused"
 
 
+class SubscriptionStatus(str, enum.Enum):
+    active = "active"
+    past_due = "past_due"
+    canceled = "canceled"
+    trialing = "trialing"
+
+
+class PlanName(str, enum.Enum):
+    starter = "starter"
+    growth = "growth"
+    scale = "scale"
+    enterprise = "enterprise"
+
+
 # ---------- Utility ----------
 
 def _utcnow() -> datetime:
@@ -103,6 +118,8 @@ class Tenant(Base):
     sequences = relationship("Sequence", back_populates="tenant")
     users = relationship("User", back_populates="tenant")
     ab_tests = relationship("ABTest", back_populates="tenant")
+    subscriptions = relationship("Subscription", back_populates="tenant")
+    usage_records = relationship("UsageRecord", back_populates="tenant")
 
 
 class User(Base):
@@ -230,3 +247,51 @@ class ABTestAssignment(Base):
 
     test = relationship("ABTest", back_populates="assignments")
     lead = relationship("Lead")
+
+
+class Plan(Base):
+    __tablename__ = "plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    name = Column(Enum(PlanName), nullable=False)
+    stripe_price_id = Column(String, nullable=True)
+    leads_limit = Column(Integer, nullable=False)
+    emails_limit = Column(Integer, nullable=False)
+    linkedin_limit = Column(Integer, nullable=False)
+    campaigns_limit = Column(Integer, nullable=False)
+    price_cents = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("plans.id"), nullable=False)
+    stripe_subscription_id = Column(String, nullable=True)
+    stripe_customer_id = Column(String, nullable=True)
+    status = Column(Enum(SubscriptionStatus), default=SubscriptionStatus.active, nullable=False)
+    current_period_start = Column(DateTime(timezone=True), nullable=True)
+    current_period_end = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="subscriptions")
+    plan = relationship("Plan")
+
+
+class UsageRecord(Base):
+    __tablename__ = "usage_records"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "period_start", name="uq_usage_tenant_period"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    period_start = Column(DateTime(timezone=True), nullable=False)
+    leads_used = Column(Integer, default=0, nullable=False)
+    emails_used = Column(Integer, default=0, nullable=False)
+    linkedin_used = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="usage_records")
