@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime
 
 from telegram import Bot
 
@@ -70,6 +71,12 @@ try:
     import retargeting
 except ImportError:
     retargeting = None
+
+# Интеграция daily_report (graceful)
+try:
+    import daily_report
+except ImportError:
+    daily_report = None
 
 logger = logging.getLogger(__name__)
 
@@ -460,6 +467,43 @@ async def retargeting_check_task(bot: Bot) -> None:
         await asyncio.sleep(300)  # 5 минут
 
 
+async def daily_report_check(bot: Bot) -> None:
+    """
+    Задача ежедневного отчёта: каждый день в DAILY_REPORT_HOUR
+    отправляет владельцу сводку.
+    """
+    while True:
+        try:
+            if daily_report:
+                now = datetime.utcnow()
+                target_hour = config.DAILY_REPORT_HOUR
+                # Check if current hour matches target
+                if now.hour == target_hour and now.minute < 5:
+                    await daily_report.send_daily_report(bot)
+        except Exception as e:
+            logger.error("Ошибка daily_report_check: %s", e)
+
+        await asyncio.sleep(300)  # проверяем каждые 5 минут
+
+
+async def ad_autopilot_check(bot: Bot) -> None:
+    """
+    Задача автопилота рекламы: каждый понедельник
+    автоматически размещает рекламу если AD_AUTOPILOT=True.
+    """
+    while True:
+        try:
+            if ad_manager and config.AD_AUTOPILOT:
+                now = datetime.utcnow()
+                # Запускаем только по понедельникам (weekday=0) в 10:00
+                if now.weekday() == 0 and now.hour == 10 and now.minute < 5:
+                    await ad_manager.run_autopilot(bot)
+        except Exception as e:
+            logger.error("Ошибка ad_autopilot_check: %s", e)
+
+        await asyncio.sleep(300)  # проверяем каждые 5 минут
+
+
 def start_scheduler(bot: Bot) -> None:
     """
     Запустить все фоновые задачи в текущем event loop.
@@ -493,9 +537,12 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(_staggered_start(marketplace_replenish(), 300))
     loop.create_task(_staggered_start(demo_generator_check(bot), 320))
     loop.create_task(_staggered_start(retargeting_check_task(bot), 340))
+    loop.create_task(_staggered_start(daily_report_check(bot), 360))
+    loop.create_task(_staggered_start(ad_autopilot_check(bot), 380))
     logger.info(
         "Планировщик задач запущен (retention, upsell, subscription_expiry, "
         "lead_parser, auto_posting, backup, crm_segment_update, crm_send_offers, "
         "monitoring_watchdog, funnel_check, review_posting, service_discovery, "
-        "ad_budget, content_farm, marketplace_replenish, demo_generator, retargeting)"
+        "ad_budget, content_farm, marketplace_replenish, demo_generator, retargeting, "
+        "daily_report, ad_autopilot)"
     )

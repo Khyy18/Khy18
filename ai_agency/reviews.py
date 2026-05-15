@@ -1,4 +1,4 @@
-"""Система отзывов AI-агентства: модерация, публикация, социальное доказательство."""
+"""Система отзывов AI-агентства: автомодерация, публикация, социальное доказательство."""
 
 import logging
 from datetime import datetime
@@ -20,13 +20,24 @@ _PROFANITY_WORDS = {
     "damn", "hell", "whore", "slut",
 }
 
+# Minimum review length
+_MIN_REVIEW_LENGTH = 10
+
 
 def auto_moderate(text: str) -> bool:
     """
-    Filter profanity from review text.
+    Filter profanity and validate review text.
 
-    Returns True if text is clean, False if contains profanity.
+    Returns True if text is clean and valid, False otherwise.
+    Checks:
+    - No profanity words
+    - Minimum length (10 characters)
     """
+    # Check minimum length
+    if len(text.strip()) < _MIN_REVIEW_LENGTH:
+        return False
+
+    # Check profanity
     words = text.lower().split()
     for word in words:
         # Strip punctuation
@@ -38,21 +49,47 @@ def auto_moderate(text: str) -> bool:
 
 async def submit_review(client_id: int, order_id: int, text: str, rating: int) -> Optional[int]:
     """
-    Submit a review. Auto-moderate and save to DB.
+    Submit a review with auto-moderation.
 
-    Returns review ID if saved, None if rejected by auto-moderation.
+    If AUTO_MODERATE_REVIEWS=True:
+      - Passes filters -> auto-published (status='approved')
+      - Fails filters -> queued for manual moderation (status='pending')
+    If AUTO_MODERATE_REVIEWS=False:
+      - All reviews go to manual moderation (status='pending')
+
+    Returns review ID if saved, None if critically rejected.
     """
-    is_clean = auto_moderate(text)
-    status = "pending" if is_clean else "rejected"
+    if config.AUTO_MODERATE_REVIEWS:
+        is_clean = auto_moderate(text)
+        if is_clean:
+            status = "approved"
+            approved_at = datetime.utcnow().isoformat()
+        else:
+            # Failed auto-moderation -> queue for manual review
+            status = "pending"
+            approved_at = None
+            logger.info(
+                "Review from client %d failed auto-moderation, queued for manual check",
+                client_id,
+            )
+    else:
+        # All reviews go to manual moderation
+        status = "pending"
+        approved_at = None
 
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         cursor = await db.execute(
-            """INSERT INTO reviews (client_id, order_id, text, rating, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (client_id, order_id, text, rating, status, datetime.utcnow().isoformat()),
+            """INSERT INTO reviews (client_id, order_id, text, rating, status, created_at, approved_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (client_id, order_id, text, rating, status, datetime.utcnow().isoformat(), approved_at),
         )
         await db.commit()
-        return cursor.lastrowid if is_clean else None
+        review_id = cursor.lastrowid
+
+    if status == "approved":
+        logger.info("Review %d auto-approved for client %d", review_id, client_id)
+
+    return review_id
 
 
 async def approve_review(review_id: int) -> None:

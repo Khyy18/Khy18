@@ -26,7 +26,10 @@ class TestReviews:
         assert reviews.auto_moderate("Полный пиздец") is False
 
     async def test_submit_review_clean(self, initialized_db):
-        """submit_review saves clean review with pending status."""
+        """submit_review auto-approves clean review when AUTO_MODERATE_REVIEWS=True."""
+        import config
+        config.AUTO_MODERATE_REVIEWS = True
+
         await database.get_or_create_client(telegram_id=100, username="reviewer")
         order_id = await database.create_order(
             client_id=100, service_type="rewrite", input_text="test", price=100.0
@@ -36,30 +39,61 @@ class TestReviews:
         )
         assert review_id is not None
 
+        # With AUTO_MODERATE_REVIEWS=True, clean reviews are auto-approved
+        approved = await reviews.get_approved_reviews(limit=10)
+        assert len(approved) >= 1
+        assert approved[0]["text"] == "Great work!"
+        assert approved[0]["status"] == "approved"
+
+    async def test_submit_review_manual_moderation(self, initialized_db):
+        """submit_review sends to pending when AUTO_MODERATE_REVIEWS=False."""
+        import config
+        config.AUTO_MODERATE_REVIEWS = False
+
+        await database.get_or_create_client(telegram_id=100, username="reviewer")
+        order_id = await database.create_order(
+            client_id=100, service_type="rewrite", input_text="test", price=100.0
+        )
+        review_id = await reviews.submit_review(
+            client_id=100, order_id=order_id, text="Great work done!", rating=5
+        )
+        assert review_id is not None
+
         pending = await reviews.get_pending_reviews()
         assert len(pending) >= 1
-        assert pending[0]["text"] == "Great work!"
         assert pending[0]["status"] == "pending"
 
+        # Restore default
+        config.AUTO_MODERATE_REVIEWS = True
+
     async def test_submit_review_profane(self, initialized_db):
-        """submit_review rejects profane text."""
+        """submit_review queues profane text for manual moderation."""
+        import config
+        config.AUTO_MODERATE_REVIEWS = True
+
         await database.get_or_create_client(telegram_id=101, username="baduser")
         order_id = await database.create_order(
             client_id=101, service_type="rewrite", input_text="test", price=100.0
         )
         review_id = await reviews.submit_review(
-            client_id=101, order_id=order_id, text="What a shit!", rating=1
+            client_id=101, order_id=order_id, text="What a shit service!", rating=1
         )
-        assert review_id is None
+        # Profane review goes to pending for manual moderation
+        assert review_id is not None
+        pending = await reviews.get_pending_reviews()
+        assert any(r["id"] == review_id for r in pending)
 
     async def test_approve_and_get_approved(self, initialized_db):
         """approve_review changes status and appears in get_approved_reviews."""
+        import config
+        config.AUTO_MODERATE_REVIEWS = False  # Force manual moderation for this test
+
         await database.get_or_create_client(telegram_id=102, username="gooduser")
         order_id = await database.create_order(
             client_id=102, service_type="rewrite", input_text="test", price=100.0
         )
         review_id = await reviews.submit_review(
-            client_id=102, order_id=order_id, text="Excellent!", rating=5
+            client_id=102, order_id=order_id, text="Excellent work done!", rating=5
         )
         assert review_id is not None
 
@@ -67,6 +101,8 @@ class TestReviews:
         approved = await reviews.get_approved_reviews(limit=10)
         assert len(approved) >= 1
         assert approved[0]["status"] == "approved"
+
+        config.AUTO_MODERATE_REVIEWS = True
 
     async def test_get_review_count(self, initialized_db):
         """get_review_count returns correct count of approved reviews."""
@@ -76,22 +112,28 @@ class TestReviews:
         order_id = await database.create_order(
             client_id=103, service_type="rewrite", input_text="test", price=100.0
         )
+        # With AUTO_MODERATE_REVIEWS=True, clean review is auto-approved
+        import config
+        config.AUTO_MODERATE_REVIEWS = True
         review_id = await reviews.submit_review(
-            client_id=103, order_id=order_id, text="Nice!", rating=4
+            client_id=103, order_id=order_id, text="Nice work here!", rating=4
         )
-        await reviews.approve_review(review_id)
+        assert review_id is not None
 
         count_after = await reviews.get_review_count()
         assert count_after == count_before + 1
 
     async def test_reject_review(self, initialized_db):
         """reject_review changes status to rejected."""
+        import config
+        config.AUTO_MODERATE_REVIEWS = False  # Force manual moderation
+
         await database.get_or_create_client(telegram_id=104, username="rejected")
         order_id = await database.create_order(
             client_id=104, service_type="rewrite", input_text="test", price=100.0
         )
         review_id = await reviews.submit_review(
-            client_id=104, order_id=order_id, text="Meh...", rating=3
+            client_id=104, order_id=order_id, text="Meh, not great...", rating=3
         )
         assert review_id is not None
 
@@ -99,3 +141,5 @@ class TestReviews:
         pending = await reviews.get_pending_reviews()
         # Should not be in pending anymore
         assert all(r["id"] != review_id for r in pending)
+
+        config.AUTO_MODERATE_REVIEWS = True

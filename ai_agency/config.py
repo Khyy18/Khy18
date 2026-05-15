@@ -144,6 +144,20 @@ RETARGETING_ENABLED: bool = os.getenv("RETARGETING_ENABLED", "True").lower() in 
 # WebSocket dashboard auth
 WS_AUTH_TOKEN: str = os.getenv("WS_AUTH_TOKEN", "")
 
+# --- Autopilot settings ---
+
+# Автоматическая отправка откликов на лиды (Kwork)
+AUTO_RESPOND_LEADS: bool = os.getenv("AUTO_RESPOND_LEADS", "False").lower() in ("true", "1", "yes")
+
+# Автопилот рекламы (автоматическое размещение через Telega.in)
+AD_AUTOPILOT: bool = os.getenv("AD_AUTOPILOT", "False").lower() in ("true", "1", "yes")
+
+# Автомодерация отзывов (публикация без ручного одобрения)
+AUTO_MODERATE_REVIEWS: bool = os.getenv("AUTO_MODERATE_REVIEWS", "True").lower() in ("true", "1", "yes")
+
+# Час отправки ежедневного отчёта владельцу (0-23)
+DAILY_REPORT_HOUR: int = int(os.getenv("DAILY_REPORT_HOUR", "21"))
+
 
 def validate_config() -> List[str]:
     """
