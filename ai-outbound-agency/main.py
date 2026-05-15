@@ -27,6 +27,7 @@ from dashboard.routes.optimizer import router as optimizer_router
 from dashboard.routes.billing import router as billing_router
 from dashboard.routes.whitelabel import router as whitelabel_router
 from dashboard.routes.integrations_api import router as integrations_api_router
+from dashboard.routes.onboarding import router as onboarding_router
 from dashboard.views import router as views_router
 from agents.approval_queue import router as approvals_router, set_email_sender
 
@@ -272,6 +273,7 @@ app.include_router(optimizer_router)
 app.include_router(billing_router)
 app.include_router(whitelabel_router)
 app.include_router(integrations_api_router)
+app.include_router(onboarding_router)
 app.include_router(approvals_router)
 app.include_router(views_router)
 

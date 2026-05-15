@@ -98,3 +98,21 @@ async def optimizer_page(request: Request):
 async def billing_page(request: Request):
     """Render the billing page."""
     return templates.TemplateResponse("billing.html", {"request": request})
+
+
+@router.get("/onboarding", response_class=HTMLResponse)
+async def onboarding_page(request: Request):
+    """Render the onboarding questionnaire page."""
+    return templates.TemplateResponse("onboarding/step1.html", {"request": request})
+
+
+@router.get("/onboarding/preview", response_class=HTMLResponse)
+async def onboarding_preview_page(request: Request):
+    """Render the onboarding preview page."""
+    return templates.TemplateResponse("onboarding/step2.html", {"request": request})
+
+
+@router.get("/onboarding/complete", response_class=HTMLResponse)
+async def onboarding_complete_page(request: Request):
+    """Render the onboarding completion page."""
+    return templates.TemplateResponse("onboarding/step3.html", {"request": request})
