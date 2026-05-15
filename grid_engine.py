@@ -30,6 +30,7 @@ import combo_config as cfg
 import global_kill_switch
 from exchanges import get_adapter
 from exchanges.base import ExchangeAdapter
+from utils.retry import retry_async
 
 
 # ─── Типы ─────────────────────────────────────────────────────────────
@@ -395,14 +396,17 @@ async def _place_grid_orders(
     placed = 0
     for lv in levels:
         try:
-            result = await adapter.place_limit_order(
-                session,
-                symbol=symbol,
-                side=lv.side,
-                qty=lv.qty,
-                price=lv.price,
-                post_only=True,
-                reduce_only=False,
+            result = await retry_async(
+                lambda lv=lv: adapter.place_limit_order(
+                    session,
+                    symbol=symbol,
+                    side=lv.side,
+                    qty=lv.qty,
+                    price=lv.price,
+                    post_only=True,
+                    reduce_only=False,
+                ),
+                max_retries=2, base_delay=0.5, label=f"grid_place_{symbol}_{lv.side}",
             )
             if result and result.get("order_id"):
                 lv.order_id = str(result["order_id"])
@@ -468,14 +472,17 @@ async def _check_fills_and_counter(
                 (1 + cfg.GRID_STEP_PCT) if lv.side == "Buy" else (1 - cfg.GRID_STEP_PCT)
             )
             try:
-                result = await adapter.place_limit_order(
-                    session,
-                    symbol=symbol,
-                    side=counter_side,
-                    qty=lv.qty,
-                    price=counter_price,
-                    post_only=True,
-                    reduce_only=False,
+                result = await retry_async(
+                    lambda counter_side=counter_side, counter_price=counter_price, lv=lv: adapter.place_limit_order(
+                        session,
+                        symbol=symbol,
+                        side=counter_side,
+                        qty=lv.qty,
+                        price=counter_price,
+                        post_only=True,
+                        reduce_only=False,
+                    ),
+                    max_retries=2, base_delay=0.5, label=f"grid_counter_{symbol}_{counter_side}",
                 )
                 if result and result.get("order_id"):
                     # Переиспользуем уровень как встречный

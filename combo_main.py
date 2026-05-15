@@ -25,6 +25,8 @@ from typing import Any
 
 import aiohttp
 
+_SHUTDOWN_STATE: dict[str, Any] | None = None
+
 import capital_allocator
 import combo_config as cfg
 import combo_telegram
@@ -49,6 +51,15 @@ except ImportError as _exc:
 
 
 MAIN_TICK_SECONDS = 30
+
+
+def _handle_shutdown_signal(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    import signal as _sig
+    sig_name = _sig.Signals(signum).name
+    print(f"[COMBO] Received {sig_name}, initiating graceful shutdown...")
+    if _SHUTDOWN_STATE is not None:
+        _SHUTDOWN_STATE.setdefault("global", {})["bot_running"] = False
 
 
 # ─── State initialization ─────────────────────────────────────────────
@@ -231,7 +242,7 @@ async def _main_loop(
     """Основной цикл: тики всех стратегий + kill-switch проверка."""
     print("[COMBO] Main loop запущен")
 
-    while True:
+    while state["global"].get("bot_running", True):
         tick_start = time.time()
 
         try:
@@ -399,6 +410,14 @@ async def _main_loop(
         sleep_time = max(1.0, MAIN_TICK_SECONDS - elapsed)
         await asyncio.sleep(sleep_time)
 
+    # Graceful shutdown
+    print("[COMBO] Main loop stopping...")
+    try:
+        await _persist_tick(state)
+        await _notify(session, combo_telegram._card("Bot stopping", "\u26d4", ["Graceful shutdown"]))
+    except Exception as exc:
+        print(f"[COMBO] shutdown notify error: {exc}")
+
 
 # ─── Entry point ───────────────────────────────────────────────────────
 
@@ -414,6 +433,8 @@ async def main() -> None:
 
     # Инициализация
     state = _init_state()
+    global _SHUTDOWN_STATE
+    _SHUTDOWN_STATE = state
     _init_funding_adapters()
 
     print(f"[COMBO] Стратегии: funding={cfg.ALLOC_FUNDING_PCT*100:.0f}% "
@@ -447,4 +468,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    import signal
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
     asyncio.run(main())

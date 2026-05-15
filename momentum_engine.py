@@ -29,6 +29,7 @@ import capital_allocator
 import combo_config as cfg
 import global_kill_switch
 from exchanges import get_adapter
+from utils.retry import retry_async
 from exchanges.base import ExchangeAdapter
 
 
@@ -510,18 +511,18 @@ async def _manage_position(
             if new_sl > current_sl:
                 position["stop_loss"] = new_sl
                 # Обновляем SL на бирже
-                try:
-                    await adapter.set_trading_stop(session, symbol, stop_loss=new_sl)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[MOMENTUM] trailing SL update {symbol}: {exc}")
+                await retry_async(
+                    lambda: adapter.set_trading_stop(session, symbol, stop_loss=new_sl),
+                    max_retries=2, base_delay=0.5, label=f"trailing_SL_{symbol}",
+                )
         else:
             new_sl = current_price * (1 + trail_distance)
             if new_sl < current_sl or current_sl == 0:
                 position["stop_loss"] = new_sl
-                try:
-                    await adapter.set_trading_stop(session, symbol, stop_loss=new_sl)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[MOMENTUM] trailing SL update {symbol}: {exc}")
+                await retry_async(
+                    lambda: adapter.set_trading_stop(session, symbol, stop_loss=new_sl),
+                    max_retries=2, base_delay=0.5, label=f"trailing_SL_{symbol}",
+                )
 
     # Проверка SL/TP (на случай если биржа не сработала)
     current_sl = float(position.get("stop_loss", 0.0))
