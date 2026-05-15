@@ -64,5 +64,12 @@ GROQ_URL: str = "https://api.groq.com/openai/v1/chat/completions"
 AI_RATE_LIMIT_RPM: int = 25          # запросов к LLM в минуту
 AI_BATCH_SIZE: int = 8               # размер батча для batch scoring
 
+# --- Тиры сканирования (Pre-match / Near-event / Live) ---
+SCAN_TIERS: dict = {
+    "pre_match": {"min_hours": 2, "interval_sec": 60, "recheck": True},
+    "near_event": {"min_hours": 0.5, "max_hours": 2, "interval_sec": 30, "recheck_min_profit": 3.0},
+    "live": {"skip": True, "reason": "Odds API too slow for live"},
+}
+
 # --- Telegram ---
 TELEGRAM_API_URL: str = "https://api.telegram.org"

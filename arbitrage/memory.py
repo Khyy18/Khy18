@@ -168,6 +168,21 @@ def init_db() -> None:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS clv_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bet_id INTEGER,
+                    event_id TEXT,
+                    sport TEXT,
+                    placement_odds REAL,
+                    closing_odds REAL,
+                    clv_pct REAL,
+                    checked_ts TEXT,
+                    created_ts TEXT
+                )
+                """
+            )
             conn.commit()
         print(f"[ARB_MEMORY] База данных инициализирована: {DB_PATH}")
     except sqlite3.Error as exc:
@@ -802,3 +817,96 @@ def get_all_bk_classifications() -> list[dict[str, Any]]:
     except sqlite3.Error as exc:
         print(f"[ARB_MEMORY] Ошибка чтения классификаций: {exc}")
         return []
+
+
+# --- CLV Records ---
+
+
+def save_clv_record(
+    bet_id: int,
+    event_id: str,
+    sport: str,
+    placement_odds: float,
+) -> Optional[int]:
+    """Сохранить запись CLV при размещении ставки. Возвращает id записи."""
+    try:
+        with _connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO clv_records (bet_id, event_id, sport, placement_odds, created_ts)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (int(bet_id), str(event_id), str(sport), float(placement_odds), _now_iso()),
+            )
+            conn.commit()
+            return cur.lastrowid
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Не удалось сохранить CLV-запись: {exc}")
+        return None
+
+
+def update_clv_record(record_id: int, closing_odds: float, clv_pct: float) -> None:
+    """Обновить CLV-запись после проверки закрывающей линии."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                UPDATE clv_records
+                SET closing_odds = ?, clv_pct = ?, checked_ts = ?
+                WHERE id = ?
+                """,
+                (float(closing_odds), float(clv_pct), _now_iso(), int(record_id)),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Не удалось обновить CLV-запись #{record_id}: {exc}")
+
+
+def get_pending_clv_checks() -> list[dict[str, Any]]:
+    """Получить CLV-записи без проверки закрывающих линий (старше 30 минут)."""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, bet_id, event_id, sport, placement_odds
+                FROM clv_records
+                WHERE closing_odds IS NULL
+                  AND created_ts <= datetime('now', '-30 minutes')
+                ORDER BY id ASC
+                """
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения pending CLV-записей: {exc}")
+        return []
+
+
+def get_clv_stats() -> dict[str, Any]:
+    """Получить статистику CLV: среднее значение, кол-во положительных/отрицательных."""
+    stats: dict[str, Any] = {
+        "avg_clv_pct": 0.0,
+        "positive_count": 0,
+        "negative_count": 0,
+        "total_checked": 0,
+    }
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COALESCE(AVG(clv_pct), 0.0) AS avg_clv,
+                    SUM(CASE WHEN clv_pct > 0 THEN 1 ELSE 0 END) AS positive,
+                    SUM(CASE WHEN clv_pct <= 0 THEN 1 ELSE 0 END) AS negative,
+                    COUNT(*) AS total
+                FROM clv_records
+                WHERE closing_odds IS NOT NULL
+                """
+            ).fetchone()
+            if row and row["total"]:
+                stats["avg_clv_pct"] = round(float(row["avg_clv"] or 0.0), 2)
+                stats["positive_count"] = int(row["positive"] or 0)
+                stats["negative_count"] = int(row["negative"] or 0)
+                stats["total_checked"] = int(row["total"] or 0)
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения CLV статистики: {exc}")
+    return stats
