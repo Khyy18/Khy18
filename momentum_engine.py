@@ -31,6 +31,7 @@ import global_kill_switch
 from exchanges import get_adapter
 from utils.retry import retry_async
 from exchanges.base import ExchangeAdapter
+from regime_classifier import calc_adx
 
 
 # ─── EMA расчёт (без numpy) ──────────────────────────────────────────
@@ -359,7 +360,6 @@ async def _process_symbol(
 
     # ADX filter: не входим если нет тренда
     if cfg.MOMENTUM_MIN_ADX > 0:
-        from regime_classifier import calc_adx
         adx = calc_adx(klines, period=14)
         if adx < cfg.MOMENTUM_MIN_ADX:
             return f"сигнал {signal}, но ADX слишком мал ({adx:.1f} < {cfg.MOMENTUM_MIN_ADX})"
@@ -566,20 +566,22 @@ async def _manage_position(
         if pos_side == "LONG":
             new_sl = current_price * (1 - trail_distance)
             if new_sl > current_sl:
-                position["stop_loss"] = new_sl
                 # Обновляем SL на бирже
-                await retry_async(
-                    lambda: adapter.set_trading_stop(session, symbol, stop_loss=new_sl),
+                result = await retry_async(
+                    lambda _sl=new_sl: adapter.set_trading_stop(session, symbol, stop_loss=_sl),
                     max_retries=2, base_delay=0.5, label=f"trailing_SL_{symbol}",
                 )
+                if result is not None:
+                    position["stop_loss"] = new_sl
         else:
             new_sl = current_price * (1 + trail_distance)
             if new_sl < current_sl or current_sl == 0:
-                position["stop_loss"] = new_sl
-                await retry_async(
-                    lambda: adapter.set_trading_stop(session, symbol, stop_loss=new_sl),
+                result = await retry_async(
+                    lambda _sl=new_sl: adapter.set_trading_stop(session, symbol, stop_loss=_sl),
                     max_retries=2, base_delay=0.5, label=f"trailing_SL_{symbol}",
                 )
+                if result is not None:
+                    position["stop_loss"] = new_sl
 
     # Проверка SL/TP (на случай если биржа не сработала)
     current_sl = float(position.get("stop_loss", 0.0))
