@@ -396,7 +396,9 @@ async def evaluate_and_open(
         return None
     used_symbols: set[str] = {p["symbol"] for p in active_positions}
 
-    min_net_apr = float(getattr(config, "ARB_OPEN_MIN_NET_APR", 0.20))
+    # Используем минимальный threshold (tier_a) чтобы не отфильтровать
+    # кандидатов до per-candidate check.
+    min_net_apr = float(getattr(config, "ARB_OPEN_MIN_NET_APR_TIER_A", 0.12))
     allowed = list(getattr(config, "ARB_ALLOWED_SYMBOLS", []))
     cands = _select_candidates(
         snapshots, min_net_apr, allowed or None,
@@ -429,6 +431,12 @@ async def evaluate_and_open(
                     f"{legs_per_ex[short_ex_test]} ног (max={max_legs_per_ex})"
                 )
                 continue
+
+        # Dynamic threshold per-tier.
+        tier_threshold = _get_tier_threshold(c.symbol)
+        if c.net_edge_apr < tier_threshold:
+            print(f"[ARB-EXEC] {c.symbol}: net_apr {c.net_edge_apr*100:.1f}% < tier_threshold {tier_threshold*100:.1f}%, skip")
+            continue
 
         # Anti-spike: если средний funding-APR за последние 24ч сильно ниже
         # текущего spot — это спайк, входить рискованно.
@@ -737,6 +745,73 @@ def _estimate_fees(notional_usdt: float, long_ex: str, short_ex: str) -> float:
 
 
 # --- Multi-tier sizing --------------------------------------------------
+
+def _get_tier_threshold(symbol: str) -> float:
+    """Получить порог входа (min net APR) для символа на основе его tier'а.
+
+    Использует ту же логику tier'ов что _get_tier_notional:
+      - tier_a (cv < 0.30, n_obs > 200) → ARB_OPEN_MIN_NET_APR_TIER_A
+      - tier_b (cv < 0.60) → ARB_OPEN_MIN_NET_APR_TIER_B
+      - tier_c → ARB_OPEN_MIN_NET_APR_TIER_C
+      - fallback (нет истории) → ARB_OPEN_MIN_NET_APR (средний)
+    """
+    fallback = float(getattr(config, "ARB_OPEN_MIN_NET_APR", 0.20))
+    try:
+        import sqlite3
+        import statistics
+        from datetime import datetime, timedelta, timezone
+        import memory  # для DB_PATH
+    except Exception:  # noqa: BLE001
+        return fallback
+
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=30)).isoformat(
+        timespec="seconds"
+    )
+    try:
+        with sqlite3.connect(memory.DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='funding_snapshots'"
+            ).fetchone()
+            if not row:
+                return fallback
+            rows = conn.execute(
+                "SELECT rate FROM funding_snapshots "
+                "WHERE symbol = ? AND ts >= ?",
+                (symbol, cutoff),
+            ).fetchall()
+    except sqlite3.Error:
+        return fallback
+
+    if not rows:
+        return fallback
+
+    rates = [float(r[0]) for r in rows if r[0] is not None]
+    n_obs = len(rates)
+    if n_obs < 2:
+        return fallback
+
+    mean_rate = sum(rates) / n_obs
+    try:
+        std_rate = statistics.stdev(rates)
+    except statistics.StatisticsError:
+        std_rate = 0.0
+
+    if abs(mean_rate) < 1e-12:
+        return fallback
+
+    cv = std_rate / abs(mean_rate)
+
+    tier_a_thr = float(getattr(config, "ARB_OPEN_MIN_NET_APR_TIER_A", 0.12))
+    tier_b_thr = float(getattr(config, "ARB_OPEN_MIN_NET_APR_TIER_B", 0.20))
+    tier_c_thr = float(getattr(config, "ARB_OPEN_MIN_NET_APR_TIER_C", 0.35))
+
+    if cv < 0.30 and n_obs > 200:
+        return tier_a_thr
+    if cv < 0.60:
+        return tier_b_thr
+    return tier_c_thr
+
 
 def _get_tier_notional(symbol: str) -> float:
     """Подобрать notional для конкретного символа по его funding-истории.

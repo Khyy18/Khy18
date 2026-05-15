@@ -133,6 +133,12 @@ ARB_LEVERAGE = 3.0
 ARB_OPEN_MIN_NET_APR = 0.20    # >= 20% APR на входе
 ARB_CLOSE_NET_APR = 0.05       # <= 5% APR — закрываем
 
+# Dynamic threshold: разные пороги входа для разных tier'ов.
+# Стабильные символы (tier_a) можно открывать уже при 12% APR, рискованные (tier_c) — только при 35%.
+ARB_OPEN_MIN_NET_APR_TIER_A = float(os.getenv("ARB_OPEN_MIN_NET_APR_TIER_A", "0.12") or 0.12)
+ARB_OPEN_MIN_NET_APR_TIER_B = float(os.getenv("ARB_OPEN_MIN_NET_APR_TIER_B", "0.20") or 0.20)
+ARB_OPEN_MIN_NET_APR_TIER_C = float(os.getenv("ARB_OPEN_MIN_NET_APR_TIER_C", "0.35") or 0.35)
+
 # Жёсткий таймстоп.
 ARB_MAX_HOLD_HOURS = 168.0     # 1 неделя
 
@@ -196,6 +202,9 @@ FUNDING_HISTORY_WINDOW_HOURS = float(
 BREAKER_WINDOW_SEC = float(os.getenv("BREAKER_WINDOW_SEC", "60") or 60)
 BREAKER_FAIL_THRESHOLD = int(os.getenv("BREAKER_FAIL_THRESHOLD", "5") or 5)
 BREAKER_COOLDOWN_SEC = float(os.getenv("BREAKER_COOLDOWN_SEC", "600") or 600)
+
+# --- State persistence -------------------------------------------------
+STATE_PERSIST_INTERVAL_SEC = float(os.getenv("STATE_PERSIST_INTERVAL_SEC", "60") or 60)
 
 # --- Heartbeat --------------------------------------------------------
 HEARTBEAT_INTERVAL_SEC = 6 * 3600

@@ -43,6 +43,7 @@ import key_manager
 import lending_advisor
 import memory
 import rebalancer
+import state_persistence
 import telegram_bot
 from exchanges import get_adapter
 
@@ -725,6 +726,12 @@ async def trading_loop(
             await _lending_tick(session, state, now)
             await _announcement_tick(session, state, now)
             await _heartbeat_tick(session, state, now)
+
+            # State persistence: сохраняем раз в STATE_PERSIST_INTERVAL_SEC.
+            g = state["global"]
+            if (time.time() - g.get("last_persist_epoch", 0)) > 60:
+                state_persistence.persist(state)
+                g["last_persist_epoch"] = time.time()
         except Exception as exc:  # noqa: BLE001
             print(f"[LOOP] Верхнеуровневая ошибка: {exc}")
         await asyncio.sleep(TICK_SECONDS)
@@ -942,6 +949,14 @@ async def main() -> None:
     funding_history.init_db()
     state = _build_state()
 
+    # State persistence: инициализация БД и восстановление сохранённого состояния.
+    state_persistence.init_db()
+    saved = state_persistence.load()
+    if saved:
+        state_persistence.merge_into_state(state, saved)
+        print(f"[STATE] Восстановлено состояние из БД ({len(saved)} ключей)")
+    state_persistence.setup_graceful_shutdown(state)
+
     # Регистрируем state в singleton'е, чтобы модули типа
     # announcement_monitor могли читать blacklist из evaluate_and_open
     # без изменения сигнатур.
@@ -951,7 +966,19 @@ async def main() -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[MAIN] runtime_state.set_state fail (не критично): {exc}")
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(
+            limit=50,               # max total connections
+            limit_per_host=10,      # max per-host (per-exchange)
+            ttl_dns_cache=300,      # DNS кэш 5мин
+            enable_cleanup_closed=True,
+        ),
+        timeout=aiohttp.ClientTimeout(
+            total=20,       # общий лимит на запрос
+            connect=5,      # TCP connect
+            sock_read=15,   # ожидание ответа
+        ),
+    ) as session:
         print("[MAIN] Zenith Funding Arbitrage запущен")
         print(f"[MAIN] Биржи в скане: {', '.join(_FUNDING_ADAPTERS.keys()) or '—'}")
         print(

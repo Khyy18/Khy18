@@ -115,6 +115,34 @@ async def _request(
         return None
 
 
+async def _request_with_retry(
+    session: aiohttp.ClientSession,
+    method: str,
+    path: str,
+    *,
+    params: Optional[dict[str, Any]] = None,
+    body: Optional[dict[str, Any]] = None,
+    auth: bool = False,
+    max_retries: int = 3,
+    backoff_base: float = 1.0,
+) -> Optional[dict[str, Any]]:
+    """Обёртка над _request с retry + exponential backoff.
+
+    Используется для order-critical вызовов (place_order, cancel_order).
+    Для scan-вызовов (get_klines, get_funding_info) retry не нужен —
+    next scan через 5 минут.
+    """
+    for attempt in range(max_retries):
+        resp = await _request(session, method, path, params=params, body=body, auth=auth)
+        if resp is not None:
+            return resp
+        if attempt < max_retries - 1:
+            wait = backoff_base * (2 ** attempt)
+            print(f"[API] Retry {attempt+1}/{max_retries} для {path} через {wait}с")
+            await asyncio.sleep(wait)
+    return None
+
+
 # --- Публичные методы API ---
 
 async def get_server_time(session: aiohttp.ClientSession) -> Optional[dict[str, Any]]:
@@ -435,7 +463,7 @@ async def cancel_order(
         "symbol": symbol,
         "orderId": str(order_id),
     }
-    resp = await _request(session, "POST", "/v5/order/cancel", body=body, auth=True)
+    resp = await _request_with_retry(session, "POST", "/v5/order/cancel", body=body, auth=True)
     if resp and resp.get("retCode") != 0:
         print(f"[API] Ошибка cancel_order: {resp.get('retMsg')}")
     return resp
@@ -467,7 +495,7 @@ async def place_market_order(
         body["stopLoss"] = str(stop_loss)
     if take_profit is not None:
         body["takeProfit"] = str(take_profit)
-    resp = await _request(
+    resp = await _request_with_retry(
         session, "POST", "/v5/order/create", body=body, auth=True
     )
     if not resp or resp.get("retCode") != 0:
