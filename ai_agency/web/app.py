@@ -1,5 +1,6 @@
 """Веб-приложение AI-агентства на aiohttp + jinja2."""
 
+import asyncio
 import pathlib
 
 from aiohttp import web
@@ -129,9 +130,11 @@ def create_web_app() -> web.Application:
 
 
 async def start_web_app() -> None:
-    """Запустить веб-сервер."""
+    """Запустить веб-сервер (блокирует до завершения)."""
     app = create_web_app()
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, config.WEB_HOST, config.WEB_PORT)
     await site.start()
+    # Keep the process alive until cancelled
+    await asyncio.Event().wait()

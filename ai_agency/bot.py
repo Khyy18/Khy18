@@ -1,5 +1,6 @@
 """Клиентский Telegram-бот AI-агентства (python-telegram-bot v20+)."""
 
+import asyncio
 import html
 import logging
 import sys
@@ -52,6 +53,12 @@ try:
     _order_queue: "OrderQueue | None" = None
 except ImportError:
     _order_queue = None
+
+
+def set_order_queue(queue) -> None:
+    """Set the shared order queue instance (called from main_multi.py)."""
+    global _order_queue
+    _order_queue = queue
 
 logger = logging.getLogger(__name__)
 
@@ -400,8 +407,39 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Обновляем статус
     await database.update_order_status(order_id, OrderStatus.PROCESSING.value)
 
-    # Обрабатываем через AI
-    result, variant_id = await pipeline.process_order(service_type, input_text)
+    # Обрабатываем через AI (через очередь если доступна, иначе inline)
+    if _order_queue and _order_queue._running:
+        # Используем очередь для обработки
+        priority = 0 if context.user_data.get("urgent") else 1
+        wait_time = await _order_queue.enqueue_order(
+            order_id=order_id,
+            service_type=service_type.value,
+            input_text=input_text,
+            priority=priority,
+        )
+        if wait_time is not None:
+            # Очередь полна - обрабатываем inline
+            result, variant_id = await pipeline.process_order(service_type, input_text)
+        else:
+            # Заказ в очереди - ждём результат (polling)
+            import time as _time
+            _start = _time.time()
+            result = None
+            variant_id = None
+            while _time.time() - _start < 120:  # макс 2 минуты
+                await asyncio.sleep(2)
+                order_data = await database.get_order_by_id(order_id)
+                if order_data and order_data["status"] in ("completed", "failed"):
+                    result = order_data.get("output_text")
+                    variant_id = order_data.get("ab_variant_id")
+                    break
+            else:
+                # Таймаут - проверяем последний статус
+                order_data = await database.get_order_by_id(order_id)
+                result = order_data.get("output_text") if order_data else None
+                variant_id = order_data.get("ab_variant_id") if order_data else None
+    else:
+        result, variant_id = await pipeline.process_order(service_type, input_text)
 
     if result:
         await database.update_order_status(

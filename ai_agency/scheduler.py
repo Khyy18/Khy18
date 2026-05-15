@@ -189,6 +189,47 @@ async def crm_segment_update() -> None:
         await asyncio.sleep(21600)  # 6 часов
 
 
+async def crm_send_offers(bot: Bot) -> None:
+    """
+    Задача отправки персональных предложений CRM: каждые 24 часа
+    отправляет предложения клиентам на основе их сегмента.
+    Использует last_notified_at для дедупликации.
+    """
+    while True:
+        try:
+            if crm:
+                clients = await database.get_clients_inactive_days_not_notified(
+                    days=3, cooldown_hours=168
+                )
+                sent = 0
+                for client in clients:
+                    telegram_id = client["telegram_id"]
+                    segment = await crm.get_client_segment(telegram_id)
+                    # Only send offers to sleeping/active/vip segments
+                    if segment == "new":
+                        continue
+                    offer_text = crm.get_personal_offer(segment)
+                    try:
+                        await bot.send_message(
+                            chat_id=telegram_id,
+                            text=offer_text,
+                            parse_mode="HTML",
+                        )
+                        await database.update_client_last_notified(telegram_id)
+                        sent += 1
+                    except Exception as e:
+                        logger.debug(
+                            "Не удалось отправить CRM-предложение клиенту %d: %s",
+                            telegram_id, e,
+                        )
+                if sent:
+                    logger.info("CRM offers: отправлено %d предложений", sent)
+        except Exception as e:
+            logger.error("Ошибка crm_send_offers: %s", e)
+
+        await asyncio.sleep(86400)  # 24 часа
+
+
 async def monitoring_watchdog() -> None:
     """
     Задача мониторинга: каждые 5 минут проверяет здоровье системы
@@ -236,8 +277,9 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(_staggered_start(auto_posting_check(bot), 60))
     loop.create_task(_staggered_start(backup_check(), 90))
     loop.create_task(_staggered_start(crm_segment_update(), 120))
-    loop.create_task(_staggered_start(monitoring_watchdog(), 150))
+    loop.create_task(_staggered_start(crm_send_offers(bot), 150))
+    loop.create_task(_staggered_start(monitoring_watchdog(), 180))
     logger.info(
         "Планировщик задач запущен (retention, upsell, subscription_expiry, "
-        "lead_parser, auto_posting, backup, crm_segment_update, monitoring_watchdog)"
+        "lead_parser, auto_posting, backup, crm_segment_update, crm_send_offers, monitoring_watchdog)"
     )

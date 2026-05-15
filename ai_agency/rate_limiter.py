@@ -1,4 +1,11 @@
-"""Rate limiter: защита от спама и злоупотреблений в боте."""
+"""Rate limiter: защита от спама и злоупотреблений в боте.
+
+NOTE: Rate limiter state is in-memory and per-process. In the current
+single-process deployment (main_multi.py runs all bots in one asyncio loop)
+this is sufficient. If multiple independent bot processes are deployed behind
+a load balancer, users routed to different processes could bypass limits.
+For multi-process deployments, consider using Redis or a shared SQLite table.
+"""
 
 import logging
 import time

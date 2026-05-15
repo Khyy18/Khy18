@@ -2,7 +2,7 @@
 
 import logging
 import os
-import shutil
+import sqlite3
 from datetime import datetime
 from typing import List
 
@@ -15,7 +15,8 @@ async def backup_database() -> str:
     """
     Создать резервную копию базы данных.
 
-    Копирует DATABASE_PATH в BACKUP_DIR с таймстампом.
+    Использует sqlite3 backup API для получения консистентного снапшота
+    даже при активных записях.
     Возвращает путь к созданной копии.
     """
     backup_dir = config.BACKUP_DIR
@@ -30,7 +31,17 @@ async def backup_database() -> str:
         logger.warning("БД не найдена: %s, бэкап пропущен", db_path)
         return ""
 
-    shutil.copy2(db_path, backup_path)
+    # Используем sqlite3 backup API для консистентной копии
+    source = sqlite3.connect(db_path)
+    try:
+        dest = sqlite3.connect(backup_path)
+        try:
+            source.backup(dest)
+        finally:
+            dest.close()
+    finally:
+        source.close()
+
     file_size = os.path.getsize(backup_path)
     logger.info(
         "Бэкап создан: %s (%.2f MB)",

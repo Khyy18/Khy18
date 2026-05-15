@@ -147,6 +147,18 @@ class OrderQueue:
 
             self._active_workers += 1
             start_time = time.time()
+
+            # Уведомляем GracefulShutdown о начале задачи
+            _graceful_shutdown = None
+            try:
+                from resilience import GracefulShutdown
+                import main_multi
+                _graceful_shutdown = getattr(main_multi, '_graceful_shutdown', None)
+            except (ImportError, AttributeError):
+                pass
+            if _graceful_shutdown:
+                _graceful_shutdown.task_started()
+
             try:
                 # Импорт pipeline здесь для избежания циклических импортов
                 import pipeline
@@ -178,3 +190,6 @@ class OrderQueue:
                 self._total_processed += 1
                 self._active_workers -= 1
                 self._queue.task_done()
+                # Уведомляем GracefulShutdown о завершении задачи
+                if _graceful_shutdown:
+                    _graceful_shutdown.task_finished()

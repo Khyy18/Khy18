@@ -8,17 +8,20 @@ import config
 
 
 async def get_connection() -> aiosqlite.Connection:
-    """Получить подключение к БД."""
+    """Получить подключение к БД с WAL режимом и busy_timeout."""
     conn = await aiosqlite.connect(config.DATABASE_PATH)
     conn.row_factory = aiosqlite.Row
+    await conn.execute("PRAGMA journal_mode=WAL")
+    await conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
 async def init_db() -> None:
     """Инициализация базы данных: создание таблиц, включение WAL."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        # WAL-режим для лучшей конкурентности
+        # WAL-режим для лучшей конкурентности + busy_timeout для Docker multi-container
         await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=5000")
         await db.execute("""
             CREATE TABLE IF NOT EXISTS clients (
                 telegram_id INTEGER PRIMARY KEY,

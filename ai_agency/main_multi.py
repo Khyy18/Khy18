@@ -76,6 +76,12 @@ async def run_multi() -> None:
     if _order_queue:
         await _order_queue.start()
         logger.info("Очередь заказов запущена")
+        # Передаём очередь в bot-модуль для использования при обработке заказов
+        try:
+            from bot import set_order_queue
+            set_order_queue(_order_queue)
+        except (ImportError, AttributeError):
+            pass
 
     # Запуск watchdog мониторинга
     monitoring_task = None

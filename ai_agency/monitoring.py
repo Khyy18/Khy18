@@ -102,17 +102,13 @@ async def health_check() -> Dict:
         results["checks"]["database"] = {"status": "error", "detail": str(e)}
         results["status"] = "unhealthy"
 
-    # Проверка OpenAI API
+    # Проверка OpenAI API (используем /v1/models вместо реального вызова чтобы не тратить кредиты)
     try:
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         await asyncio.wait_for(
-            client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=5,
-            ),
+            client.models.list(),
             timeout=10.0,
         )
         results["checks"]["openai"] = {"status": "ok"}
@@ -176,7 +172,7 @@ async def watchdog(interval: int = 300) -> None:
         except Exception as e:
             consecutive_failures += 1
             logger.warning("Watchdog: бот не отвечает (попытка %d): %s", consecutive_failures, e)
-            if consecutive_failures >= 1:
+            if consecutive_failures >= 3:
                 await send_alert_to_admin(
                     f"Бот не отвечает уже {consecutive_failures * interval} секунд!\nОшибка: {e}"
                 )
