@@ -837,6 +837,38 @@ class OKXAdapter(ExchangeAdapter):
             "interval_hours": float(interval_hours),
         }
 
+    # --- Limit order (для grid-бота) --------------------------------------
+
+    async def place_limit_order(
+        self,
+        session: Any,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        post_only: bool = True,
+        reduce_only: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        """Чистый лимитный PostOnly ордер через OKX V5 API.
+
+        Возвращает {"order_id": str, "status": str, "price": float, "qty": float}
+        или None при ошибке. Не делает fallback в market.
+        """
+        norm = _normalize_symbol(symbol)
+        ord_type = "post_only" if post_only else "limit"
+        resp = await self._place_raw_order(
+            session, norm, side, ord_type, qty, price=price, reduce_only=reduce_only,
+        )
+        if not resp or str(resp.get("code")) != "0":
+            return None
+        data = resp.get("data") or []
+        if not data:
+            return None
+        order_id = data[0].get("ordId", "")
+        if not order_id:
+            return None
+        return {"order_id": order_id, "status": "NEW", "price": price, "qty": qty}
+
     # --- Funding history (honest PnL accounting) ------------------------
 
     async def get_funding_history(
