@@ -1,0 +1,155 @@
+"""AI-аллокатор банкролла: Kelly criterion + LLM-коррекция.
+
+Рассчитывает оптимальные ставки на основе критерия Келли
+с консервативным половинным Келли и AI-корректировкой рисков.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from typing import Any, Optional
+
+import aiohttp
+
+# Импорт ai_router из корневого проекта
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import ai_router  # noqa: E402
+
+from arbitrage import config  # noqa: E402
+
+
+# Максимальная доля банкролла на одну ставку (%)
+MAX_BET_PCT: float = config.MAX_BET_PCT
+
+
+def kelly_fraction(odds: float, win_prob: float) -> float:
+    """Рассчитать оптимальную долю банкролла по критерию Келли.
+
+    f* = (b*p - q) / b
+    где b = odds - 1, p = win_prob, q = 1 - p
+
+    Результат зажат в диапазоне [0, 1].
+    """
+    b = odds - 1.0
+    if b <= 0:
+        return 0.0
+    p = win_prob
+    q = 1.0 - p
+    f_star = (b * p - q) / b
+    return max(0.0, min(1.0, f_star))
+
+
+class BankrollAllocator:
+    """Распределение банкролла с Kelly criterion и AI-коррекцией."""
+
+    def __init__(self, session: aiohttp.ClientSession, bankroll: float = 1000.0) -> None:
+        self._session = session
+        self._bankroll = bankroll
+
+    async def allocate(
+        self,
+        opportunities: list[dict[str, Any]],
+        bankroll: float,
+    ) -> list[dict[str, Any]]:
+        """Рассчитать оптимальные ставки для списка возможностей.
+
+        Для каждой возможности:
+          1. Рассчитать Kelly fraction
+          2. Применить half-Kelly (консервативно)
+          3. Ограничить MAX_BET_PCT
+          4. Запросить AI-коррекцию
+
+        Возвращает список dict:
+          {opportunity, stake_amount, kelly_fraction, ai_adjustment_reason}
+        """
+        if not opportunities:
+            return []
+
+        allocations: list[dict[str, Any]] = []
+        max_stake = bankroll * (MAX_BET_PCT / 100.0)
+
+        for opp in opportunities:
+            odds = float(opp.get("best_odds", opp.get("odds", 2.0)))
+            win_prob = float(opp.get("win_prob", opp.get("implied_prob", 0.5)))
+
+            kf = kelly_fraction(odds, win_prob)
+            # Half-Kelly для консервативности
+            half_kelly = kf / 2.0
+            stake = bankroll * half_kelly
+            # Ограничение максимальной ставки
+            stake = min(stake, max_stake)
+
+            allocations.append({
+                "opportunity": opp,
+                "stake_amount": round(stake, 2),
+                "kelly_fraction": round(kf, 4),
+                "ai_adjustment_reason": "",
+            })
+
+        # AI-коррекция портфеля
+        ai_adjustments = await self._get_ai_adjustments(allocations, bankroll)
+        if ai_adjustments:
+            for i, alloc in enumerate(allocations):
+                adj = ai_adjustments.get(str(i))
+                if adj:
+                    factor = float(adj.get("factor", 1.0))
+                    reason = str(adj.get("reason", ""))
+                    alloc["stake_amount"] = round(alloc["stake_amount"] * factor, 2)
+                    # Повторно ограничить после корректировки
+                    alloc["stake_amount"] = min(alloc["stake_amount"], max_stake)
+                    alloc["ai_adjustment_reason"] = reason
+
+        return allocations
+
+    async def _get_ai_adjustments(
+        self,
+        allocations: list[dict[str, Any]],
+        bankroll: float,
+    ) -> Optional[dict[str, Any]]:
+        """Запросить AI-коррекцию распределения ставок."""
+        total_exposure = sum(a["stake_amount"] for a in allocations)
+        exposure_pct = (total_exposure / bankroll * 100.0) if bankroll > 0 else 0.0
+
+        portfolio_summary = []
+        for i, alloc in enumerate(allocations):
+            opp = alloc["opportunity"]
+            portfolio_summary.append({
+                "index": i,
+                "event": opp.get("event", "неизвестно"),
+                "sport": opp.get("sport", "неизвестно"),
+                "stake": alloc["stake_amount"],
+                "kelly": alloc["kelly_fraction"],
+                "odds": opp.get("best_odds", opp.get("odds", 0)),
+            })
+
+        prompt = (
+            "Ты - риск-менеджер спортивного арбитража. "
+            "Проанализируй портфель ставок и предложи корректировки.\n\n"
+            f"Банкролл: {bankroll:.2f}\n"
+            f"Общая экспозиция: {total_exposure:.2f} ({exposure_pct:.1f}%)\n"
+            f"Максимум на ставку: {MAX_BET_PCT}%\n\n"
+            f"Позиции:\n{portfolio_summary}\n\n"
+            "Учитывай:\n"
+            "- Диверсификация по видам спорта\n"
+            "- Коррелированные события (один и тот же матч)\n"
+            "- Общий риск портфеля\n"
+            "- Снижение ставки при высокой неопределённости\n\n"
+            "Ответь в формате JSON:\n"
+            '{"0": {"factor": 1.0, "reason": ""}, "1": {"factor": 0.8, "reason": "..."}, ...}\n'
+            "factor - множитель к текущей ставке (0.5-1.5). "
+            "Если корректировка не нужна - factor=1.0, reason пустая строка."
+        )
+
+        try:
+            resp = await ai_router.call_llm_json(
+                self._session,
+                prompt,
+                max_output_tokens=256,
+                temperature=0.2,
+                timeout=20,
+            )
+            return resp
+        except Exception as exc:
+            print(f"[AI_ALLOCATOR] Ошибка AI-коррекции: {exc}")
+            return None
