@@ -41,6 +41,12 @@ try:
 except ImportError:
     monitoring = None
 
+# Интеграция whitelabel (graceful)
+try:
+    import whitelabel
+except ImportError:
+    whitelabel = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,6 +120,31 @@ async def run_multi() -> None:
         niche_apps.append(app)
         logger.info("Created niche bot: %s (services: %s)", name, services)
 
+    # White-label боты из БД
+    whitelabel_apps = []
+    if whitelabel and config.WHITELABEL_ENABLED:
+        try:
+            wl_bots = await whitelabel.get_whitelabel_bots(active_only=True)
+            for wl_bot in wl_bots:
+                wl_token = wl_bot.get("token", "")
+                wl_name = wl_bot.get("bot_name", "WhiteLabel")
+                wl_services = wl_bot.get("allowed_services", [])
+                wl_persona = wl_bot.get("persona", config.BOT_PERSONA_NAME)
+
+                if not wl_token:
+                    continue
+
+                wl_app = create_bot_application(
+                    token=wl_token,
+                    name=wl_name,
+                    service_types=wl_services,
+                    persona_name=wl_persona,
+                )
+                whitelabel_apps.append(wl_app)
+                logger.info("Created whitelabel bot: %s", wl_name)
+        except Exception as e:
+            logger.error("Error loading whitelabel bots: %s", e)
+
     # Собираем все задачи
     shutdown_event = asyncio.Event()
 
@@ -137,7 +168,7 @@ async def run_multi() -> None:
                 pass
 
     # Запускаем все боты
-    all_apps = [main_app] + niche_apps
+    all_apps = [main_app] + niche_apps + whitelabel_apps
 
     async def run_bot(app) -> None:
         """Запустить бот в polling-режиме до получения сигнала остановки."""
@@ -156,8 +187,8 @@ async def run_multi() -> None:
     tasks = [asyncio.create_task(run_bot(app)) for app in all_apps]
 
     logger.info(
-        "Running %d bot(s): main + %d niche",
-        len(all_apps), len(niche_apps),
+        "Running %d bot(s): main + %d niche + %d whitelabel",
+        len(all_apps), len(niche_apps), len(whitelabel_apps),
     )
 
     # Ожидаем завершения всех задач или остановки

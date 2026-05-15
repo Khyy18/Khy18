@@ -287,6 +287,57 @@ async def init_db() -> None:
                 FOREIGN KEY (webhook_id) REFERENCES webhook_endpoints(id)
             )
         """)
+        # Таблица whitelabel_bots для white-label системы
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS whitelabel_bots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                token TEXT NOT NULL,
+                bot_name TEXT NOT NULL,
+                persona TEXT NOT NULL DEFAULT 'Assistant',
+                allowed_services TEXT NOT NULL DEFAULT '[]',
+                pricing_multiplier REAL NOT NULL DEFAULT 1.0,
+                revenue_share REAL NOT NULL DEFAULT 0.3,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица whitelabel_revenue для доходов white-label
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS whitelabel_revenue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id INTEGER NOT NULL,
+                order_id INTEGER,
+                amount REAL NOT NULL,
+                owner_share REAL NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (bot_id) REFERENCES whitelabel_bots(id)
+            )
+        """)
+        # Таблица templates для маркетплейса
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                preview TEXT NOT NULL,
+                full_text TEXT NOT NULL,
+                price REAL NOT NULL DEFAULT 50.0,
+                sales_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица template_purchases для покупок шаблонов
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS template_purchases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL,
+                purchased_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (client_id) REFERENCES clients(telegram_id),
+                FOREIGN KEY (template_id) REFERENCES templates(id)
+            )
+        """)
         await db.commit()
 
 

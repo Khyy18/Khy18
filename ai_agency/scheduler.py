@@ -47,6 +47,24 @@ try:
 except ImportError:
     ad_manager = None
 
+# Интеграция content_farm (graceful)
+try:
+    import content_farm
+except ImportError:
+    content_farm = None
+
+# Интеграция marketplace (graceful)
+try:
+    import marketplace as marketplace_module
+except ImportError:
+    marketplace_module = None
+
+# Интеграция demo_generator (graceful)
+try:
+    import demo_generator
+except ImportError:
+    demo_generator = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -363,6 +381,62 @@ async def ad_budget_check(bot: Bot) -> None:
         await asyncio.sleep(604800)  # 7 дней
 
 
+async def content_farm_check(bot: Bot) -> None:
+    """
+    Задача контент-фермы: каждые 30 минут проверяет расписание
+    и публикует посты в каналы.
+    """
+    while True:
+        try:
+            if content_farm:
+                posted = await content_farm.check_and_post(bot)
+                if posted:
+                    logger.info("Content farm: опубликовано %d постов", posted)
+        except Exception as e:
+            logger.error("Ошибка content_farm_check: %s", e)
+
+        await asyncio.sleep(1800)  # 30 минут
+
+
+async def marketplace_replenish() -> None:
+    """
+    Задача пополнения маркетплейса: ежедневно генерирует
+    новые шаблоны для каждой категории.
+    """
+    while True:
+        try:
+            if marketplace_module:
+                for category in marketplace_module.CATEGORIES:
+                    created = await marketplace_module.generate_new_templates(category, count=2)
+                    if created:
+                        logger.info(
+                            "Marketplace: сгенерировано %d шаблонов для %s",
+                            len(created), category,
+                        )
+        except Exception as e:
+            logger.error("Ошибка marketplace_replenish: %s", e)
+
+        await asyncio.sleep(86400)  # 24 часа
+
+
+async def demo_generator_check(bot: Bot) -> None:
+    """
+    Задача генерации демо: ежедневно генерирует демо-контент
+    и рекламные креативы для всех услуг.
+    """
+    while True:
+        try:
+            if demo_generator:
+                demos = await demo_generator.auto_generate_demos()
+                generated = sum(1 for v in demos.values() if v)
+                if generated:
+                    logger.info("Demo generator: сгенерировано %d демо", generated)
+        except Exception as e:
+            logger.error("Ошибка demo_generator_check: %s", e)
+
+        await asyncio.sleep(86400)  # 24 часа
+
+
 def start_scheduler(bot: Bot) -> None:
     """
     Запустить все фоновые задачи в текущем event loop.
@@ -392,8 +466,12 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(_staggered_start(review_posting_check(bot), 220))
     loop.create_task(_staggered_start(service_discovery_check(bot), 240))
     loop.create_task(_staggered_start(ad_budget_check(bot), 260))
+    loop.create_task(_staggered_start(content_farm_check(bot), 280))
+    loop.create_task(_staggered_start(marketplace_replenish(), 300))
+    loop.create_task(_staggered_start(demo_generator_check(bot), 320))
     logger.info(
         "Планировщик задач запущен (retention, upsell, subscription_expiry, "
         "lead_parser, auto_posting, backup, crm_segment_update, crm_send_offers, "
-        "monitoring_watchdog, funnel_check, review_posting, service_discovery, ad_budget)"
+        "monitoring_watchdog, funnel_check, review_posting, service_discovery, "
+        "ad_budget, content_farm, marketplace_replenish, demo_generator)"
     )

@@ -114,6 +114,20 @@ ADMIN_DASHBOARD_PASSWORD: str = os.getenv("ADMIN_DASHBOARD_PASSWORD", "")
 # Mini App
 MINI_APP_URL: str = os.getenv("MINI_APP_URL", "")
 
+# Stripe (международные платежи)
+STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+
+# NOWPayments (крипто-платежи)
+NOWPAYMENTS_API_KEY: str = os.getenv("NOWPAYMENTS_API_KEY", "")
+NOWPAYMENTS_IPN_SECRET: str = os.getenv("NOWPAYMENTS_IPN_SECRET", "")
+
+# Контент-ферма (автопостинг в каналы)
+CONTENT_FARM_CHANNELS: str = os.getenv("CONTENT_FARM_CHANNELS", "[]")
+
+# White-label система
+WHITELABEL_ENABLED: bool = os.getenv("WHITELABEL_ENABLED", "False").lower() in ("true", "1", "yes")
+
 
 def validate_config() -> List[str]:
     """

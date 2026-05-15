@@ -137,3 +137,16 @@ async def create_ad_campaign(channel: str, budget: float) -> int:
         )
         await db.commit()
         return cursor.lastrowid
+
+
+async def get_demo_creatives() -> List[dict]:
+    """Get demo creatives from demo_generator for ad campaigns."""
+    try:
+        import demo_generator
+        return await demo_generator.get_demo_creatives()
+    except ImportError:
+        logger.debug("demo_generator not available")
+        return []
+    except Exception as e:
+        logger.error("Error getting demo creatives: %s", e)
+        return []

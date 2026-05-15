@@ -73,6 +73,30 @@ try:
 except ImportError:
     _order_queue = None
 
+# Интеграция voice_handler (graceful)
+try:
+    import voice_handler as voice_handler_module
+except ImportError:
+    voice_handler_module = None
+
+# Интеграция vision_handler (graceful)
+try:
+    import vision_handler as vision_handler_module
+except ImportError:
+    vision_handler_module = None
+
+# Интеграция upsell_agent (graceful)
+try:
+    import upsell_agent as upsell_agent_module
+except ImportError:
+    upsell_agent_module = None
+
+# Интеграция marketplace (graceful)
+try:
+    import marketplace as marketplace_module
+except ImportError:
+    marketplace_module = None
+
 
 def set_order_queue(queue) -> None:
     """Set the shared order queue instance (called from main_multi.py)."""
@@ -164,6 +188,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard.append([
         InlineKeyboardButton("\U0001f4cb Мои заказы", callback_data="my_orders"),
     ])
+
+    # Кнопка маркетплейса
+    if marketplace_module:
+        keyboard.append([
+            InlineKeyboardButton("\U0001f6cd Маркетплейс", callback_data="marketplace"),
+        ])
 
     # WebAppInfo button for Mini App
     if config.MINI_APP_URL:
@@ -1187,6 +1217,29 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # --- Post-init: запуск планировщика ---
 
+async def _handle_voice_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Wrapper для обработки голосовых сообщений."""
+    if voice_handler_module:
+        return await voice_handler_module.handle_voice(update, context)
+    # Если модуль недоступен, сообщаем пользователю
+    await update.message.reply_text(
+        "\u274c Голосовой ввод временно недоступен. Отправьте текст.",
+        parse_mode=ParseMode.HTML,
+    )
+    return ENTER_TEXT
+
+
+async def _handle_photo_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Wrapper для обработки фото."""
+    if vision_handler_module:
+        return await vision_handler_module.handle_photo(update, context)
+    await update.message.reply_text(
+        "\u274c Распознавание фото временно недоступно. Отправьте текст.",
+        parse_mode=ParseMode.HTML,
+    )
+    return ENTER_TEXT
+
+
 async def post_init(application: Application) -> None:
     """Вызывается после инициализации приложения. Запускает планировщик."""
     scheduler.start_scheduler(application.bot)
@@ -1209,6 +1262,8 @@ def create_application() -> Application:
                 CallbackQueryHandler(select_service),
             ],
             ENTER_TEXT: [
+                MessageHandler(filters.VOICE | filters.AUDIO, _handle_voice_wrapper),
+                MessageHandler(filters.PHOTO, _handle_photo_wrapper),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, enter_text),
             ],
             SELECT_URGENCY: [
@@ -1256,6 +1311,30 @@ def create_application() -> Application:
     # Регистрация обработчиков Telegram Stars платежей
     if telegram_payments:
         telegram_payments.register_payment_handlers(application)
+
+    # Обработчики маркетплейса
+    if marketplace_module:
+        application.add_handler(
+            CallbackQueryHandler(marketplace_module.show_marketplace, pattern=r"^marketplace$")
+        )
+        application.add_handler(
+            CallbackQueryHandler(marketplace_module.show_category, pattern=r"^mkt_cat:")
+        )
+        application.add_handler(
+            CallbackQueryHandler(marketplace_module.show_template_preview, pattern=r"^mkt_tpl:\d+$")
+        )
+        application.add_handler(
+            CallbackQueryHandler(marketplace_module.handle_purchase, pattern=r"^mkt_buy:\d+$")
+        )
+
+    # Обработчики upsell
+    if upsell_agent_module:
+        application.add_handler(
+            CallbackQueryHandler(upsell_agent_module.handle_upsell_purchase, pattern=r"^upsell:")
+        )
+        application.add_handler(
+            CallbackQueryHandler(upsell_agent_module.handle_upsell_purchase, pattern=r"^upsell_skip$")
+        )
 
     return application
 

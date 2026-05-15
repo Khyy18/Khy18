@@ -253,6 +253,34 @@ All services include health checks:
 | `document_generator.py` | DOCX/PDF document generation |
 | `bot_factory.py` | Multi-bot architecture factory |
 
+### Voice and Vision
+
+| Module | Description |
+|--------|-------------|
+| `voice_handler.py` | Voice/audio transcription via OpenAI Whisper API |
+| `vision_handler.py` | Image text extraction via GPT-4o Vision |
+
+### International Payments
+
+| Module | Description |
+|--------|-------------|
+| `international_payments.py` | Stripe Checkout + NOWPayments crypto integration |
+
+### Content and Marketing Automation
+
+| Module | Description |
+|--------|-------------|
+| `content_farm.py` | Auto-generate and post content to Telegram channels |
+| `upsell_agent.py` | Post-order add-on suggestions with AI-generated recommendations |
+| `demo_generator.py` | Demo content and ad creative generation for all services |
+| `marketplace.py` | Template marketplace with categories, preview, and purchase |
+
+### B2B and White-Label
+
+| Module | Description |
+|--------|-------------|
+| `whitelabel.py` | White-label bot management, revenue sharing, partner stats |
+
 ## Queue System
 
 The order queue (`queue_manager.py`) provides:

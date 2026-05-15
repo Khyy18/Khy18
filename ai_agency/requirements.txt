@@ -16,5 +16,6 @@ python-docx
 python-telegram-bot>=20.0
 reportlab
 sentry-sdk[pure_eval]>=1.0
+stripe
 uvicorn
 yookassa>=3.0
