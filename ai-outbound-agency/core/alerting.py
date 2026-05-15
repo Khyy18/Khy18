@@ -393,6 +393,8 @@ class AlertingEngine:
         """Check if all LinkedIn sessions are restricted.
 
         Uses Redis counters for LinkedIn total sessions and failures.
+        When total sessions data is unavailable, falls back to checking
+        if failures exceed a minimum threshold of 1.
 
         Args:
             threshold: Not used (triggers when all sessions have failed).
@@ -406,6 +408,12 @@ class AlertingEngine:
         total_sessions = int(total_str) if total_str else 0
 
         if total_sessions == 0:
+            # Fallback: if total sessions key is not set, use simple threshold logic.
+            # Alert fires if there are any failures recorded (failures > 0).
+            if failures > 0:
+                is_triggered = True
+                message = f"LinkedIn failures detected: {failures} (total sessions unknown)"
+                return is_triggered, float(failures), message
             return False, 0.0, "No LinkedIn sessions configured"
 
         is_triggered = failures >= total_sessions

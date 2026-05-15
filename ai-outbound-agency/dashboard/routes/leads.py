@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from core.models import Lead, User
 from dashboard.auth import get_current_user
+from dashboard.routes.trial import check_trial_limits
 from dashboard.schemas import (
     HotLeadsResponse,
     LeadCreate,
@@ -35,6 +36,9 @@ async def create_lead(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(_get_session),
 ) -> Lead:
+    # Enforce trial limits for lead creation
+    await check_trial_limits(current_user.tenant_id, session, resource="leads")
+
     lead = Lead(
         tenant_id=current_user.tenant_id,
         email=data.email,
