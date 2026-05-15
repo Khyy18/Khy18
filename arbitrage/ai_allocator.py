@@ -26,7 +26,7 @@ try:
 except ImportError:
     ai_router = None  # type: ignore
 
-from arbitrage import config
+from arbitrage import config, memory
 
 
 # Максимальная доля банкролла на одну ставку (%)
@@ -215,8 +215,6 @@ class BankrollAllocator:
 
     def _build_kelly_state(self, bankroll: float) -> dict[str, Any]:
         """Build state dict for DynamicKelly from recent bets."""
-        from arbitrage import memory
-
         recent = memory.get_recent_bets(50)
         pnls = [float(b.get("pnl") or 0.0) for b in recent if b.get("pnl") is not None]
 

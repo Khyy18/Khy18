@@ -138,6 +138,9 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 else:
                     all_events.extend(result)
 
+            # Store last events for stream arb detector comparison
+            state["last_events"] = all_events[-50:]
+
             if not all_events:
                 logger.info("Нет событий для анализа")
                 await asyncio.sleep(sleep_interval)
@@ -545,6 +548,7 @@ async def settlement_loop(state: dict[str, Any], session: aiohttp.ClientSession)
     last_learn_time: float = 0.0
     learn_interval: float = 86400.0  # 24 часа
     settle_interval: float = 1800.0  # 30 минут
+    last_reset_date: str = ""
 
     while True:
         try:
@@ -565,6 +569,13 @@ async def settlement_loop(state: dict[str, Any], session: aiohttp.ClientSession)
                 memory.save_bankroll_state(new_bankroll)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Ошибка расчёта: %s", exc)
+
+            # Ежедневный сброс daily_used для пула аккаунтов
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if today != last_reset_date:
+                memory.reset_daily_used_pool()
+                last_reset_date = today
+                logger.info("Сброс daily_used для accounts_pool выполнен")
 
             # Обучение раз в 24 часа
             now = time.time()
@@ -654,6 +665,30 @@ async def stream_arb_detector(state: dict[str, Any], session: aiohttp.ClientSess
             "runners": runners,
             "updated_ts": datetime.now(timezone.utc).isoformat(),
         }
+
+        # Check for arb opportunities against last scan data
+        last_events = state.get("last_events", [])
+        if last_events and runners:
+            for runner in runners:
+                back_prices = runner.get("back_prices", [])
+                if back_prices:
+                    best_back = back_prices[0][0] if isinstance(back_prices[0], list) else back_prices[0]
+                    # Compare with soft bookmaker odds from last scan
+                    for event in last_events[-20:]:
+                        for bk in event.get("bookmakers", []):
+                            if bk.get("key") in ("betfair", "betfair_ex_uk"):
+                                continue
+                            for market in bk.get("markets", []):
+                                for outcome in market.get("outcomes", []):
+                                    soft_odds = outcome.get("price", 0)
+                                    if soft_odds > 1.0 and best_back > 1.0:
+                                        inv_sum = 1.0 / soft_odds + 1.0 / best_back
+                                        if inv_sum < 0.98:
+                                            profit_pct = (1.0 / inv_sum - 1.0) * 100.0
+                                            logger.info(
+                                                "[STREAM_ARB] Арб обнаружен: market=%s, profit=%.2f%%",
+                                                market_id, profit_pct,
+                                            )
 
         logger.debug(
             "[STREAM_ARB] Price change: market=%s, runners=%d",

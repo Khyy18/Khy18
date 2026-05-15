@@ -72,5 +72,10 @@ class DynamicKelly:
                 )
 
         factor = max(0.0, min(1.0, factor))
+
+        # Minimum floor to avoid completely stopping bets (except at max drawdown)
+        if factor > 0.0:
+            factor = max(0.1, factor)
+
         logger.debug("[DYNAMIC_KELLY] factor=%.3f (dd=%.1f%%, streak=%d)", factor, drawdown_pct, losing_streak)
         return round(factor, 4)
