@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - AI Outbound Agency{% endblock %}
+{% block page_title %}Dashboard Overview{% endblock %}
+
+{% block content %}
+<!-- Key Metrics Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8"
+     hx-get="/api/analytics/funnel"
+     hx-trigger="load"
+     hx-swap="innerHTML"
+     hx-headers='js:{"Authorization": "Bearer " + localStorage.getItem("access_token")}'>
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-sm font-medium text-gray-500">Total Leads</h3>
+        <p class="text-3xl font-bold text-gray-800 mt-2" id="metric-leads">--</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-sm font-medium text-gray-500">Active Campaigns</h3>
+        <p class="text-3xl font-bold text-gray-800 mt-2" id="metric-campaigns">--</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-sm font-medium text-gray-500">Messages Sent</h3>
+        <p class="text-3xl font-bold text-gray-800 mt-2" id="metric-messages">--</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-sm font-medium text-gray-500">Reply Rate</h3>
+        <p class="text-3xl font-bold text-gray-800 mt-2" id="metric-reply-rate">--</p>
+    </div>
+</div>
+
+<!-- Funnel Visualization -->
+<div class="bg-white rounded-lg shadow p-6 mb-8">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">Lead Funnel</h3>
+    <div class="space-y-3">
+        <div class="flex items-center">
+            <span class="w-24 text-sm text-gray-600">New</span>
+            <div class="flex-1 bg-gray-200 rounded-full h-6">
+                <div class="bg-blue-500 h-6 rounded-full" style="width: 100%" id="funnel-new"></div>
+            </div>
+            <span class="ml-3 text-sm font-medium text-gray-700" id="funnel-new-count">0</span>
+        </div>
+        <div class="flex items-center">
+            <span class="w-24 text-sm text-gray-600">Contacted</span>
+            <div class="flex-1 bg-gray-200 rounded-full h-6">
+                <div class="bg-indigo-500 h-6 rounded-full" style="width: 75%" id="funnel-contacted"></div>
+            </div>
+            <span class="ml-3 text-sm font-medium text-gray-700" id="funnel-contacted-count">0</span>
+        </div>
+        <div class="flex items-center">
+            <span class="w-24 text-sm text-gray-600">Replied</span>
+            <div class="flex-1 bg-gray-200 rounded-full h-6">
+                <div class="bg-green-500 h-6 rounded-full" style="width: 50%" id="funnel-replied"></div>
+            </div>
+            <span class="ml-3 text-sm font-medium text-gray-700" id="funnel-replied-count">0</span>
+        </div>
+        <div class="flex items-center">
+            <span class="w-24 text-sm text-gray-600">Qualified</span>
+            <div class="flex-1 bg-gray-200 rounded-full h-6">
+                <div class="bg-yellow-500 h-6 rounded-full" style="width: 30%" id="funnel-qualified"></div>
+            </div>
+            <span class="ml-3 text-sm font-medium text-gray-700" id="funnel-qualified-count">0</span>
+        </div>
+        <div class="flex items-center">
+            <span class="w-24 text-sm text-gray-600">Booked</span>
+            <div class="flex-1 bg-gray-200 rounded-full h-6">
+                <div class="bg-emerald-500 h-6 rounded-full" style="width: 15%" id="funnel-booked"></div>
+            </div>
+            <span class="ml-3 text-sm font-medium text-gray-700" id="funnel-booked-count">0</span>
+        </div>
+        <div class="flex items-center">
+            <span class="w-24 text-sm text-gray-600">Lost</span>
+            <div class="flex-1 bg-gray-200 rounded-full h-6">
+                <div class="bg-red-500 h-6 rounded-full" style="width: 10%" id="funnel-lost"></div>
+            </div>
+            <span class="ml-3 text-sm font-medium text-gray-700" id="funnel-lost-count">0</span>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity -->
+<div class="bg-white rounded-lg shadow p-6">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">Recent Activity</h3>
+    <div class="text-gray-500 text-sm">
+        <p>Activity feed will appear here as you send messages and receive replies.</p>
+    </div>
+</div>
+{% endblock %}

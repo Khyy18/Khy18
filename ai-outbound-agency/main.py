@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from core.config import settings
@@ -16,6 +17,7 @@ from dashboard.routes.campaigns import router as campaigns_router
 from dashboard.routes.leads import router as leads_router
 from dashboard.routes.sequences import router as sequences_router
 from dashboard.routes.analytics import router as analytics_router
+from dashboard.views import router as views_router
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +176,13 @@ app.include_router(campaigns_router)
 app.include_router(leads_router)
 app.include_router(sequences_router)
 app.include_router(analytics_router)
+app.include_router(views_router)
+
+# Mount static files
+import os as _os
+
+_static_dir = _os.path.join(_os.path.dirname(__file__), "dashboard", "static")
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 class ReplyWebhookPayload(BaseModel):
