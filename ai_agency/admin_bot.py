@@ -23,6 +23,7 @@ from telegram.constants import ParseMode
 import config
 import database
 import billing
+import analytics
 from utils import _card, format_number, status_indicator
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     keyboard = [
         [InlineKeyboardButton("\U0001f4ca Статистика", callback_data="stats")],
+        [InlineKeyboardButton("\U0001f4c8 Аналитика", callback_data="analytics")],
         [InlineKeyboardButton("\U0001f4cb Последние заказы", callback_data="recent_orders")],
         [InlineKeyboardButton("\U0001f465 Клиенты", callback_data="clients")],
         [InlineKeyboardButton("\U0001f4b3 Пополнить баланс", callback_data="topup")],
@@ -99,6 +101,8 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     if action == "stats":
         return await show_stats(update, context)
+    elif action == "analytics":
+        return await show_analytics(update, context)
     elif action == "recent_orders":
         return await show_recent_orders(update, context)
     elif action == "clients":
@@ -137,6 +141,19 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"  Выручка: {format_number(month_revenue)} \u20bd",
     ]
     text = _card("Статистика", "\U0001f4ca", body)
+
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+# --- Аналитика (дашборд) ---
+
+async def show_analytics(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показать аналитический дашборд."""
+    query = update.callback_query
+
+    data = await analytics.get_dashboard_data()
+    text = analytics.format_dashboard(data)
 
     await query.edit_message_text(text, parse_mode=ParseMode.HTML)
     return ConversationHandler.END

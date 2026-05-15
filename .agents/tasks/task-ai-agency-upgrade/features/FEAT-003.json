@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Bot upgrades: referral system, rating/auto-redo, subscription UI, payment UI in client bot. Analytics dashboard and broadcast commands in admin bot. Scheduler for automated messages.",
+  "status": "in_progress",
+  "steps": [
+    "Update ai_agency/bot.py - Add referral system: (1) Parse deep link parameter in /start (context.args[0] if starts with 'ref_'). (2) If new user and has referrer, store in DB via database.create_referral(). (3) Add 'Referral link' button in main menu that shows the user's deep link (t.me/{BOT_USERNAME}?start=ref_{user_id}) and referral stats. (4) After first order by referred user, credit referrer with 10% bonus.",
+    "Update ai_agency/bot.py - Add payment/subscription UI: (1) Replace 'contact admin' in balance section with 'Top up balance' button. (2) On 'Top up' click show amount options (500, 1000, 2000, 5000 rub) as inline buttons. (3) On amount selection call payment_gateway.create_payment() and send payment URL. (4) Add 'Subscriptions' button showing BASIC and PRO tiers with prices and 'Subscribe' buttons. (5) On subscribe click create subscription payment via payment_gateway.",
+    "Update ai_agency/bot.py - Add rating system: (1) After order completion, send inline keyboard with 5 buttons (stars 1-5). (2) CallbackQueryHandler for 'rate:{order_id}:{rating}'. (3) Save rating via database.update_order_rating(). (4) If rating <= 2, automatically re-run the order (call pipeline.process_order again with improved prompt prefix 'The previous result was unsatisfactory. Please improve...') and send new result. Mark as free redo (no charge).",
+    "Update ai_agency/bot.py - Integrate subscription check: In confirm_order(), use billing.check_can_order() instead of billing.check_balance(). Use billing.charge_or_use_subscription() instead of billing.charge_client().",
+    "Create ai_agency/analytics.py: (1) Function get_dashboard_data() returning dict with: total_revenue, avg_check, conversion (orders/unique_clients), popular_services (top 5), revenue_last_7_days (list of floats for sparkline), total_clients, active_clients_7d, ltv (total_revenue/total_clients). (2) Function format_dashboard() that uses _card() and sparkline() to format a beautiful admin dashboard message with all metrics.",
+    "Update ai_agency/admin_bot.py: (1) Add 'Analytics' button in main menu. (2) On click, call analytics.get_dashboard_data() and analytics.format_dashboard(). (3) Show sparkline for 7-day revenue, popular services list, conversion %, avg check, LTV.",
+    "Create ai_agency/scheduler.py: (1) Use asyncio tasks (not APScheduler for simplicity) with while True + asyncio.sleep loops. (2) Task 1 'retention_check': every 24h, find clients inactive for 7+ days (database.get_clients_inactive_days(7)), send them a reminder message with personal discount offer. (3) Task 2 'upsell_check': every 24h, find clients with 3+ orders and no subscription (database.get_client_order_count()), send subscription offer. (4) Task 3 'subscription_expiry': every 1h, call subscriptions.expire_subscriptions(). (5) Function start_scheduler(bot) that spawns all tasks. (6) Integration: call start_scheduler() from bot.py post_init hook.",
+    "Update ai_agency/bot.py - Wire scheduler: Add post_init callback to Application that calls scheduler.start_scheduler(application.bot)."
+  ],
+  "acceptance_criteria": [
+    "bot.py handles deep links for referral (ref_ prefix)",
+    "bot.py shows payment amount selection and generates payment URL",
+    "bot.py shows rating buttons after order completion",
+    "bot.py auto-redoes order on rating <= 2",
+    "analytics.py produces formatted dashboard with sparkline",
+    "admin_bot.py has Analytics button that shows dashboard",
+    "scheduler.py runs background tasks for retention and upsell",
+    "All files pass py_compile and import without errors"
+  ],
+  "verification": [
+    "cd /projects/sandbox/Khy18/ai_agency && python -m py_compile bot.py && python -m py_compile admin_bot.py && python -m py_compile analytics.py && python -m py_compile scheduler.py",
+    "cd /projects/sandbox/Khy18/ai_agency && python -c \"import bot; import admin_bot; import analytics; import scheduler; print('All imports OK')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
