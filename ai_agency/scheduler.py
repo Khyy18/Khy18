@@ -78,6 +78,18 @@ try:
 except ImportError:
     daily_report = None
 
+# Интеграция fl_parser (graceful)
+try:
+    import fl_parser
+except ImportError:
+    fl_parser = None
+
+# Интеграция tg_chat_parser (graceful)
+try:
+    import tg_chat_parser
+except ImportError:
+    tg_chat_parser = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -504,6 +516,36 @@ async def ad_autopilot_check(bot: Bot) -> None:
         await asyncio.sleep(300)  # проверяем каждые 5 минут
 
 
+async def fl_parser_check(bot: Bot) -> None:
+    """
+    Задача парсинга FL.ru: каждые 20 минут проверяет
+    новые проекты по ключевым словам.
+    """
+    while True:
+        try:
+            if fl_parser:
+                await fl_parser.check_new_fl_leads(bot)
+        except Exception as e:
+            logger.error("Ошибка fl_parser_check: %s", e)
+
+        await asyncio.sleep(1200)  # 20 минут
+
+
+async def tg_chat_parser_check(bot: Bot) -> None:
+    """
+    Задача мониторинга Telegram чатов: каждые 5 минут
+    проверяет наличие заказов в отслеживаемых чатах.
+    """
+    while True:
+        try:
+            if tg_chat_parser and tg_chat_parser.is_configured():
+                await tg_chat_parser.start_monitoring()
+        except Exception as e:
+            logger.error("Ошибка tg_chat_parser_check: %s", e)
+
+        await asyncio.sleep(300)  # 5 минут
+
+
 def start_scheduler(bot: Bot) -> None:
     """
     Запустить все фоновые задачи в текущем event loop.
@@ -539,10 +581,12 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(_staggered_start(retargeting_check_task(bot), 340))
     loop.create_task(_staggered_start(daily_report_check(bot), 360))
     loop.create_task(_staggered_start(ad_autopilot_check(bot), 380))
+    loop.create_task(_staggered_start(fl_parser_check(bot), 400))
+    loop.create_task(_staggered_start(tg_chat_parser_check(bot), 420))
     logger.info(
         "Планировщик задач запущен (retention, upsell, subscription_expiry, "
         "lead_parser, auto_posting, backup, crm_segment_update, crm_send_offers, "
         "monitoring_watchdog, funnel_check, review_posting, service_discovery, "
         "ad_budget, content_farm, marketplace_replenish, demo_generator, retargeting, "
-        "daily_report, ad_autopilot)"
+        "daily_report, ad_autopilot, fl_parser, tg_chat_parser)"
     )

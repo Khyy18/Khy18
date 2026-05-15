@@ -158,6 +158,60 @@ AUTO_MODERATE_REVIEWS: bool = os.getenv("AUTO_MODERATE_REVIEWS", "True").lower()
 # Час отправки ежедневного отчёта владельцу (0-23)
 DAILY_REPORT_HOUR: int = int(os.getenv("DAILY_REPORT_HOUR", "21"))
 
+# --- Multi-provider LLM Router ---
+
+# Anthropic API
+ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+
+# Together.ai API
+TOGETHER_API_KEY: str = os.getenv("TOGETHER_API_KEY", "")
+
+# --- Kwork human-like settings ---
+
+# Warmup period (days from registration)
+KWORK_WARMUP_DAYS: int = int(os.getenv("KWORK_WARMUP_DAYS", "14"))
+
+# Max daily auto-responses on Kwork
+KWORK_MAX_DAILY_RESPONSES: int = int(os.getenv("KWORK_MAX_DAILY_RESPONSES", "7"))
+
+# Working hours (only respond between these hours)
+KWORK_WORK_HOURS_START: int = int(os.getenv("KWORK_WORK_HOURS_START", "9"))
+KWORK_WORK_HOURS_END: int = int(os.getenv("KWORK_WORK_HOURS_END", "22"))
+
+# --- FL.ru parser ---
+
+# FL.ru keywords (comma-separated, defaults to KWORK_KEYWORDS)
+FL_KEYWORDS: str = os.getenv("FL_KEYWORDS", "")
+
+# Max daily auto-responses on FL.ru
+FL_MAX_DAILY_RESPONSES: int = int(os.getenv("FL_MAX_DAILY_RESPONSES", "7"))
+
+# --- Telegram chat parser ---
+
+# Comma-separated chat IDs to monitor
+TG_MONITOR_CHATS: str = os.getenv("TG_MONITOR_CHATS", "")
+
+# Max responses per hour per chat
+TG_MAX_RESPONSES_PER_HOUR: int = int(os.getenv("TG_MAX_RESPONSES_PER_HOUR", "3"))
+
+# Telegram userbot session (for pyrogram)
+TELEGRAM_USERBOT_SESSION: str = os.getenv("TELEGRAM_USERBOT_SESSION", "")
+
+# Telegram API credentials (for pyrogram userbot)
+TELEGRAM_API_ID: str = os.getenv("TELEGRAM_API_ID", "")
+TELEGRAM_API_HASH: str = os.getenv("TELEGRAM_API_HASH", "")
+
+# --- Database & Cache backends ---
+
+# Redis URL (optional)
+REDIS_URL: str = os.getenv("REDIS_URL", "")
+
+# Database backend: sqlite or postgres
+DATABASE_BACKEND: str = os.getenv("DATABASE_BACKEND", "sqlite")
+
+# PostgreSQL connection URL (for postgres backend)
+DATABASE_URL: str = os.getenv("DATABASE_URL", "")
+
 
 def validate_config() -> List[str]:
     """

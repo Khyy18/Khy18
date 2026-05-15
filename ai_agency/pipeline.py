@@ -32,6 +32,12 @@ except ImportError:
     retry_with_backoff = None
     _openai_circuit = None
 
+# Интеграция LLM Router (graceful)
+try:
+    import llm_router as _llm_router
+except ImportError:
+    _llm_router = None
+
 logger = logging.getLogger(__name__)
 
 # Услуги, которые обрабатываются в простом режиме (без Editor/QA)
@@ -84,10 +90,18 @@ async def _call_llm(
     """
     Вызвать LLM с фолбэком на Groq.
 
-    Сначала пытается OpenAI (если circuit breaker разрешает),
+    Если доступен llm_router - делегирует ему (мульти-провайдер).
+    Иначе: сначала пытается OpenAI (если circuit breaker разрешает),
     при ошибке переключается на Groq.
     Использует singleton-клиенты для переиспользования HTTP-соединений.
     """
+    # Делегируем llm_router если доступен
+    if _llm_router is not None:
+        result = await _llm_router.generate(messages, temperature, max_tokens)
+        if result:
+            return result
+        # Если llm_router вернул None, пробуем fallback ниже
+
     # Проверяем circuit breaker - если open, сразу переходим к Groq
     skip_openai = False
     if _openai_circuit and not _openai_circuit.can_execute():

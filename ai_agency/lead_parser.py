@@ -1,6 +1,11 @@
-"""Парсер лидов с Kwork: поиск заказов по ключевым словам и уведомление/автоотклик."""
+"""Парсер лидов с Kwork: поиск заказов по ключевым словам, human-like автоотклик."""
 
+import asyncio
+import json
 import logging
+import os
+import random
+from datetime import datetime, date
 from typing import List, Optional
 from urllib.parse import quote
 
@@ -12,14 +17,26 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Попытка импорта openai (graceful)
+# Graceful imports
 try:
     from openai import AsyncOpenAI
 except ImportError:
     AsyncOpenAI = None
 
+try:
+    import llm_router as _llm_router
+except ImportError:
+    _llm_router = None
+
 # Lazy-singleton OpenAI клиент
 _openai_client: Optional[object] = None
+
+# In-memory daily counter (reset daily)
+_daily_responses: int = 0
+_daily_responses_date: Optional[date] = None
+
+# State file for warmup tracking
+KWORK_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kwork_state.json")
 
 
 def _get_openai_client():
@@ -28,6 +45,85 @@ def _get_openai_client():
     if _openai_client is None and AsyncOpenAI is not None:
         _openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
     return _openai_client
+
+
+def _load_kwork_state() -> dict:
+    """Load kwork state from JSON file (registration date etc)."""
+    try:
+        if os.path.exists(KWORK_STATE_FILE):
+            with open(KWORK_STATE_FILE, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning("Error loading kwork_state.json: %s", e)
+    return {}
+
+
+def _save_kwork_state(state: dict) -> None:
+    """Save kwork state to JSON file."""
+    try:
+        with open(KWORK_STATE_FILE, "w") as f:
+            json.dump(state, f, indent=2)
+    except Exception as e:
+        logger.warning("Error saving kwork_state.json: %s", e)
+
+
+def _get_registration_date() -> date:
+    """Get or set registration date from state file."""
+    state = _load_kwork_state()
+    if "registration_date" in state:
+        return date.fromisoformat(state["registration_date"])
+    # First run - set today as registration date
+    today = date.today()
+    state["registration_date"] = today.isoformat()
+    _save_kwork_state(state)
+    return today
+
+
+def _get_warmup_limit() -> int:
+    """Get daily response limit based on warmup period."""
+    reg_date = _get_registration_date()
+    days_since = (date.today() - reg_date).days
+
+    warmup_days = config.KWORK_WARMUP_DAYS
+    half_warmup = warmup_days // 2  # first half: strict limit
+
+    if days_since < half_warmup:
+        return 2  # First week: max 2/day
+    elif days_since < warmup_days:
+        return 4  # Second week: max 4/day
+    else:
+        return config.KWORK_MAX_DAILY_RESPONSES  # Full limit
+
+
+def _is_working_hours() -> bool:
+    """Check if current time is within working hours."""
+    now = datetime.now()
+    return config.KWORK_WORK_HOURS_START <= now.hour < config.KWORK_WORK_HOURS_END
+
+
+def _check_daily_limit() -> bool:
+    """Check if daily response limit is not exceeded. Returns True if can respond."""
+    global _daily_responses, _daily_responses_date
+
+    today = date.today()
+    if _daily_responses_date != today:
+        _daily_responses = 0
+        _daily_responses_date = today
+
+    limit = _get_warmup_limit()
+    return _daily_responses < limit
+
+
+def _increment_daily_counter() -> None:
+    """Increment daily response counter."""
+    global _daily_responses, _daily_responses_date
+
+    today = date.today()
+    if _daily_responses_date != today:
+        _daily_responses = 0
+        _daily_responses_date = today
+
+    _daily_responses += 1
 
 
 async def init_leads_table() -> None:
@@ -141,37 +237,70 @@ async def _parse_kwork_html(url: str, entries: List[dict]) -> None:
 
 async def generate_response(order_info: dict, service_type: str) -> str:
     """
-    Создать профессиональный отклик для заказа.
+    Создать уникальный human-like отклик для заказа.
 
-    Если доступен OpenAI - генерирует через AI под конкретный заказ.
-    Иначе - использует шаблон.
+    AI генерирует текст с:
+    - Именем клиента (если доступно)
+    - Вопросом по ТЗ
+    - Релевантным опытом
+    - 50-150 слов
+    - Случайный тон (формальный/неформальный)
     """
     title = order_info.get("title", "Заказ")
     description = order_info.get("description", "")[:500]
+    customer_name = order_info.get("customer_name", "")
 
+    # Random tone selection
+    tone = random.choice(["formal", "informal", "friendly"])
+    tone_instruction = {
+        "formal": "Используй деловой, вежливый тон. Обращайся на 'Вы'.",
+        "informal": "Используй дружелюбный неформальный тон. Обращайся на 'ты'.",
+        "friendly": "Используй теплый профессиональный тон, не слишком официальный.",
+    }[tone]
+
+    word_count = random.randint(50, 150)
+
+    prompt = (
+        f"Напиши уникальный отклик фрилансера на заказ.\n\n"
+        f"Заказ: {title}\n"
+        f"Описание: {description}\n"
+    )
+    if customer_name:
+        prompt += f"Имя заказчика: {customer_name}\n"
+    prompt += (
+        f"Специализация: {service_type}\n\n"
+        f"Требования:\n"
+        f"- {tone_instruction}\n"
+        f"- Длина: примерно {word_count} слов\n"
+        f"- Задай 1 уточняющий вопрос по ТЗ\n"
+        f"- Кратко упомяни релевантный опыт (2-3 года в нише)\n"
+        f"- НЕ используй шаблонные фразы вроде 'Уважаемый заказчик'\n"
+        f"- Не копируй стандартные отклики, будь оригинален\n"
+        f"- Заверши предложением обсудить детали\n"
+    )
+
+    messages = [
+        {"role": "system", "content": "Ты опытный фрилансер. Пишешь живые, человечные отклики на заказы."},
+        {"role": "user", "content": prompt},
+    ]
+
+    # Try llm_router first
+    if _llm_router is not None:
+        try:
+            result = await _llm_router.generate(messages, temperature=0.8, max_tokens=500)
+            if result:
+                return result
+        except Exception as e:
+            logger.warning("llm_router error in generate_response: %s", e)
+
+    # Fallback to direct OpenAI
     client = _get_openai_client()
     if client is not None and config.OPENAI_API_KEY:
         try:
-            prompt = (
-                f"Напиши профессиональный отклик фрилансера на заказ на бирже Kwork.\n\n"
-                f"Заказ: {title}\n"
-                f"Описание: {description}\n"
-                f"Специализация: {service_type}\n\n"
-                f"Требования к отклику:\n"
-                f"- Короткий (3-5 предложений)\n"
-                f"- Профессиональный тон\n"
-                f"- Упомяни релевантный опыт\n"
-                f"- Укажи сроки (1-2 дня)\n"
-                f"- Заверши призывом к действию\n"
-                f"- Не используй формальное обращение 'Уважаемый'\n"
-            )
             response = await client.chat.completions.create(
                 model=config.DEFAULT_MODEL,
-                messages=[
-                    {"role": "system", "content": "Ты опытный фрилансер, пишешь отклики на заказы."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.7,
+                messages=messages,
+                temperature=0.8,
                 max_tokens=500,
             )
             return response.choices[0].message.content.strip()
@@ -179,11 +308,12 @@ async def generate_response(order_info: dict, service_type: str) -> str:
             logger.warning("Ошибка генерации отклика через AI: %s", e)
 
     # Fallback шаблон
+    name_part = f" {customer_name}," if customer_name else ""
     response_text = (
-        f"Здравствуйте! Готов выполнить ваш заказ \"{title}\".\n\n"
-        f"Имею опыт в {service_type}. Работаю с AI-инструментами для максимального качества.\n\n"
-        f"Сроки: 1-2 дня. Гарантирую уникальность и соответствие ТЗ.\n\n"
-        f"Буду рад сотрудничеству!"
+        f"Здравствуйте{name_part}! Готов взяться за ваш проект \"{title}\".\n\n"
+        f"Работаю в сфере {service_type} более 3 лет. "
+        f"Подскажите, есть ли примеры желаемого результата?\n\n"
+        f"Сроки: 1-2 дня. Давайте обсудим детали!"
     )
     return response_text
 
@@ -234,11 +364,21 @@ async def _submit_kwork_response(order_info: dict, response_text: str) -> bool:
 
 async def check_new_leads(bot) -> None:
     """
-    Основная функция проверки новых лидов.
+    Основная функция проверки новых лидов с human-like поведением.
+
+    Human-like features:
+    - Working hours check (9:00-22:00 by default)
+    - Daily response limit with warmup
+    - Random delay 3-15 min before each response
 
     Если AUTO_RESPOND_LEADS=True: формирует отклик через AI и отправляет на Kwork.
     Если False: уведомляет админа с шаблоном ответа (поведение по умолчанию).
     """
+    # Working hours check
+    if not _is_working_hours():
+        logger.debug("Lead parser: outside working hours, skipping")
+        return
+
     keywords_str = config.KWORK_KEYWORDS
     if not keywords_str:
         return
@@ -262,8 +402,23 @@ async def check_new_leads(bot) -> None:
         if await _is_lead_seen(external_id):
             continue
 
+        # Check daily limit before responding
+        if not _check_daily_limit():
+            logger.info("Lead parser: daily limit reached (%d), stopping", _daily_responses)
+            break
+
         # Новый лид - сохраняем
         await _mark_lead_seen(external_id, entry["title"], entry["link"])
+
+        # Human-like random delay (3-15 minutes)
+        delay = random.uniform(180, 900)
+        logger.debug("Lead parser: waiting %.0f seconds before responding", delay)
+        await asyncio.sleep(delay)
+
+        # Re-check working hours after delay
+        if not _is_working_hours():
+            logger.debug("Lead parser: left working hours after delay, stopping")
+            break
 
         # Генерируем отклик
         response_text = await generate_response(entry, "копирайтинг")
@@ -278,6 +433,9 @@ async def check_new_leads(bot) -> None:
                 entry["title"],
                 entry["link"],
             )
+            # Increment daily counter
+            _increment_daily_counter()
+
             # Уведомляем админа о факте автоотклика
             notification = (
                 f"{status_emoji} <b>Автоотклик отправлен</b>\n\n"
@@ -309,9 +467,13 @@ async def check_new_leads(bot) -> None:
                     text=notification,
                     parse_mode="HTML",
                 )
+                _increment_daily_counter()
                 new_count += 1
             except Exception as e:
                 logger.warning("Не удалось отправить уведомление о лиде: %s", e)
 
     if new_count:
-        logger.info("Lead parser: обработано %d новых лидов (auto_respond=%s)", new_count, config.AUTO_RESPOND_LEADS)
+        logger.info(
+            "Lead parser: обработано %d новых лидов (auto_respond=%s)",
+            new_count, config.AUTO_RESPOND_LEADS,
+        )
