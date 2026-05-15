@@ -12,6 +12,12 @@ from models import ServiceType
 from services import get_service
 import ab_testing
 
+# Интеграция семантического кеша (graceful)
+try:
+    import cache as _cache_module
+except ImportError:
+    _cache_module = None
+
 # Интеграция модуля отказоустойчивости (graceful)
 try:
     from resilience import retry_with_backoff, CircuitBreaker, CircuitState
@@ -207,6 +213,20 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
     quality = service.quality_checks
     simple_mode = service_type in SIMPLE_SERVICES
 
+    # Проверяем кеш перед вызовом LLM
+    if _cache_module:
+        try:
+            cached = await _cache_module.get_cached_result(service_type.value, input_text)
+            if cached:
+                duration = time.time() - start_time
+                logger.info(
+                    "process_order cache HIT: service=%s, duration=%.2fs",
+                    service_type.value, duration,
+                )
+                return (cached, None)
+        except Exception as e:
+            logger.warning("Ошибка чтения кеша: %s", e)
+
     # A/B тестирование: пробуем получить вариант промпта
     variant_id = None
     system_prompt = service.system_prompt
@@ -237,6 +257,12 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
                     service_type.value, duration,
                     extra={"duration": duration, "status": "completed"},
                 )
+                # Сохраняем в кеш
+                if _cache_module:
+                    try:
+                        await _cache_module.store_result(service_type.value, input_text, result_text)
+                    except Exception as e:
+                        logger.warning("Ошибка записи в кеш: %s", e)
                 return (result_text, variant_id)
             if attempt < max_attempts - 1:
                 logger.warning(
@@ -254,6 +280,12 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
                 service_type.value, duration,
                 extra={"duration": duration, "status": "completed"},
             )
+            # Сохраняем в кеш
+            if _cache_module:
+                try:
+                    await _cache_module.store_result(service_type.value, input_text, result_text)
+                except Exception as e:
+                    logger.warning("Ошибка записи в кеш: %s", e)
             return (result_text, variant_id)
 
         # 2. Editor agent
@@ -274,6 +306,12 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
                 service_type.value, duration,
                 extra={"duration": duration, "status": "completed"},
             )
+            # Сохраняем в кеш
+            if _cache_module:
+                try:
+                    await _cache_module.store_result(service_type.value, input_text, final_text)
+                except Exception as e:
+                    logger.warning("Ошибка записи в кеш: %s", e)
             return (final_text, variant_id)
 
         if attempt < max_attempts - 1:
@@ -293,6 +331,12 @@ async def process_order(service_type: ServiceType, input_text: str) -> Tuple[Opt
                 duration,
                 extra={"duration": duration, "status": "completed"},
             )
+            # Сохраняем в кеш
+            if _cache_module:
+                try:
+                    await _cache_module.store_result(service_type.value, input_text, final_text)
+                except Exception as e:
+                    logger.warning("Ошибка записи в кеш: %s", e)
             return (final_text, variant_id)
 
     duration = time.time() - start_time

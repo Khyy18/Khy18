@@ -86,6 +86,34 @@ LOG_FILE: str = os.getenv("LOG_FILE", "logs/agency.log")
 BACKUP_DIR: str = os.getenv("BACKUP_DIR", "backups")
 BACKUP_KEEP_COUNT: int = int(os.getenv("BACKUP_KEEP_COUNT", "7"))
 
+# OpenAI стоимость токенов
+OPENAI_TOKEN_COST_PER_1K: float = float(os.getenv("OPENAI_TOKEN_COST_PER_1K", "0.03"))
+
+# Партнёрская программа
+PARTNER_COMMISSION_PERCENT: int = int(os.getenv("PARTNER_COMMISSION_PERCENT", "10"))
+
+# Семантический кеш
+CACHE_TTL_DAYS: int = int(os.getenv("CACHE_TTL_DAYS", "7"))
+CACHE_SIMILARITY_THRESHOLD: float = float(os.getenv("CACHE_SIMILARITY_THRESHOLD", "0.92"))
+
+# Воронка продаж
+FUNNEL_ENABLED: bool = os.getenv("FUNNEL_ENABLED", "True").lower() in ("true", "1", "yes")
+
+# Рекламный бюджет
+AD_BUDGET_PERCENT: int = int(os.getenv("AD_BUDGET_PERCENT", "30"))
+
+# Telega.in API
+TELEGA_IN_API_KEY: str = os.getenv("TELEGA_IN_API_KEY", "")
+
+# Webhook
+WEBHOOK_SECRET_KEY: str = os.getenv("WEBHOOK_SECRET_KEY", "")
+
+# Админ-панель
+ADMIN_DASHBOARD_PASSWORD: str = os.getenv("ADMIN_DASHBOARD_PASSWORD", "")
+
+# Mini App
+MINI_APP_URL: str = os.getenv("MINI_APP_URL", "")
+
 
 def validate_config() -> List[str]:
     """

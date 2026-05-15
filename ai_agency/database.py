@@ -165,6 +165,77 @@ async def init_db() -> None:
                 last_reset TEXT
             )
         """)
+        # Таблица funnel_events для воронки продаж
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS funnel_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                stage TEXT NOT NULL,
+                triggered_at TEXT NOT NULL DEFAULT (datetime('now')),
+                converted_at TEXT,
+                FOREIGN KEY (client_id) REFERENCES clients(telegram_id)
+            )
+        """)
+        # Таблица expenses для финансов
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                amount REAL NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица promo_codes
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL,
+                discount_type TEXT NOT NULL DEFAULT 'percentage',
+                discount_value REAL NOT NULL,
+                max_uses INTEGER NOT NULL DEFAULT 0,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """)
+        # Таблица partner_earnings для партнёрской программы
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS partner_earnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                partner_id INTEGER NOT NULL,
+                referred_client_id INTEGER NOT NULL,
+                order_id INTEGER,
+                amount REAL NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (partner_id) REFERENCES clients(telegram_id),
+                FOREIGN KEY (referred_client_id) REFERENCES clients(telegram_id)
+            )
+        """)
+        # Таблица semantic_cache
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS semantic_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_type TEXT NOT NULL,
+                input_hash TEXT NOT NULL,
+                embedding_hash TEXT,
+                result_text TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at TEXT NOT NULL,
+                hit_count INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        # Таблица unrecognized_requests
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS unrecognized_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (client_id) REFERENCES clients(telegram_id)
+            )
+        """)
         await db.commit()
 
 

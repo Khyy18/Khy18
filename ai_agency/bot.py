@@ -36,6 +36,12 @@ from models import ServiceType, OrderStatus
 from services import SERVICES, get_service
 from utils import _card, format_number, progress_bar, status_indicator
 
+# Интеграция promo (graceful)
+try:
+    import promo as promo_module
+except ImportError:
+    promo_module = None
+
 # Интеграция rate_limiter и telegram_payments (graceful)
 try:
     from rate_limiter import RateLimiter
@@ -329,6 +335,17 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     # Используем динамическую цену
     price = context.user_data.get("calculated_price", service.price)
+
+    # Применяем промокод если установлен
+    promo_code = context.user_data.get("promo_code")
+    if promo_code and promo_module:
+        try:
+            discounted_price, promo_data = await promo_module.apply_promo(promo_code, price)
+            if promo_data:
+                price = discounted_price
+                logger.info("Промокод %s применён, новая цена: %.2f", promo_code, price)
+        except Exception as e:
+            logger.warning("Ошибка применения промокода: %s", e)
 
     # Проверка бесплатного триала
     is_free_trial = await billing.check_free_trial(user.id)
@@ -1006,6 +1023,51 @@ async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+# --- Команда /promo ---
+
+async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Применить промокод: /promo CODE."""
+    user = update.effective_user
+
+    if not context.args:
+        await update.message.reply_text(
+            "\U0001f3ab Введите промокод: /promo КОД",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    code = context.args[0].strip()
+
+    if not promo_module:
+        await update.message.reply_text(
+            "\u274c Промокоды временно недоступны.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    promo_data = await promo_module.validate_promo(code)
+    if promo_data:
+        context.user_data["promo_code"] = code.upper()
+        discount_info = (
+            f"{int(promo_data['discount_value'])}%"
+            if promo_data["discount_type"] == "percentage"
+            else f"{format_number(promo_data['discount_value'])} \u20bd"
+        )
+        body = [
+            f"<b>Промокод:</b> {code.upper()}",
+            f"<b>Скидка:</b> {discount_info}",
+            "",
+            "Скидка будет применена к следующему заказу.",
+        ]
+        text = _card("Промокод активирован", "\u2705", body)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text(
+            "\u274c Промокод недействителен или истёк.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
 # --- Отмена ---
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1069,6 +1131,9 @@ def create_application() -> Application:
 
     # Команда /lang
     application.add_handler(CommandHandler("lang", lang_command))
+
+    # Команда /promo
+    application.add_handler(CommandHandler("promo", promo_command))
 
     # Регистрация обработчиков Telegram Stars платежей
     if telegram_payments:

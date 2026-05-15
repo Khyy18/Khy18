@@ -27,6 +27,11 @@ try:
 except ImportError:
     monitoring = None
 
+try:
+    import sales_funnel
+except ImportError:
+    sales_funnel = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -254,6 +259,36 @@ async def monitoring_watchdog() -> None:
         await asyncio.sleep(300)  # 5 минут
 
 
+async def funnel_check(bot: Bot) -> None:
+    """
+    Задача воронки продаж: каждые 5 минут проверяет триггеры
+    воронки для всех клиентов.
+    """
+    while True:
+        try:
+            if sales_funnel and config.FUNNEL_ENABLED:
+                clients = await database.get_all_clients()
+                triggered = 0
+                for client in clients:
+                    try:
+                        if await sales_funnel.welcome_trigger(bot, client):
+                            triggered += 1
+                        elif await sales_funnel.trial_used_trigger(bot, client):
+                            triggered += 1
+                        elif await sales_funnel.subscription_push_trigger(bot, client):
+                            triggered += 1
+                        elif await sales_funnel.vip_reactivation_trigger(bot, client):
+                            triggered += 1
+                    except Exception as e:
+                        logger.debug("Ошибка триггера для клиента %d: %s", client["telegram_id"], e)
+                if triggered:
+                    logger.info("Funnel: отправлено %d триггеров", triggered)
+        except Exception as e:
+            logger.error("Ошибка funnel_check: %s", e)
+
+        await asyncio.sleep(300)  # 5 минут
+
+
 def start_scheduler(bot: Bot) -> None:
     """
     Запустить все фоновые задачи в текущем event loop.
@@ -279,7 +314,9 @@ def start_scheduler(bot: Bot) -> None:
     loop.create_task(_staggered_start(crm_segment_update(), 120))
     loop.create_task(_staggered_start(crm_send_offers(bot), 150))
     loop.create_task(_staggered_start(monitoring_watchdog(), 180))
+    loop.create_task(_staggered_start(funnel_check(bot), 200))
     logger.info(
         "Планировщик задач запущен (retention, upsell, subscription_expiry, "
-        "lead_parser, auto_posting, backup, crm_segment_update, crm_send_offers, monitoring_watchdog)"
+        "lead_parser, auto_posting, backup, crm_segment_update, crm_send_offers, "
+        "monitoring_watchdog, funnel_check)"
     )

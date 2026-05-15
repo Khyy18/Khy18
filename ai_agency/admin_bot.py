@@ -37,10 +37,20 @@ try:
 except ImportError:
     monitoring = None
 
+try:
+    import finance
+except ImportError:
+    finance = None
+
+try:
+    import promo as promo_module
+except ImportError:
+    promo_module = None
+
 logger = logging.getLogger(__name__)
 
 # Состояния для пополнения баланса и CRM
-TOPUP_CLIENT_ID, TOPUP_AMOUNT, CRM_CLIENT_ID = range(3)
+TOPUP_CLIENT_ID, TOPUP_AMOUNT, CRM_CLIENT_ID, PROMO_CREATE_CODE, PROMO_CREATE_VALUE = range(5)
 
 
 def admin_only(func):
@@ -86,6 +96,8 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     keyboard = [
         [InlineKeyboardButton("\U0001f4ca Статистика", callback_data="stats")],
         [InlineKeyboardButton("\U0001f4c8 Аналитика", callback_data="analytics")],
+        [InlineKeyboardButton("\U0001f4b0 Финансы", callback_data="finance")],
+        [InlineKeyboardButton("\U0001f3ab Промокоды", callback_data="promo_list")],
         [InlineKeyboardButton("\U0001f4cb Последние заказы", callback_data="recent_orders")],
         [InlineKeyboardButton("\U0001f465 Клиенты", callback_data="clients")],
         [InlineKeyboardButton("\U0001f4b3 Пополнить баланс", callback_data="topup")],
@@ -116,6 +128,25 @@ async def handle_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return await show_stats(update, context)
     elif action == "analytics":
         return await show_analytics(update, context)
+    elif action == "finance":
+        return await show_finance(update, context)
+    elif action == "promo_list":
+        return await show_promo_list(update, context)
+    elif action == "promo_create":
+        await query.edit_message_text(
+            "\U0001f3ab Введите код промокода (латиницей):",
+            parse_mode=ParseMode.HTML,
+        )
+        return PROMO_CREATE_CODE
+    elif action.startswith("promo_del:"):
+        code = action.replace("promo_del:", "")
+        if promo_module:
+            await promo_module.delete_promo(code)
+        await query.edit_message_text(
+            f"\u2705 Промокод {code} деактивирован.",
+            parse_mode=ParseMode.HTML,
+        )
+        return ConversationHandler.END
     elif action == "recent_orders":
         return await show_recent_orders(update, context)
     elif action == "clients":
@@ -398,6 +429,136 @@ async def show_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return ConversationHandler.END
 
 
+# --- Финансы ---
+
+async def show_finance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показать финансовый дашборд: P&L и прогноз."""
+    query = update.callback_query
+
+    if finance is None:
+        await query.edit_message_text(
+            "\u274c Модуль финансов недоступен.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+
+    pnl = await finance.calculate_pnl(30)
+    forecast = await finance.forecast_revenue_month()
+
+    text = finance.format_pnl_card(pnl)
+    text += "\n\n" + finance.format_forecast_card(forecast)
+
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+    return ConversationHandler.END
+
+
+# --- Промокоды ---
+
+async def show_promo_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показать список промокодов."""
+    query = update.callback_query
+
+    if promo_module is None:
+        await query.edit_message_text(
+            "\u274c Модуль промокодов недоступен.", parse_mode=ParseMode.HTML
+        )
+        return ConversationHandler.END
+
+    promos = await promo_module.list_promos()
+
+    if not promos:
+        body = ["Промокодов пока нет."]
+    else:
+        body = []
+        for p in promos[:10]:
+            discount_info = (
+                f"{int(p['discount_value'])}%"
+                if p["discount_type"] == "percentage"
+                else f"{format_number(p['discount_value'])} \u20bd"
+            )
+            uses = f"{p['used_count']}/{p['max_uses']}" if p["max_uses"] > 0 else f"{p['used_count']}/\u221e"
+            body.append(f"  <b>{p['code']}</b> | {discount_info} | {uses}")
+
+    text = _card("Промокоды", "\U0001f3ab", body)
+
+    keyboard = [
+        [InlineKeyboardButton("\u2795 Создать промокод", callback_data="promo_create")],
+    ]
+    # Кнопки удаления для каждого промокода
+    for p in promos[:5]:
+        keyboard.append([
+            InlineKeyboardButton(
+                f"\u274c Удалить {p['code']}", callback_data=f"promo_del:{p['code']}"
+            )
+        ])
+
+    await query.edit_message_text(
+        text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+    )
+    return SELECT_ACTION
+
+
+async def promo_create_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получить код промокода от админа."""
+    code = update.message.text.strip().upper()
+    if not code or len(code) < 2:
+        await update.message.reply_text(
+            "\u274c Введите корректный код (минимум 2 символа).",
+            parse_mode=ParseMode.HTML,
+        )
+        return PROMO_CREATE_CODE
+
+    context.user_data["new_promo_code"] = code
+    await update.message.reply_text(
+        f"\U0001f3ab Код: <b>{code}</b>\n\nВведите скидку (число, например: 10 для 10%):",
+        parse_mode=ParseMode.HTML,
+    )
+    return PROMO_CREATE_VALUE
+
+
+async def promo_create_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получить значение скидки и создать промокод."""
+    try:
+        value = float(update.message.text.strip().replace(",", "."))
+        if value <= 0:
+            raise ValueError()
+    except ValueError:
+        await update.message.reply_text(
+            "\u274c Введите корректное положительное число.",
+            parse_mode=ParseMode.HTML,
+        )
+        return PROMO_CREATE_VALUE
+
+    code = context.user_data.get("new_promo_code", "")
+    discount_type = "percentage" if value <= 100 else "fixed"
+
+    if promo_module:
+        promo_id = await promo_module.create_promo(
+            code=code,
+            discount_type=discount_type,
+            discount_value=value,
+            max_uses=100,
+        )
+        if promo_id:
+            body = [
+                f"<b>Код:</b> {code}",
+                f"<b>Скидка:</b> {int(value)}{'%' if discount_type == 'percentage' else ' \u20bd'}",
+                f"<b>Лимит:</b> 100 использований",
+            ]
+            text = _card("Промокод создан", "\u2705", body)
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text(
+                "\u274c Ошибка создания промокода (возможно, код уже существует).",
+                parse_mode=ParseMode.HTML,
+            )
+    else:
+        await update.message.reply_text(
+            "\u274c Модуль промокодов недоступен.", parse_mode=ParseMode.HTML
+        )
+
+    return ConversationHandler.END
+
+
 # --- Отмена ---
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -427,6 +588,12 @@ def create_admin_application() -> Application:
             ],
             CRM_CLIENT_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, crm_client_id),
+            ],
+            PROMO_CREATE_CODE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, promo_create_code),
+            ],
+            PROMO_CREATE_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, promo_create_value),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
