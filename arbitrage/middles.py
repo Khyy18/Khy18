@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -27,6 +28,63 @@ logger = logging.getLogger(__name__)
 
 # Общий rate limiter для AI-запросов
 _rate_limiter = AiRateLimiter()
+
+
+def poisson_pmf(k: int, lam: float) -> float:
+    """Вероятность P(X = k) для распределения Пуассона. Без scipy."""
+    if k < 0 or lam <= 0:
+        return 0.0
+    return (lam ** k) * math.exp(-lam) / math.factorial(k)
+
+
+LEAGUE_AVERAGES: dict[str, float] = {
+    "soccer_epl": 2.7,
+    "soccer_spain_la_liga": 2.5,
+    "soccer_germany_bundesliga": 3.0,
+    "soccer_italy_serie_a": 2.4,
+    "soccer_france_ligue_one": 2.5,
+    "soccer_uefa_champs_league": 2.8,
+    "basketball_nba": 220.5,
+    "basketball_euroleague": 155.0,
+}
+
+
+def _norm_cdf(x: float) -> float:
+    """Approximate CDF of standard normal distribution. No scipy."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def compute_poisson_probability(corridor_low: float, corridor_high: float, sport: str) -> float:
+    """Вычислить вероятность попадания результата в коридор [low, high].
+
+    Для футбола: используем Poisson distribution (суммируем P(k) для целых k в коридоре).
+    Для баскетбола: нормальное приближение (std ~ 10% от среднего).
+    Для неизвестных спортов: наивная формула (corridor_width / corridor_high).
+    """
+    lam = LEAGUE_AVERAGES.get(sport)
+    if lam is None:
+        # Fallback - naive
+        width = corridor_high - corridor_low
+        return width / corridor_high if corridor_high > 0 else 0.0
+
+    if sport.startswith("basketball"):
+        # Normal approximation for basketball (high-scoring)
+        mean = lam
+        std = mean * 0.1  # ~10% standard deviation
+        # P(low < X < high) using error function approximation
+        z_low = (corridor_low - mean) / std if std > 0 else 0
+        z_high = (corridor_high - mean) / std if std > 0 else 0
+        prob = (_norm_cdf(z_high) - _norm_cdf(z_low))
+        return max(0.0, min(1.0, prob))
+    else:
+        # Poisson for soccer/football (low-scoring)
+        total_prob = 0.0
+        # Sum P(k) for integer k strictly inside corridor
+        k_start = int(math.floor(corridor_low)) + 1 if corridor_low == int(corridor_low) else int(math.ceil(corridor_low))
+        k_end = int(math.ceil(corridor_high)) - 1 if corridor_high == int(corridor_high) else int(math.floor(corridor_high))
+        for k in range(k_start, k_end + 1):
+            total_prob += poisson_pmf(k, lam)
+        return max(0.0, min(1.0, total_prob))
 
 
 @dataclass
@@ -118,9 +176,8 @@ class MiddleScanner:
                         best_case_profit_pct = (best_case_profit / stake_total) * 100.0
 
                         # Вероятность попадания в коридор
-                        # Формула: probability ~ (Y - X) / Y
                         corridor_width = corridor_high - corridor_low
-                        middle_probability = corridor_width / corridor_high if corridor_high > 0 else 0.0
+                        middle_probability = compute_poisson_probability(corridor_low, corridor_high, sport)
 
                         # EV = best_case_profit_pct * probability - 100 * (1 - probability)
                         expected_value_pct = (

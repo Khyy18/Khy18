@@ -1,126 +1,218 @@
-# Arbitrage Bot
+# Arbitrage Bot - AI-Powered Sports Betting Arbitrage System
 
-**Арбитражный бот для спортивных ставок с ИИ**
+**Полностью автоматизированная система арбитражных ставок на спорт с 11 AI-слоями, 5 стратегиями и продвинутой аналитикой.**
 
-Автоматический поиск арбитражных возможностей (surebets и value bets) среди букмекеров с использованием ИИ-фильтрации, Kelly-аллокации и anti-ban эвристик.
+Бот сканирует коэффициенты десятков букмекеров в реальном времени, находит арбитражные возможности, фильтрует их через каскад AI-моделей, оптимально распределяет банкролл и размещает ставки с минимальным риском блокировки аккаунтов.
+
+---
 
 ## Архитектура
 
 ```
-┌─────────────┐     ┌────────────┐     ┌──────────────┐     ┌──────────────┐
-│  OddsAPI    │────▶│  Scanner   │────▶│  AI Filter   │────▶│  Dedup       │
-│  Pinnacle   │     │ (surebets  │     │ (оценка 0-100│     │ (TTL 5 мин)  │
-│  Betfair    │     │  value bets)│     │ + calibration)│     └──────────────┘
-└─────────────┘     └────────────┘     └──────────────┘            │
-       │                                                            ▼
-       │            ┌────────────┐     ┌──────────────┐     ┌──────────────┐
-       │            │  Telegram   │◀────│  Executor    │◀────│ AI Allocator │
-       │            │  (алерты)   │     │ (parallel    │     │ (Kelly crit.)│
-       │            └────────────┘     │  legs)       │     └──────────────┘
-       │                               └──────────────┘
-       │                                      │
-       ▼                                      ▼
-┌─────────────┐     ┌────────────┐     ┌──────────────┐
-│ Scores API  │────▶│ Settlement │     │  Anti-Ban    │
-│ (результаты)│     │ (реальные  │     │  Memory DB   │
-└─────────────┘     │  скоры)    │     └──────────────┘
-                    └────────────┘
-                          │
-                          ▼
-                    ┌────────────┐
-                    │ AI Feedback│
-                    │ (калибровка│
-                    │  оценок)   │
-                    └────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         DATA SOURCES (Источники данных)                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌───────────┐  ┌───────────┐  ┌──────────┐  ┌───────────┐  ┌───────────┐ │
+│  │ The Odds  │  │ Pinnacle  │  │ Betfair  │  │ Betfair   │  │  Scraper  │ │
+│  │ API       │  │ API       │  │ REST API │  │ Stream WS │  │ (bet365,  │ │
+│  │(50+ BKs)  │  │(sharp line)│  │(exchange)│  │(real-time)│  │  Unibet)  │ │
+│  └─────┬─────┘  └─────┬─────┘  └────┬─────┘  └─────┬─────┘  └─────┬─────┘ │
+└────────┼───────────────┼────────────┼──────────────┼──────────────┼─────────┘
+         │               │            │              │              │
+         ▼               ▼            ▼              ▼              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         STRATEGIES (5 стратегий)                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐ │
+│  │ Surebets  │  │ Value Bets│  │  Middles  │  │   Steam   │  │  Cash-Out │ │
+│  │(гарант.   │  │(+EV vs    │  │(коридоры  │  │   Moves   │  │(досрочное │ │
+│  │ прибыль)  │  │ sharp)    │  │ тоталов/  │  │(движение  │  │ закрытие) │ │
+│  │           │  │           │  │ спредов)  │  │ линий)    │  │           │ │
+│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘ │
+└────────┼───────────────┼──────────────┼──────────────┼──────────────┼───────┘
+         │               │              │              │              │
+         ▼               ▼              ▼              ▼              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      AI PIPELINE (11 AI-слоев)                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐          │
+│  │ai_filter │ │ai_alloc  │ │ai_anomaly│ │ ai_batch │ │ai_bk_cls │          │
+│  │(оценка   │ │(Kelly +  │ │(детектор │ │(пакетная │ │(классиф. │          │
+│  │ 0-100)   │ │ AI risk) │ │ аномалий)│ │ оценка)  │ │  БК)     │          │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘          │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐          │
+│  │ai_correl │ │ai_line_  │ │ai_news   │ │ai_optim  │ │ai_rate   │          │
+│  │(корреляц.│ │predictor │ │_scanner  │ │(оптимиз. │ │_limiter  │          │
+│  │ рынков)  │ │(прогноз  │ │(новости) │ │ портфеля)│ │(лимиты)  │          │
+│  └──────────┘ │ линий)   │ └──────────┘ └──────────┘ └──────────┘          │
+│               └──────────┘                                                   │
+│  ┌──────────┐                                                                │
+│  │ai_with-  │                                                                │
+│  │drawal    │                                                                │
+│  │(вывод)   │                                                                │
+│  └──────────┘                                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      EXECUTION & MANAGEMENT                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐ │
+│  │ Executor  │  │ Anti-Ban  │  │  Memory   │  │  Dedup    │  │ Telegram  │ │
+│  │(parallel  │  │(задержки, │  │ (SQLite)  │  │(TTL 5min) │  │  Bot UI   │ │
+│  │ legs)     │  │ лимиты)   │  │           │  │           │  │           │ │
+│  └───────────┘  └───────────┘  └───────────┘  └───────────┘  └───────────┘ │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐               │
+│  │Settlement │  │CLV Tracker│  │Supervisor │  │  Ranker   │               │
+│  │(Scores    │  │(отслежив. │  │(монитор   │  │(ранжиров.)│               │
+│  │ API)      │  │ CLV)      │  │ здоровья) │  │           │               │
+│  └───────────┘  └───────────┘  └───────────┘  └───────────┘               │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Scanner** - получает коэффициенты из OddsAPI и Pinnacle, ищет surebets (гарантированная прибыль) и value bets (положительное мат. ожидание)
-2. **AI Filter** - LLM оценивает вероятность того, что арбитраж реален (не ловушка букмекера), с калибровкой на основе исторической точности
-3. **AI Allocator** - рассчитывает оптимальные ставки по критерию Келли с AI-коррекцией рисков
-4. **Executor** - размещает ставки параллельно (parallel legs через asyncio.gather)
-5. **Anti-Ban** - эвристики для минимизации риска блокировки аккаунтов
-6. **Memory** - SQLite-хранилище всех арбитражей, ставок, банкролла и AI-обратной связи
-7. **Dedup** - дедупликатор предотвращает повторное исполнение одного арбитража
-8. **Settlement** - расчет ставок по реальным результатам матчей из Scores API
-9. **AI Feedback** - петля обратной связи, корректирующая оценки ИИ на основе фактических результатов
+---
 
-## Модули
+## Стратегии (5)
+
+| # | Стратегия | Модуль | Описание |
+|---|-----------|--------|----------|
+| 1 | **Surebets** | `scanner.py` | Гарантированная прибыль при ставках на все исходы у разных БК |
+| 2 | **Value Bets** | `scanner.py` | Положительное мат. ожидание относительно sharp-линий Pinnacle |
+| 3 | **Middles/Коридоры** | `middles.py` | Коридоры тоталов и спредов между разными БК (Poisson-модель) |
+| 4 | **Steam Moves** | `steam_moves.py` | Обнаружение резких движений линий (steam) для раннего входа |
+| 5 | **Cash-Out** | `cashout.py` | Досрочное закрытие позиций при движении линии в нашу сторону |
+
+---
+
+## AI-слои (11)
+
+| # | Модуль | Назначение |
+|---|--------|------------|
+| 1 | `ai_filter.py` | LLM-оценка арбитража (0-100) с калибровкой по историческим данным |
+| 2 | `ai_allocator.py` | Kelly-аллокация с AI-коррекцией рисков для каждой ноги |
+| 3 | `ai_anomaly_detector.py` | Детектор аномальных коэффициентов (ловушки БК, ошибки данных) |
+| 4 | `ai_batch.py` | Пакетная оценка нескольких арбитражей одним LLM-вызовом |
+| 5 | `ai_bk_classifier.py` | Классификация букмекеров (sharp/soft/exchange) для приоритизации |
+| 6 | `ai_correlation.py` | Анализ корреляций между рынками для хеджирования |
+| 7 | `ai_line_predictor.py` | Прогноз движения линий (куда пойдет коэффициент) |
+| 8 | `ai_news_scanner.py` | Мониторинг новостей (травмы, дисквалификации) для фильтрации |
+| 9 | `ai_optimizer.py` | Оптимизация портфеля ставок (диверсификация по спортам/лигам) |
+| 10 | `ai_rate_limiter.py` | Интеллектуальный rate limiter для AI-запросов (приоритеты) |
+| 11 | `ai_withdrawal.py` | Стратегия вывода средств (когда, сколько, с какого БК) |
+
+---
+
+## Модули (полный список)
 
 | Файл | Описание |
-|---|---|
+|------|----------|
+| `__init__.py` | Инициализация пакета |
 | `config.py` | Константы, переменные окружения, параметры |
+| `main.py` | Точка входа, циклы сканирования и settlement |
 | `odds_api.py` | Клиент The Odds API (коэффициенты, скоры, auto-discovery) |
+| `pinnacle_api.py` | Клиент Pinnacle API (sharp-линии) |
+| `betfair_api.py` | Клиент Betfair Exchange REST API (certlogin, ставки) |
+| `betfair_stream.py` | WebSocket-стриминг Betfair (real-time цены) |
+| `scraper.py` | Скраперы мягких БК (bet365, Unibet) - scaffold |
 | `scanner.py` | Поиск surebets и value bets |
+| `middles.py` | Поиск коридоров (middles) с Poisson-моделью |
+| `steam_moves.py` | Обнаружение steam moves (резкие движения линий) |
+| `cashout.py` | Стратегия досрочного закрытия позиций |
 | `ai_filter.py` | LLM-оценка с калибровкой (ai_feedback) |
-| `ai_allocator.py` | Kelly-аллокация с расчетом ног для surebets |
-| `executor.py` | Размещение ставок (параллельные ноги) |
-| `recheck.py` | Перепроверка коэффициентов с оптимизацией (smart recheck) |
+| `ai_allocator.py` | Kelly-аллокация с AI-коррекцией |
+| `ai_anomaly_detector.py` | Детектор аномалий в коэффициентах |
+| `ai_batch.py` | Пакетная AI-оценка нескольких арбитражей |
+| `ai_bk_classifier.py` | Классификация букмекеров (sharp/soft) |
+| `ai_correlation.py` | Корреляционный анализ рынков |
+| `ai_line_predictor.py` | Прогноз движения линий |
+| `ai_news_scanner.py` | Мониторинг спортивных новостей |
+| `ai_optimizer.py` | Оптимизация портфеля ставок |
+| `ai_rate_limiter.py` | Rate limiter для AI-запросов |
+| `ai_withdrawal.py` | Стратегия вывода средств |
+| `executor.py` | Размещение ставок (parallel legs, Betfair) |
+| `anti_ban.py` | Anti-ban эвристики (задержки, лимиты, шум) |
+| `memory.py` | SQLite-хранилище (арбитражи, банкролл, feedback) |
+| `dedup.py` | Дедупликация арбитражей (TTL 5 мин) |
+| `recheck.py` | Smart recheck коэффициентов |
 | `settlement.py` | Расчет ставок по реальным результатам (Scores API) |
-| `memory.py` | SQLite: арбитражи, банкролл, балансы, ai_feedback |
+| `clv_tracker.py` | Отслеживание Closing Line Value |
+| `ranker.py` | Ранжирование арбитражей по приоритету |
+| `supervisor.py` | Мониторинг здоровья системы |
 | `telegram_bot.py` | Telegram-интерфейс с inline-клавиатурой |
-| `anti_ban.py` | Anti-ban эвристики |
-| `dedup.py` | Дедупликация арбитражей (in-memory, TTL 5 мин) |
-| `betfair_stream.py` | Заготовка для Betfair Exchange Streaming API |
-| `utils.py` | Вспомогательные функции форматирования |
-| `main.py` | Точка входа, циклы сканирования и расчета |
+| `retry.py` | Универсальный retry с exponential backoff |
+| `logging_config.py` | Конфигурация логирования |
+| `utils.py` | Вспомогательные функции |
 
-## Настройка
+---
+
+## Установка
+
+### Через pip
+
+```bash
+# Клонирование
+git clone <repo-url>
+cd arbitrage
+
+# Установка зависимостей
+pip install -r requirements.txt
+
+# Копирование конфигурации
+cp ../.env.example .env
+# Заполнить .env своими ключами (см. раздел "Конфигурация")
+```
+
+### Через Docker
+
+```bash
+cd arbitrage
+
+# Сборка образа
+docker build -t arbitrage-bot .
+
+# Запуск
+docker run --env-file .env -v ./data:/app/data arbitrage-bot
+```
+
+### Через docker-compose
+
+```bash
+cd arbitrage
+
+# Запуск
+docker-compose up -d
+
+# Логи
+docker-compose logs -f arbitrage-bot
+
+# Остановка
+docker-compose down
+```
+
+---
+
+## Конфигурация
 
 ### Переменные окружения
 
-| Переменная | Описание | Обязательная |
-|---|---|---|
-| `ODDS_API_KEY` | API-ключ The Odds API (the-odds-api.com) | Да |
-| `PINNACLE_USER` | Имя пользователя Pinnacle | Нет* |
-| `PINNACLE_PASSWORD` | Пароль Pinnacle | Нет* |
-| `BETFAIR_APP_KEY` | Application Key Betfair | Нет* |
-| `BETFAIR_SESSION_TOKEN` | Session Token Betfair | Нет* |
-| `TELEGRAM_TOKEN` | Токен Telegram бота (@BotFather) | Да |
-| `TELEGRAM_CHAT_ID` | ID чата для управления ботом | Да |
-| `GROQ_API_KEY` | API-ключ Groq (для AI-фильтра) | Да |
-| `ARB_DB_PATH` | Путь к SQLite базе (по умолчанию: arbitrage/arbitrage.db) | Нет |
-| `ARB_DRY_RUN` | Режим симуляции: true/false (по умолчанию: true) | Нет |
-| `GROQ_MODEL` | Модель Groq (по умолчанию: llama-3.3-70b-versatile) | Нет |
+| Переменная | Описание | Обязательная | По умолчанию |
+|---|---|---|---|
+| `ODDS_API_KEY` | API-ключ The Odds API | Да | - |
+| `TELEGRAM_TOKEN` | Токен Telegram бота (@BotFather) | Да | - |
+| `TELEGRAM_CHAT_ID` | ID чата для управления ботом | Да | - |
+| `GROQ_API_KEY` | API-ключ Groq (AI-фильтрация) | Да | - |
+| `PINNACLE_USER` | Логин Pinnacle | Нет | - |
+| `PINNACLE_PASSWORD` | Пароль Pinnacle | Нет | - |
+| `BETFAIR_APP_KEY` | Application Key Betfair | Нет | - |
+| `BETFAIR_SESSION_TOKEN` | Session Token Betfair | Нет | - |
+| `BETFAIR_CERT_PATH` | Путь к SSL-сертификату Betfair | Нет | - |
+| `BETFAIR_KEY_PATH` | Путь к SSL-ключу Betfair | Нет | - |
+| `ARB_DRY_RUN` | Режим симуляции (true/false) | Нет | `true` |
+| `ARB_DB_PATH` | Путь к SQLite базе | Нет | `arbitrage/arbitrage.db` |
+| `GROQ_MODEL` | Модель Groq LLM | Нет | `llama-3.3-70b-versatile` |
+| `ARB_BANKROLL` | Начальный банкролл | Нет | `1000.0` |
 
-*Pinnacle и Betfair используются как дополнительные источники sharp-линий. Без них бот берет данные Pinnacle из OddsAPI.
-
-### Установка
-
-```bash
-pip install -r arbitrage/requirements.txt
-```
-
-## Запуск
-
-```bash
-# Как модуль
-python3.11 -m arbitrage.main
-
-# Напрямую
-python3.11 arbitrage/main.py
-```
-
-## Возможности
-
-- Автоматический поиск surebets (гарантированная прибыль при ставках на все исходы)
-- Поиск value bets (ставки с положительным математическим ожиданием относительно sharp-линий)
-- AI-фильтрация через LLM (оценка вероятности что арбитраж реальный)
-- Оптимальная аллокация банкролла (Half-Kelly + AI-коррекция)
-- Anti-ban эвристики (задержки, лимиты частоты, шумовые ставки)
-- Telegram-интерфейс с inline-клавиатурой
-- Алерты при обнаружении арбитражей
-- SQLite-хранилище всей истории
-- DRY RUN режим для тестирования без реальных ставок
-- **Auto-discovery видов спорта** - запрос `/v4/sports` при старте для получения актуального списка
-- **Расчет по реальным результатам** - Scores API вместо симуляции
-- **Дедупликация** - предотвращение повторного исполнения (TTL 5 минут)
-- **Параллельное размещение ног** - asyncio.gather для surebets
-- **Персистентный банкролл** - сохранение состояния между перезапусками
-- **AI-калибровка** - автоматическая коррекция оценок по историческим данным
-- **Smart recheck** - пропуск ненужных API-вызовов для свежих данных
-- **Execution lock** - предотвращение конкурентного исполнения одного арбитража
-
-## Конфигурация
+### Параметры стратегий (config.py)
 
 | Параметр | Значение | Описание |
 |---|---|---|
@@ -128,137 +220,185 @@ python3.11 arbitrage/main.py
 | `MIN_VALUE_EDGE` | 3.0% | Минимальный edge для value bets |
 | `MAX_BET_PCT` | 5.0% | Максимальная ставка (% от банкролла) |
 | `SCAN_INTERVAL_SEC` | 30 сек | Интервал сканирования |
-| `MAX_BANKROLL_EXPOSURE` | 20.0% | Максимальная экспозиция банкролла |
-| `RECHECK_MIN_PROFIT_PCT` | 2.0% | Минимальный профит для перепроверки (ниже - пропуск) |
-| `RECHECK_MAX_STALENESS_SEC` | 10 сек | Максимальная свежесть данных (если свежее - recheck пропускается) |
-| `SPORTS` | soccer_epl, soccer_spain_la_liga, ... | Виды спорта (реальные ключи Odds API) |
+| `MAX_BANKROLL_EXPOSURE` | 20.0% | Максимальная экспозиция |
+| `RECHECK_MIN_PROFIT_PCT` | 2.0% | Минимальный профит для recheck |
+| `RECHECK_MAX_STALENESS_SEC` | 10 сек | Свежесть данных для recheck |
 
-### Виды спорта (SPORTS)
+### Пример .env
 
-Бот использует реальные ключи The Odds API:
+```env
+# === ОБЯЗАТЕЛЬНЫЕ ===
+ODDS_API_KEY=your_odds_api_key_here
+TELEGRAM_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+TELEGRAM_CHAT_ID=123456789
+GROQ_API_KEY=gsk_your_groq_key_here
 
-| Ключ | Лига |
-|---|---|
-| `soccer_epl` | Английская Премьер-лига |
-| `soccer_spain_la_liga` | Испанская Ла Лига |
-| `soccer_germany_bundesliga` | Немецкая Бундеслига |
-| `soccer_italy_serie_a` | Итальянская Серия А |
-| `soccer_france_ligue_one` | Французская Лига 1 |
-| `soccer_uefa_champs_league` | Лига Чемпионов UEFA |
-| `tennis_atp_french_open` | Теннис ATP French Open |
-| `basketball_nba` | NBA |
-| `basketball_euroleague` | Евролига |
+# === ОПЦИОНАЛЬНЫЕ ===
+# Pinnacle (sharp-линии напрямую)
+PINNACLE_USER=your_pinnacle_login
+PINNACLE_PASSWORD=your_pinnacle_password
 
-При запуске бот выполняет **auto-discovery**: запрашивает эндпоинт `/v4/sports` для получения актуального списка активных видов спорта. Если запрос успешен, список SPORTS обновляется динамически. В случае ошибки используется захардкоженный список из config.py.
+# Betfair Exchange
+BETFAIR_APP_KEY=your_betfair_app_key
+BETFAIR_SESSION_TOKEN=your_session_token
+BETFAIR_CERT_PATH=/path/to/betfair.crt
+BETFAIR_KEY_PATH=/path/to/betfair.key
 
-## Scores API и Settlement
+# Режим работы
+ARB_DRY_RUN=true
+ARB_DB_PATH=arbitrage/arbitrage.db
+GROQ_MODEL=llama-3.3-70b-versatile
+```
 
-Settlement (расчет ставок) использует реальные результаты матчей из The Odds API Scores endpoint (`/v4/sports/{sport}/scores`).
+---
 
-Логика расчета:
-- **h2h**: сравнение финального счета для определения победителя
-- **totals**: сумма голов/очков сравнивается с линией
-- **Матч не завершен** (`completed=False`): ставка остается в статусе `PENDING`
-- **Нет данных о результате**: статус `UNRESOLVED` (без случайной симуляции)
-- **DRY_RUN режим**: статусы `SIMULATED_WON` / `SIMULATED_LOST` на основе реальных скоров
+## Запуск
 
-## Дедупликация (dedup.py)
+### Dev-режим (локально)
 
-`ArbDeduplicator` предотвращает повторное исполнение одной и той же арбитражной возможности в течение 5 минут.
+```bash
+# Установка зависимостей
+pip install -r arbitrage/requirements.txt
 
-- Ключ дедупликации: `{home}_{away}_{market}_{type}`
-- TTL: 5 минут (автоматическая очистка при каждом вызове)
-- In-memory хранилище (сброс при перезапуске)
-- Проверка вызывается перед каждым исполнением в scanner_loop
+# Запуск в DRY_RUN
+ARB_DRY_RUN=true python3.11 -m arbitrage.main
+```
 
-## Параллельное исполнение (Parallel Arb Legs)
+### Docker
 
-Для surebets (ставки на все исходы) ноги размещаются параллельно через `asyncio.gather`:
+```bash
+cd arbitrage
+docker build -t arbitrage-bot .
+docker run -d \
+  --name arbitrage \
+  --env-file .env \
+  -v $(pwd)/data:/app/data \
+  --restart always \
+  arbitrage-bot
+```
 
-- AI Allocator рассчитывает ставку для каждой ноги пропорционально обратному коэффициенту
-- Executor запускает все ноги одновременно
-- Если одна нога падает: статус `PARTIAL_FILL`, оповещение в Telegram
-- Для value bets: стандартное одиночное исполнение
+### VPS (production)
 
-## Execution Lock
+```bash
+# 1. Подготовка сервера (Ubuntu 22.04+)
+apt update && apt install -y python3.11 python3.11-pip
 
-`asyncio.Lock` в main.py предотвращает конкурентное исполнение одного арбитража из разных циклов сканирования. Блокировка захватывается на этапе от recheck до записи в memory.
+# 2. Клонирование и установка
+git clone <repo-url> /opt/arbitrage
+cd /opt/arbitrage
+pip install -r arbitrage/requirements.txt
 
-## Персистентный банкролл и балансы
+# 3. Настройка systemd
+cat > /etc/systemd/system/arbitrage-bot.service << 'EOF'
+[Unit]
+Description=Arbitrage Bot
+After=network.target
 
-### Таблицы в SQLite
+[Service]
+Type=simple
+User=arbitrage
+WorkingDirectory=/opt/arbitrage
+EnvironmentFile=/opt/arbitrage/.env
+ExecStart=/usr/bin/python3.11 -m arbitrage.main
+Restart=always
+RestartSec=10
 
-- **`bankroll_state`** - общий банкролл (total_bankroll, last_updated). Загружается при старте, обновляется после каждого settlement.
-- **`accounts`** - балансы по букмекерам (bookmaker, balance, last_updated). Управляются через Telegram-команду `/set_balance`.
+[Install]
+WantedBy=multi-user.target
+EOF
 
-Банкролл сохраняется между перезапусками. При первом запуске - fallback на 1000.0.
+# 4. Запуск
+systemctl enable arbitrage-bot
+systemctl start arbitrage-bot
 
-## AI Feedback Loop (калибровка)
+# 5. Мониторинг
+journalctl -u arbitrage-bot -f
+```
 
-Таблица **`ai_feedback`** отслеживает точность AI-оценок:
-- `ai_score` - оценка ИИ на момент решения
-- `actual_outcome` - фактический результат (WON, LOST, DIED_BEFORE_EXEC)
-- `ttl_predicted_sec` / `ttl_actual_sec` - предсказанное и фактическое время жизни
+---
 
-**Калибровка**: на основе последних 5 оценок вычисляется `calibration_offset`. Если ИИ систематически завышает оценки для умерших арбитражей, offset вычитается из финальной оценки. Промпт для ИИ включает историю последних оценок для самокоррекции.
+## Получение API-ключей
 
-## Smart Recheck (оптимизация)
+### The Odds API
 
-Перед API-вызовом для перепроверки коэффициентов проверяются два условия:
+1. Регистрация на [the-odds-api.com](https://the-odds-api.com)
+2. Бесплатный план: 500 запросов/месяц
+3. Рекомендуемый план: Starter ($20/мес) - 5000 запросов
+4. Ключ в разделе Dashboard -> API Key
 
-1. **Свежесть данных** (`RECHECK_MAX_STALENESS_SEC = 10`): если данные сканирования моложе 10 секунд, recheck пропускается (данные и так актуальны)
-2. **Минимальный профит** (`RECHECK_MIN_PROFIT_PCT = 2.0%`): если профит арбитража ниже 2%, recheck пропускается (экономия API-квоты)
+### Betfair Exchange
 
-Это значительно снижает количество API-запросов без потери качества.
+1. Регистрация на [betfair.com](https://www.betfair.com)
+2. Получение Application Key: My Account -> Developer App Keys
+3. Для certlogin: создать SSL-сертификат в Account -> Security
+4. Premium API (для стриминга): запрос через support
 
-## Betfair Streaming (betfair_stream.py)
+### Telegram Bot
 
-Модуль `betfair_stream.py` - заготовка для интеграции с Betfair Exchange Streaming API через WebSocket.
+1. Открыть [@BotFather](https://t.me/BotFather) в Telegram
+2. Команда `/newbot`, выбрать имя
+3. Скопировать токен
+4. Для CHAT_ID: отправить боту сообщение, затем вызвать `https://api.telegram.org/bot<TOKEN>/getUpdates`
 
-Класс `BetfairStreamClient`:
-- `connect()` / `disconnect()` - управление подключением
-- `subscribe_market(market_id)` - подписка на обновления рынка
-- `on_price_change(callback)` - регистрация callback для обновления цен
+### Groq (AI)
 
-**Требования для production:**
-- Колокация в дата-центре Betfair (Лондон)
-- Betfair Premium API доступ
-- Реальный WebSocket клиент для stream-api.betfair.com
+1. Регистрация на [console.groq.com](https://console.groq.com)
+2. Бесплатный план: 30 запросов/мин
+3. Создать API Key в Settings -> API Keys
+4. Рекомендуемая модель: `llama-3.3-70b-versatile`
 
-Текущая реализация - placeholder с TODO-комментариями.
+---
 
-## Telegram-команды
+## Тестирование
 
-| Команда / Кнопка | Описание |
-|---|---|
-| `/start` | Запуск бота, показ inline-клавиатуры |
-| `/set_balance {bk} {amount}` | Установить баланс букмекера (напр. `/set_balance pinnacle 500`) |
-| БАНК | Показать общий банкролл и балансы по каждому букмекеру |
-| СТОП / СТАРТ | Управление циклом сканирования |
+```bash
+# Все тесты
+python3.11 -m pytest tests/ -v
 
-Кнопка БАНК отображает:
-- Общий банкролл
-- Баланс каждого букмекера из таблицы `accounts`
+# Проверка импортов
+python3.11 -c "import arbitrage"
 
-## DRY RUN
+# Проверка конкретных модулей
+python3.11 -c "from arbitrage.middles import MiddleScanner, poisson_pmf, LEAGUE_AVERAGES"
+python3.11 -c "from arbitrage.scraper import BookmakerScraper, Bet365Scraper"
+python3.11 -c "from arbitrage.betfair_api import BetfairClient"
+python3.11 -c "from arbitrage.executor import BetExecutor"
+```
 
-По умолчанию бот работает в режиме DRY RUN (`ARB_DRY_RUN=true`). В этом режиме:
+---
 
-- Все ставки логируются, но не размещаются реально
-- Коэффициенты загружаются из реальных API
-- AI-фильтрация работает в полном объёме
-- В Telegram отправляются алерты как обычно
-- Settlement использует реальные скоры, но помечает результаты как SIMULATED_WON / SIMULATED_LOST
+## Виды спорта
 
-Для переключения в live-режим установите `ARB_DRY_RUN=false`.
+| Ключ | Лига | Ср. тотал |
+|------|------|-----------|
+| `soccer_epl` | Английская Премьер-лига | 2.7 |
+| `soccer_spain_la_liga` | Испанская Ла Лига | 2.5 |
+| `soccer_germany_bundesliga` | Немецкая Бундеслига | 3.0 |
+| `soccer_italy_serie_a` | Итальянская Серия А | 2.4 |
+| `soccer_france_ligue_one` | Французская Лига 1 | 2.5 |
+| `soccer_uefa_champs_league` | Лига Чемпионов UEFA | 2.8 |
+| `basketball_nba` | NBA | 220.5 |
+| `basketball_euroleague` | Евролига | 155.0 |
+| `tennis_atp_french_open` | Теннис ATP French Open | - |
 
-## Disclaimer
+При запуске бот выполняет auto-discovery: запрашивает `/v4/sports` для актуального списка.
 
-**ВНИМАНИЕ:** Данное программное обеспечение предоставляется исключительно в образовательных целях.
+---
 
-- Азартные игры связаны с риском потери денежных средств
-- Букмекеры могут заблокировать аккаунты при обнаружении арбитражной активности
-- Авторы не несут ответственности за финансовые потери
-- Использование бота в live-режиме на ваш собственный риск
+## Disclaimer (Отказ от ответственности)
+
+**ВНИМАНИЕ:** Данное программное обеспечение предоставляется исключительно в образовательных и исследовательских целях.
+
+- Азартные игры связаны с риском полной потери денежных средств
+- Букмекеры активно борются с арбитражерами и могут заблокировать аккаунты
+- Авторы не несут ответственности за финансовые потери любого рода
+- Использование бота в live-режиме осуществляется на ваш собственный риск
 - Проверьте законодательство вашей юрисдикции относительно спортивных ставок
 - Прошлые результаты не гарантируют будущую прибыль
+- Бот работает в режиме DRY_RUN по умолчанию - переключение в live требует осознанного решения
+
+---
+
+## Лицензия
+
+Проект создан в образовательных целях. Коммерческое использование без согласования запрещено.
