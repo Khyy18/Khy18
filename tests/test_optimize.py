@@ -1,201 +1,144 @@
-"""Тесты walk-forward оптимизатора (optimize.py).
+"""Тесты оптимизатора momentum-стратегии (optimize.py).
 
 Проверяем:
-  - _simulate() на синтетических данных открывает пару и даёт PnL > 0;
-  - optimize() возвращает <= top результатов и фильтрует по min_trades;
-  - на пустой БД optimize() возвращает [] без exception;
-  - --save-best пишет файл в правильном .env-формате.
+  - _random_params() генерирует валидные параметры с правильными диапазонами;
+  - _mutate_params() сохраняет структуру и инвариант ema_fast < ema_slow;
+  - _score_result() корректно считает Calmar-like score;
+  - _params_to_kwargs() правильно маппит параметры для backtest;
+  - _run_optimization() возвращает 4-tuple с лучшим результатом.
 """
 
 from __future__ import annotations
 
-import sqlite3
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-import pytest
-
-
-# --- Фикстуры --------------------------------------------------------
-
-@pytest.fixture
-def tmp_db(tmp_path, monkeypatch):
-    """SQLite в tmp_path вместо рабочего trades.db.
-
-    Подменяем memory.DB_PATH (как уже делает test_funding_history.py),
-    инициализируем схему funding_snapshots через funding_history.init_db().
-    """
-    db_path = tmp_path / "test_trades.db"
-    import memory
-    import funding_history as fh
-    monkeypatch.setattr(memory, "DB_PATH", str(db_path))
-    fh.init_db()
-    return str(db_path)
+import optimize
+from optimize import (
+    PARAM_SPACE,
+    _mutate_params,
+    _params_to_kwargs,
+    _random_params,
+    _run_optimization,
+    _score_result,
+)
 
 
-def _seed_synthetic_pair(
-    db_path: str,
-    symbol: str = "BTCUSDT",
-    long_ex: str = "okx",
-    short_ex: str = "bybit",
-    long_rate: float = -0.0005,
-    short_rate: float = 0.001,
-    n_ticks: int = 50,
-    tick_minutes: int = 60,
-) -> int:
-    """Записать в SQLite n_ticks снимков с фиксированным edge на одной паре.
+def test_random_params_valid_ranges():
+    """_random_params() возвращает dict со всеми 7 ключами PARAM_SPACE, ema_fast < ema_slow."""
+    params = _random_params()
 
-    Используем прямой INSERT (не record_snapshots), чтобы контролировать
-    timestamp каждого тика — оптимизатор смотрит окно "последних N дней".
+    # Все ключи присутствуют
+    for key in PARAM_SPACE:
+        assert key in params, f"Ключ {key} отсутствует в params"
 
-    Edge при дефолтных параметрах (рассчитан так, чтобы за 49 часов
-    funding покрыл round-trip fees ~0.42 USDT и осталось положительное PnL):
-      long.rate = -0.05% за 8ч → APR ≈ -54.75%
-      short.rate = +0.10% за 8ч → APR ≈ +109.5%
-      edge_per_hour = (0.001 - (-0.0005))/8 = 0.0001875
-      edge_apr ≈ 164.25%, net_edge_apr ≈ 153% — выше всех порогов сетки.
-      За 49 часов на notional 200: funding ≈ 1.84 USDT > fees 0.42 USDT.
-    """
-    long_apr = long_rate * (24.0 / 8.0) * 365.0
-    short_apr = short_rate * (24.0 / 8.0) * 365.0
-    now = datetime.now(tz=timezone.utc)
+    # ema_fast < ema_slow
+    assert params["ema_fast"] < params["ema_slow"]
 
-    rows: list[tuple] = []
-    for i in range(n_ticks):
-        # Тики в прошлом, от старого к новому. Самый поздний — сейчас.
-        ts = (now - timedelta(minutes=tick_minutes * (n_ticks - 1 - i))).isoformat(
-            timespec="seconds"
-        )
-        rows.append((long_ex, symbol, ts, long_rate, long_apr, 30000.0, 8.0))
-        rows.append((short_ex, symbol, ts, short_rate, short_apr, 30000.0, 8.0))
-
-    with sqlite3.connect(db_path) as conn:
-        conn.executemany(
-            "INSERT INTO funding_snapshots "
-            "(exchange, symbol, ts, rate, apr, mark_price, interval_hours) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            rows,
-        )
-        conn.commit()
-    return len(rows)
+    # Числовые диапазоны
+    assert isinstance(params["ema_fast"], int)
+    assert isinstance(params["ema_slow"], int)
+    assert params["stop_loss_pct"] >= 0.01
+    assert params["stop_loss_pct"] <= 0.04
+    assert params["take_profit_pct"] >= 0.02
+    assert params["take_profit_pct"] <= 0.08
+    assert params["min_atr_pct"] >= 0.003
+    assert params["min_atr_pct"] <= 0.01
+    assert params["trail_activate_pct"] >= 0.01
+    assert params["trail_activate_pct"] <= 0.04
+    assert params["trail_distance_pct"] >= 0.005
+    assert params["trail_distance_pct"] <= 0.02
 
 
-# --- Тесты -----------------------------------------------------------
+def test_mutate_params_preserves_structure():
+    """_mutate_params() сохраняет все ключи и инвариант ema_fast < ema_slow."""
+    base_params = {
+        "ema_fast": 9,
+        "ema_slow": 21,
+        "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.04,
+        "min_atr_pct": 0.005,
+        "trail_activate_pct": 0.02,
+        "trail_distance_pct": 0.01,
+    }
 
-def test_simulate_with_synthetic_data(tmp_db):
-    """50 ticks с +33% APR edge → пара открывается и закрывается с PnL > 0."""
-    import optimize
+    mutated = _mutate_params(base_params)
 
-    n_inserted = _seed_synthetic_pair(tmp_db, n_ticks=50, tick_minutes=60)
-    assert n_inserted == 100
+    # Те же ключи
+    assert set(mutated.keys()) == set(base_params.keys())
 
-    snaps = optimize._load_snapshots(tmp_db, days=7)
-    assert len(snaps) == 100
-
-    grouped = optimize._group_by_ts(snaps)
-    assert len(grouped) == 50
-
-    # Подготавливаем тики, как делает optimize().
-    ticks = []
-    for ts, bucket in grouped:
-        lookup, cands = optimize._build_tick(bucket, holding_days=7.0)
-        ticks.append((ts, lookup, cands))
-
-    # На каждом тике должен быть минимум один кандидат.
-    assert all(len(t[2]) >= 1 for t in ticks)
-    # Топ-кандидат — наша пара с net_apr > 20%.
-    top = ticks[0][2][0]
-    assert top.symbol == "BTCUSDT"
-    assert top.net_edge_apr > 0.20
-
-    trades = optimize._simulate(
-        ticks,
-        open_thr=0.20,
-        close_thr=0.05,
-        max_hold_h=240.0,
-        notional=200.0,
-    )
-
-    assert len(trades) >= 1, "пара должна открыться хотя бы раз"
-    # Edge стабильно положительный → PnL > 0 после вычета комиссий.
-    assert trades[0].pnl > 0
-    assert trades[0].symbol == "BTCUSDT"
-    assert trades[0].funding_received > 0
+    # Инвариант fast < slow
+    assert mutated["ema_fast"] < mutated["ema_slow"]
 
 
-def test_optimize_returns_topn(tmp_db):
-    """optimize() возвращает не более top результатов."""
-    import optimize
-
-    _seed_synthetic_pair(tmp_db, n_ticks=80, tick_minutes=60)
-
-    snaps = optimize._load_snapshots(tmp_db, days=7)
-    results = optimize.optimize(snaps, notional=200.0, min_trades=1, top=5)
-
-    assert isinstance(results, list)
-    assert len(results) <= 5
-    # Сортировка по sharpe_proxy в убывающем порядке.
-    if len(results) >= 2:
-        assert results[0].sharpe_proxy >= results[1].sharpe_proxy
+def test_score_result_positive_pnl():
+    """_score_result() с положительным PnL и достаточным числом сделок > 0."""
+    result = {"total_pnl_pct": 0.5, "max_drawdown_pct": 0.1, "trades": 20}
+    score = _score_result(result)
+    assert score > 0
 
 
-def test_optimize_handles_empty_db(tmp_db):
-    """Пустая funding_snapshots → optimize() возвращает [] без exception."""
-    import optimize
-
-    snaps = optimize._load_snapshots(tmp_db, days=30)
-    assert snaps == []
-
-    results = optimize.optimize(snaps, notional=200.0, min_trades=10, top=10)
-    assert results == []
+def test_score_result_zero_drawdown():
+    """_score_result() с max_drawdown_pct=0 использует fallback 0.001 и не падает."""
+    result = {"total_pnl_pct": 0.5, "max_drawdown_pct": 0, "trades": 20}
+    score = _score_result(result)
+    # Функция использует fallback 0.001, результат должен быть > 0
+    assert score > 0
 
 
-def test_main_handles_insufficient_data(tmp_db, capsys, monkeypatch):
-    """main() с пустой БД печатает сообщение и выходит с кодом 0."""
-    import optimize
+def test_params_to_kwargs_mapping():
+    """_params_to_kwargs() правильно маппит параметры и добавляет fee/leverage/confirmation."""
+    params = {
+        "ema_fast": 9,
+        "ema_slow": 21,
+        "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.04,
+        "min_atr_pct": 0.005,
+        "trail_activate_pct": 0.02,
+        "trail_distance_pct": 0.01,
+    }
 
-    rc = optimize.main(["--days", "30", "--db", tmp_db])
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert "Недостаточно данных" in captured.out
+    kwargs = _params_to_kwargs(params)
 
+    # Прямой маппинг параметров
+    assert kwargs["ema_fast"] == 9
+    assert kwargs["ema_slow"] == 21
+    assert kwargs["stop_loss_pct"] == 0.02
+    assert kwargs["take_profit_pct"] == 0.04
+    assert kwargs["min_atr_pct"] == 0.005
+    assert kwargs["trail_activate_pct"] == 0.02
+    assert kwargs["trail_distance_pct"] == 0.01
 
-def test_save_best_writes_env_format(tmp_path):
-    """_save_best() пишет ключи ARB_* в .env-формате."""
-    import optimize
-
-    out_path = tmp_path / "best.env"
-    best = optimize._ComboResult(
-        open_thr=0.18,
-        close_thr=0.04,
-        max_hold_h=120.0,
-        n_trades=42,
-        total_pnl=15.50,
-        mean_pnl=0.369,
-        win_rate=0.71,
-        sharpe_proxy=1.234,
-        max_drawdown=2.10,
-    )
-
-    optimize._save_best(str(out_path), best)
-    text = out_path.read_text(encoding="utf-8")
-    lines = text.strip().split("\n")
-
-    # Должны быть три KEY=VALUE строки с правильными значениями.
-    assert "ARB_OPEN_MIN_NET_APR=0.1800" in lines
-    assert "ARB_CLOSE_NET_APR=0.0400" in lines
-    assert "ARB_MAX_HOLD_HOURS=120" in lines
-    # И заголовочные комментарии.
-    assert any(line.startswith("#") for line in lines)
+    # Фиксированные параметры
+    assert kwargs["fee_per_side"] == 0.00055
+    assert "leverage" in kwargs
+    assert kwargs["confirmation_bar"] is True
 
 
-def test_load_snapshots_filter_by_symbols(tmp_db):
-    """Фильтр --symbols должен пропускать только нужные символы."""
-    import optimize
+def test_run_optimization_basic(monkeypatch):
+    """_run_optimization() с замоканным backtest возвращает 4-tuple."""
+    fake_result = {
+        "trades": 10,
+        "winrate": 0.6,
+        "total_pnl_pct": 0.05,
+        "max_drawdown_pct": 0.02,
+        "equity_final": 1.05,
+    }
 
-    _seed_synthetic_pair(tmp_db, symbol="BTCUSDT", n_ticks=10, tick_minutes=60)
-    _seed_synthetic_pair(tmp_db, symbol="ETHUSDT", n_ticks=10, tick_minutes=60)
+    import backtest_momentum
 
-    only_btc = optimize._load_snapshots(tmp_db, days=7, symbols_filter={"BTCUSDT"})
-    assert all(s.symbol == "BTCUSDT" for s in only_btc)
-    assert len(only_btc) == 20  # 10 ticks * 2 exchanges
+    monkeypatch.setattr(backtest_momentum, "run_backtest", lambda **kwargs: fake_result)
+
+    fake_klines = [{"open": 100, "high": 101, "low": 99, "close": 100.5}] * 300
+
+    result = _run_optimization(fake_klines, iterations=5)
+
+    # Возвращает 4-tuple
+    assert isinstance(result, tuple)
+    assert len(result) == 4
+
+    best_score, best_params, best_result, all_results = result
+
+    # Score должен быть > 0 (PnL положительный, сделок >= 5)
+    assert best_score > 0
+    assert isinstance(best_params, dict)
+    assert isinstance(best_result, dict)
+    assert isinstance(all_results, list)
+    assert len(all_results) == 5
