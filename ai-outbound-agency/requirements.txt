@@ -23,6 +23,10 @@ email-validator
 playwright
 scipy
 stripe
+arq
+structlog
+prometheus-client
+sentry-sdk[fastapi]
 
 # Test dependencies
 pytest

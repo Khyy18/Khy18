@@ -4,13 +4,19 @@ import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from core.config import settings
 from core.db import async_session_factory, engine
+from core.observability import (
+    setup_logging,
+    setup_sentry,
+    CorrelationIdMiddleware,
+    metrics_response,
+)
 from channels.email.tracker import router as tracking_router
 from dashboard.auth import router as auth_router
 from dashboard.routes.campaigns import router as campaigns_router
@@ -20,6 +26,9 @@ from dashboard.routes.analytics import router as analytics_router
 from dashboard.routes.optimizer import router as optimizer_router
 from dashboard.routes.billing import router as billing_router
 from dashboard.views import router as views_router
+
+# Initialize structured logging
+setup_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +40,10 @@ _inbox_task: asyncio.Task | None = None
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application lifespan: startup and shutdown."""
     global _scheduler, _inbox_task
+
+    # Initialize Sentry if DSN is configured
+    if settings.sentry_dsn:
+        setup_sentry(settings.sentry_dsn)
 
     # Warn if JWT secret key is still the default insecure value
     if settings.jwt_secret_key == "change-me-in-production":
@@ -176,6 +189,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add observability middleware
+app.add_middleware(CorrelationIdMiddleware)
+
 # Include tracking router for open/click tracking
 app.include_router(tracking_router)
 
@@ -232,6 +248,12 @@ async def health_check() -> JSONResponse:
         content={"status": "healthy", "version": "0.1.0"},
         status_code=200,
     )
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    """Prometheus metrics endpoint."""
+    return metrics_response()
 
 
 if __name__ == "__main__":

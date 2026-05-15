@@ -54,5 +54,28 @@ class Settings(BaseSettings):
     linkedin_min_action_cooldown_hours: int = 2
     linkedin_proxy_list: str = "[]"
 
+    # Observability
+    sentry_dsn: str = ""
+
+    # ARQ (async Redis queue)
+    arq_redis_url: str = ""
+
+    # LLM fallback and model settings
+    llm_fallback_chain: str = "openai"
+    llm_openai_model: str = "gpt-4"
+    llm_anthropic_model: str = "claude-3-sonnet-20240229"
+    llm_groq_model: str = "llama3-8b-8192"
+    llm_openai_timeout: int = 30
+    llm_anthropic_timeout: int = 45
+    llm_groq_timeout: int = 15
+
+    # Notification channels
+    slack_webhook_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
+    # Approval settings
+    approval_required_company_size: int = 500
+
 
 settings = Settings()  # type: ignore[call-arg]

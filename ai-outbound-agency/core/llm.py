@@ -1,8 +1,11 @@
 import asyncio
+import time
 from typing import Any
 
 import anthropic
 import openai
+
+from core.observability import llm_requests_total, llm_latency_seconds, llm_errors_total
 
 
 class LLMClient:
@@ -35,18 +38,27 @@ class LLMClient:
         """Generate a response from the LLM with retry logic."""
         last_error: Exception | None = None
 
+        llm_requests_total.labels(provider=self.provider, model=self.model).inc()
+
         for attempt in range(3):
             try:
+                start_time = time.monotonic()
                 if self.provider in ("openai", "groq"):
-                    return await self._generate_openai(
+                    result = await self._generate_openai(
                         messages, temperature, max_tokens
                     )
                 elif self.provider == "anthropic":
-                    return await self._generate_anthropic(
+                    result = await self._generate_anthropic(
                         messages, temperature, max_tokens
                     )
+                else:
+                    raise ValueError(f"Unsupported provider: {self.provider}")
+                elapsed = time.monotonic() - start_time
+                llm_latency_seconds.labels(provider=self.provider).observe(elapsed)
+                return result
             except Exception as exc:
                 last_error = exc
+                llm_errors_total.labels(provider=self.provider).inc()
                 if attempt < 2:
                     await asyncio.sleep(2**attempt)
 
