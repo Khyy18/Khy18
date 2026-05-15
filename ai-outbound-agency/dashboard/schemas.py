@@ -119,6 +119,9 @@ class LeadImportResponse(BaseModel):
 
 # ---------- Sequence Schemas ----------
 
+# Valid channel types for sequence steps
+VALID_STEP_CHANNELS = {"email", "linkedin_view", "linkedin_connect", "linkedin_message"}
+
 
 class SequenceCreate(BaseModel):
     name: str

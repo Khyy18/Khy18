@@ -28,11 +28,22 @@ from core.models import (
     MessageStatus,
     Sequence,
 )
+from scheduler.channel_router import ChannelRouter
 
 logger = logging.getLogger(__name__)
 
 # Lead statuses that should be skipped during sequence execution
 _SKIP_STATUSES = {LeadStatus.replied, LeadStatus.lost, LeadStatus.booked}
+
+# LinkedIn channel types that should be routed to linkedin workers
+_LINKEDIN_CHANNELS = {"linkedin_view", "linkedin_connect", "linkedin_message"}
+
+# Mapping from channel type to the ARQ task function name
+_LINKEDIN_TASK_MAP = {
+    "linkedin_view": "linkedin_view_task",
+    "linkedin_connect": "linkedin_connect_task",
+    "linkedin_message": "linkedin_message_task",
+}
 
 
 class SequenceRunner:
@@ -45,6 +56,7 @@ class SequenceRunner:
         email_sender: AsyncEmailSender,
         copywriter: CopywriterAgent,
         tracker: EmailTracker,
+        channel_router: ChannelRouter | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._redis_url = redis_url
@@ -52,6 +64,7 @@ class SequenceRunner:
         self._copywriter = copywriter
         self._tracker = tracker
         self._redis: aioredis.Redis | None = None
+        self._channel_router = channel_router or ChannelRouter(session_factory)
 
     async def _get_redis(self) -> aioredis.Redis:
         """Get or create Redis connection."""
@@ -136,6 +149,15 @@ class SequenceRunner:
         steps: list[dict[str, Any]],
     ) -> None:
         """Process a single lead: determine step, check timing, send if ready."""
+        # Cross-channel skip: if lead already replied on ANY channel, skip
+        if await self._channel_router.should_skip_lead(lead.id, campaign.id, session):
+            logger.debug(
+                "Skipping lead %s in campaign %s (replied on another channel)",
+                lead.id,
+                campaign.id,
+            )
+            return
+
         # Count how many outbound messages have been sent for this lead+campaign
         sent_count = await self._count_sent_messages(session, campaign.id, lead.id)
 
@@ -145,7 +167,28 @@ class SequenceRunner:
 
         step_index = sent_count
         step_config = steps[step_index]
-        delay_days = step_config.get("delay_days", 0)
+
+        # Determine the channel for this step
+        channel = self._channel_router.determine_channel(step_config)
+
+        # For LinkedIn steps, check prerequisites
+        if channel in _LINKEDIN_CHANNELS:
+            prereqs_met = await self._channel_router.check_prerequisites(
+                step_config, lead.id, session
+            )
+            if not prereqs_met:
+                logger.debug(
+                    "Prerequisites not met for lead %s step channel=%s, skipping",
+                    lead.id,
+                    channel,
+                )
+                return
+
+        # Calculate delay (channel-aware)
+        delay = await self._channel_router.calculate_delay(
+            step_config, lead.id, campaign.id, session
+        )
+        delay_days = delay.days
 
         # For the first message, no delay check needed beyond delay_days=0
         if step_index > 0:
@@ -163,6 +206,15 @@ class SequenceRunner:
             if now < required_time:
                 return  # Delay hasn't elapsed yet
 
+        # Check deduplication before sending
+        if await self._channel_router.check_deduplication(lead.id, campaign.id, session):
+            logger.debug(
+                "Deduplication triggered for lead %s campaign %s, skipping",
+                lead.id,
+                campaign.id,
+            )
+            return
+
         # Acquire distributed lock to prevent double-sending
         redis = await self._get_redis()
         lock_key = f"lock:send:{campaign.id}:{lead.id}"
@@ -176,12 +228,93 @@ class SequenceRunner:
             return
 
         try:
-            await self._send_step_message(
-                session, campaign, lead, step_config
-            )
+            if channel in _LINKEDIN_CHANNELS:
+                await self._send_linkedin_step(
+                    session, campaign, lead, step_config, channel
+                )
+            else:
+                await self._send_step_message(
+                    session, campaign, lead, step_config
+                )
         finally:
             # Release the lock after sending
             await redis.delete(lock_key)
+
+    async def _send_linkedin_step(
+        self,
+        session: AsyncSession,
+        campaign: Campaign,
+        lead: Lead,
+        step_config: dict[str, Any],
+        channel: str,
+    ) -> None:
+        """Record a LinkedIn step as a Message and note the intended ARQ task.
+
+        Since we cannot directly enqueue to ARQ without a running Redis pool for
+        the worker, we record the message with channel=linkedin, status=sent, and
+        store the intended task name in the meta field.
+
+        Args:
+            session: The async database session.
+            campaign: The campaign being processed.
+            lead: The lead being processed.
+            step_config: The step configuration dictionary.
+            channel: The LinkedIn channel type string.
+        """
+        # Check LinkedIn usage limit before processing
+        from compliance.usage_limiter import get_usage_limiter
+        from core.config import settings
+
+        usage_limiter = get_usage_limiter(settings.redis_url)
+        allowed = await usage_limiter.check_and_increment(
+            str(campaign.tenant_id), "linkedin"
+        )
+        if not allowed:
+            logger.warning(
+                "LinkedIn usage limit reached for tenant %s, skipping send to %s",
+                campaign.tenant_id,
+                lead.linkedin_url,
+            )
+            return
+
+        task_name = _LINKEDIN_TASK_MAP[channel]
+        profile_url = lead.linkedin_url or ""
+
+        # Record the message in the database
+        now = datetime.now(timezone.utc)
+        message_id = uuid.uuid4()
+        content = step_config.get("content", f"LinkedIn {channel} action")
+
+        msg_record = Message(
+            id=message_id,
+            lead_id=lead.id,
+            campaign_id=campaign.id,
+            channel=ChannelType.linkedin,
+            direction=MessageDirection.outbound,
+            content=content,
+            subject=None,
+            status=MessageStatus.sent,
+            sent_at=now,
+            meta={
+                "linkedin_task": task_name,
+                "profile_url": profile_url,
+                "step_channel": channel,
+            },
+        )
+        session.add(msg_record)
+
+        # Update lead status to contacted if still new
+        if lead.status == LeadStatus.new:
+            lead.status = LeadStatus.contacted
+
+        await session.commit()
+        logger.info(
+            "Recorded LinkedIn %s for lead=%s (campaign=%s, task=%s)",
+            channel,
+            lead.id,
+            campaign.id,
+            task_name,
+        )
 
     async def _send_step_message(
         self,

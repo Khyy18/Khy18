@@ -12,6 +12,7 @@ from dashboard.schemas import (
     SequenceListResponse,
     SequenceResponse,
     SequenceUpdate,
+    VALID_STEP_CHANNELS,
 )
 
 router = APIRouter(prefix="/api/sequences", tags=["sequences"])
@@ -24,12 +25,32 @@ async def _get_session():
         yield session
 
 
+def _validate_step_channels(steps: list[dict]) -> None:
+    """Validate that step channel values are valid.
+
+    Args:
+        steps: List of step configuration dictionaries.
+
+    Raises:
+        HTTPException: If a step has an invalid channel value.
+    """
+    for i, step in enumerate(steps):
+        if "channel" in step:
+            if step["channel"] not in VALID_STEP_CHANNELS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Step {i}: invalid channel '{step['channel']}'. "
+                    f"Must be one of: {', '.join(sorted(VALID_STEP_CHANNELS))}",
+                )
+
+
 @router.post("/", response_model=SequenceResponse, status_code=status.HTTP_201_CREATED)
 async def create_sequence(
     data: SequenceCreate,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(_get_session),
 ) -> Sequence:
+    _validate_step_channels(data.steps)
     sequence = Sequence(
         tenant_id=current_user.tenant_id,
         name=data.name,
@@ -101,6 +122,8 @@ async def update_sequence(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sequence not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    if "steps" in update_data and update_data["steps"] is not None:
+        _validate_step_channels(update_data["steps"])
     for field, value in update_data.items():
         setattr(sequence, field, value)
 

@@ -206,3 +206,36 @@ async def test_distributed_lock_prevents_double_send(sequence_runner, async_sess
 
     # Email should not be sent because lock was not acquired
     sequence_runner._email_sender.send_email.assert_not_called()
+
+
+async def test_linkedin_step_does_not_call_email_sender(sequence_runner, async_session):
+    """Test that a linkedin_connect step does not call email_sender.send_email."""
+    tenant_id = uuid.uuid4()
+    tenant = make_tenant(id=tenant_id)
+    async_session.add(tenant)
+
+    lead = make_lead(tenant_id=tenant_id, status=LeadStatus.new, linkedin_url="https://linkedin.com/in/testuser")
+    async_session.add(lead)
+
+    campaign = make_campaign(tenant_id=tenant_id, status=CampaignStatus.active)
+    async_session.add(campaign)
+    await async_session.flush()
+
+    # Mock Redis to allow lock
+    mock_redis = AsyncMock()
+    mock_redis.set = AsyncMock(return_value=True)
+    mock_redis.delete = AsyncMock()
+    sequence_runner._redis = mock_redis
+
+    steps = [{"channel": "linkedin_connect", "delay_days": 0}]
+
+    # Patch the usage limiter to allow
+    with patch("compliance.usage_limiter.get_usage_limiter") as mock_limiter_fn:
+        mock_limiter = AsyncMock()
+        mock_limiter.check_and_increment = AsyncMock(return_value=True)
+        mock_limiter_fn.return_value = mock_limiter
+
+        await sequence_runner._process_lead(async_session, campaign, lead, steps)
+
+    # Email sender should NOT have been called
+    sequence_runner._email_sender.send_email.assert_not_called()
