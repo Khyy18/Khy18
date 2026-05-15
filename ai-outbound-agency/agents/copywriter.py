@@ -147,6 +147,7 @@ class CopywriterAgent:
         campaign_context: dict[str, Any],
         step_type: str = "initial",
         quality_check: bool = True,
+        jurisdiction: str | None = None,
     ) -> dict[str, str]:
         """Generate a single outreach message for a lead.
 
@@ -157,6 +158,8 @@ class CopywriterAgent:
             step_type: One of "initial", "follow_up_1", "follow_up_2", "breakup".
             quality_check: If True and quality_scorer is set, score and potentially
                 regenerate the message if quality is below threshold.
+            jurisdiction: Optional jurisdiction string (e.g., "GDPR", "CAN-SPAM")
+                to add compliance guidance to the system prompt.
 
         Returns:
             Dict with subject, body, step_type, and optionally quality_score.
@@ -186,8 +189,28 @@ class CopywriterAgent:
         }
 
         user_prompt = template.format(**format_vars)
+        system_content = SYSTEM_PROMPT
+
+        # Add jurisdiction-specific compliance guidance
+        if jurisdiction:
+            compliance_note = (
+                f"\n\nCOMPLIANCE NOTE: This email is for a {jurisdiction} recipient. "
+                "Ensure subject line is not misleading. Do not make false claims."
+            )
+            if jurisdiction == "GDPR":
+                compliance_note += (
+                    " Include a note that this outreach is based on "
+                    "legitimate business interest."
+                )
+            elif jurisdiction == "CASL":
+                compliance_note += (
+                    " Clearly identify yourself and your organization. "
+                    "Include purpose of the message."
+                )
+            system_content = system_content + compliance_note
+
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": user_prompt},
         ]
 

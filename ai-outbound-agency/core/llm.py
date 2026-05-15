@@ -19,6 +19,19 @@ from core.observability import (
 logger = logging.getLogger(__name__)
 
 
+class BudgetExceededException(Exception):
+    """Raised when a tenant's LLM budget has been exceeded."""
+
+    def __init__(self, tenant_id: str, usage_cents: int, budget_cents: int) -> None:
+        self.tenant_id = tenant_id
+        self.usage_cents = usage_cents
+        self.budget_cents = budget_cents
+        super().__init__(
+            f"LLM budget exceeded for tenant {tenant_id}: "
+            f"used {usage_cents} cents of {budget_cents} cents budget"
+        )
+
+
 class LLMClient:
     """Universal async LLM client supporting OpenAI, Anthropic, and Groq."""
 
@@ -125,12 +138,18 @@ class LLMClient:
 class FallbackLLMClient:
     """LLM client with fallback chain, response caching, and per-provider timeouts."""
 
-    def __init__(self, providers: list[dict[str, Any]], redis_url: str) -> None:
+    def __init__(
+        self,
+        providers: list[dict[str, Any]],
+        redis_url: str,
+        budget_manager: Any | None = None,
+    ) -> None:
         """Initialize fallback client with ordered provider list and Redis for caching.
 
         Args:
             providers: List of dicts with keys: provider, api_key, model, timeout.
             redis_url: Redis connection URL for response caching.
+            budget_manager: Optional LLMBudgetManager instance for spending control.
         """
         self.providers = providers
         self._clients: list[tuple[LLMClient, float]] = []
@@ -142,6 +161,7 @@ class FallbackLLMClient:
             )
             self._clients.append((client, float(p["timeout"])))
         self._redis: aioredis.Redis = aioredis.from_url(redis_url)
+        self._budget_manager = budget_manager
 
     async def generate(
         self,
@@ -198,6 +218,66 @@ class FallbackLLMClient:
         raise RuntimeError(
             f"All LLM providers failed. Last error: {last_error}"
         )
+
+    async def generate_with_budget(
+        self,
+        messages: list[dict[str, Any]],
+        tenant_id: str,
+        plan: str = "starter",
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> str:
+        """Generate response with budget enforcement.
+
+        Checks the tenant's budget before generating. After successful generation,
+        estimates token usage and records it.
+
+        Args:
+            messages: Chat messages for the LLM.
+            tenant_id: The tenant identifier for budget tracking.
+            plan: The tenant's plan name for budget limits.
+            temperature: LLM temperature parameter.
+            max_tokens: Maximum tokens to generate.
+
+        Returns:
+            Generated text response.
+
+        Raises:
+            BudgetExceededException: If the tenant's budget is exceeded.
+            RuntimeError: If all providers fail.
+        """
+        if self._budget_manager is None:
+            return await self.generate(messages, temperature, max_tokens)
+
+        # Check budget before generating
+        budget_status = await self._budget_manager.check_budget(tenant_id, plan)
+        if not budget_status["allowed"]:
+            raise BudgetExceededException(
+                tenant_id=tenant_id,
+                usage_cents=budget_status["usage_cents"],
+                budget_cents=budget_status["budget_cents"],
+            )
+
+        # Generate the response
+        result = await self.generate(messages, temperature, max_tokens)
+
+        # Estimate token usage (rough: 1 token per 4 characters)
+        input_text = " ".join(m.get("content", "") for m in messages)
+        input_tokens = max(1, len(input_text) // 4)
+        output_tokens = max(1, len(result) // 4)
+
+        # Use the first provider's model for cost estimation
+        model = self.providers[0]["model"] if self.providers else "gpt-3.5-turbo"
+
+        # Record usage
+        await self._budget_manager.record_usage(
+            tenant_id=tenant_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model=model,
+        )
+
+        return result
 
     async def close(self) -> None:
         """Close the Redis connection."""

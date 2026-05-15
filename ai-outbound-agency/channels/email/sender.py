@@ -95,11 +95,24 @@ class AsyncEmailSender:
         message_id: str,
         tracking_pixel_url: str | None = None,
         tracked_links: dict[str, str] | None = None,
+        compliance_footer: str | None = None,
     ) -> dict[str, Any]:
         """Send an email with domain rotation, tracking injection, and retry logic.
 
+        Args:
+            to: Recipient email address.
+            subject: Email subject line.
+            html_body: HTML body content.
+            message_id: Unique message identifier.
+            tracking_pixel_url: Optional tracking pixel URL to inject.
+            tracked_links: Optional dict mapping original URLs to tracking URLs.
+            compliance_footer: Optional HTML compliance footer to append to the body.
+
         Returns a dict with domain_used, message_id_header, and success status.
         """
+        # Inject compliance footer if provided
+        if compliance_footer:
+            html_body = html_body + compliance_footer
         # Pre-send spam check
         from channels.email.spam_checker import SpamChecker
 
