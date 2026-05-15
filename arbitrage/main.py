@@ -24,6 +24,7 @@ from arbitrage.ai_filter import ArbFilter
 from arbitrage.anti_ban import AntiBanEngine
 from arbitrage.dedup import ArbDeduplicator
 from arbitrage.executor import BetExecutor
+from arbitrage.logging_config import setup_logging
 from arbitrage.odds_api import OddsAPIClient
 from arbitrage.pinnacle_api import PinnacleClient
 from arbitrage.ranker import ArbRanker
@@ -73,12 +74,19 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
     recheck_engine = RecheckEngine(session=session)
     last_quota_alert_time: float = 0.0
 
-    print("[SCANNER] Цикл сканирования запущен")
+    logger.info("Цикл сканирования запущен")
 
     while True:
         try:
+            # A2: Сброс override при новом месяце (квота обновляется 1-го числа)
+            if state.get("scan_interval_override") and datetime.now(timezone.utc).day == 1:
+                logger.info("Сброс scan_interval_override (1-е число месяца)")
+                state.pop("scan_interval_override", None)
+
+            sleep_interval = state.get("scan_interval_override", config.SCAN_INTERVAL_SEC)
+
             if not state.get("scanner_active", False):
-                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                await asyncio.sleep(sleep_interval)
                 continue
 
             # Fix 2: Сброс экспозиции на основе активных ставок в БД
@@ -87,19 +95,19 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             # Fix 4: Проверка лимита экспозиции
             max_exposure = state.get("bankroll", 1000.0) * config.MAX_BANKROLL_EXPOSURE / 100.0
             if state.get("exposure", 0.0) >= max_exposure:
-                print("[SCANNER] Достигнут лимит экспозиции, пропуск цикла")
-                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                logger.info("Достигнут лимит экспозиции, пропуск цикла")
+                await asyncio.sleep(sleep_interval)
                 continue
 
             # Fix 5: Проверка окна ставок
             start_h, end_h = anti_ban.get_betting_window()
             current_hour = datetime.now(timezone.utc).hour
             if not (start_h <= current_hour < end_h):
-                print(f"[SCANNER] Вне окна ставок ({start_h}:00-{end_h}:00 UTC), пропуск")
-                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                logger.info("Вне окна ставок (%d:00-%d:00 UTC), пропуск", start_h, end_h)
+                await asyncio.sleep(sleep_interval)
                 continue
 
-            print(f"[SCANNER] Сканирование начато: {datetime.now(timezone.utc).isoformat()}")
+            logger.info("Сканирование начато: %s", datetime.now(timezone.utc).isoformat())
             scan_ts: float = time.time()
 
             # 1. Получить коэффициенты для всех спортов
@@ -109,11 +117,11 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     events = await odds_client.get_odds(sport)
                     all_events.extend(events)
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[SCANNER] Ошибка получения коэфф. {sport}: {exc}")
+                    logger.error("Ошибка получения коэфф. %s: %s", sport, exc)
 
             if not all_events:
-                print("[SCANNER] Нет событий для анализа")
-                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                logger.info("Нет событий для анализа")
+                await asyncio.sleep(sleep_interval)
                 continue
 
             # 1a. Проверка здоровья API и алерт при проблемах
@@ -127,6 +135,26 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 remaining_pct = (remaining_q / total_q * 100.0) if total_q > 0 else 100.0
             else:
                 remaining_pct = 100.0
+
+            # A2: Graceful degradation on quota exhaustion
+            if remaining_pct < 5.0:
+                state["scanner_active"] = False
+                logger.error(
+                    "Квота исчерпана (%.1f%%), сканер остановлен", remaining_pct
+                )
+                try:
+                    await telegram_bot.send_quota_alert(session, remaining_pct, latency_ms)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("Ошибка отправки quota-алерта: %s", exc)
+                await asyncio.sleep(sleep_interval)
+                continue
+            elif remaining_pct < 20.0 and not state.get("scan_interval_override"):
+                state["scan_interval_override"] = config.SCAN_INTERVAL_SEC * 2
+                logger.warning(
+                    "Квота < 20%% (%.1f%%), интервал сканирования удвоен до %d сек",
+                    remaining_pct, config.SCAN_INTERVAL_SEC * 2,
+                )
+
             if remaining_pct < 10.0 or latency_ms > 5000:
                 now_ts = time.time()
                 if now_ts - last_quota_alert_time >= 900.0:
@@ -134,7 +162,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     try:
                         await telegram_bot.send_quota_alert(session, remaining_pct, latency_ms)
                     except Exception as exc:  # noqa: BLE001
-                        print(f"[SCANNER] Ошибка отправки quota-алерта: {exc}")
+                        logger.error("Ошибка отправки quota-алерта: %s", exc)
 
             # 2. Извлечь sharp-линии Pinnacle
             sharp_probs = PinnacleClient.extract_pinnacle_from_odds_api(all_events)
@@ -147,11 +175,11 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             all_opps = surebets + value_bets + surebets_totals + surebets_spreads
 
             if not all_opps:
-                print("[SCANNER] Арбитражей не найдено")
-                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                logger.info("Арбитражей не найдено")
+                await asyncio.sleep(sleep_interval)
                 continue
 
-            print(f"[SCANNER] Найдено возможностей: {len(all_opps)}")
+            logger.info("Найдено возможностей: %d", len(all_opps))
 
             # 4. AI-фильтрация
             filtered: list[dict[str, Any]] = []
@@ -169,12 +197,13 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     "event_name": opp.event_name,
                     "details": getattr(opp, "details", {}),
                     "commence_time": getattr(opp, "details", {}).get("commence_time", ""),
+                    "event_id": getattr(opp, "details", {}).get("event_id", getattr(opp, "event_id", "")),
                     "scan_timestamp": scan_ts,
                 }
                 try:
                     evaluation = await ai_filter.evaluate(opp_dict)
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[SCANNER] Ошибка AI-фильтра: {exc}")
+                    logger.error("Ошибка AI-фильтра: %s", exc)
                     evaluation = {"score": 50, "is_live": False}
 
                 ai_score = evaluation.get("score", 50)
@@ -193,25 +222,25 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     filtered.append(opp_dict)
 
             if not filtered:
-                print("[SCANNER] После AI-фильтра кандидатов нет")
-                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                logger.info("После AI-фильтра кандидатов нет")
+                await asyncio.sleep(sleep_interval)
                 continue
 
-            print(f"[SCANNER] Прошли AI-фильтр: {len(filtered)}")
+            logger.info("Прошли AI-фильтр: %d", len(filtered))
 
             # 4a. Ранжирование
             filtered = ranker.rank(filtered)
-            print(f"[SCANNER] После ранжирования: {len(filtered)}")
+            logger.info("После ранжирования: %d", len(filtered))
 
             # 4b. Перепроверка коэффициентов (батчевая - один запрос на спорт)
             rechecked = await recheck_engine.recheck_batch(session, filtered)
 
             if not rechecked:
-                print("[SCANNER] После recheck кандидатов нет")
-                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                logger.info("После recheck кандидатов нет")
+                await asyncio.sleep(sleep_interval)
                 continue
 
-            print(f"[SCANNER] Прошли recheck: {len(rechecked)}")
+            logger.info("Прошли recheck: %d", len(rechecked))
             filtered = rechecked
 
             # 5. Аллокация банкролла
@@ -219,7 +248,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             try:
                 allocations = await allocator.allocate(filtered, bankroll)
             except Exception as exc:  # noqa: BLE001
-                print(f"[SCANNER] Ошибка аллокации: {exc}")
+                logger.error("Ошибка аллокации: %s", exc)
                 allocations = []
 
             # 6. Anti-ban проверки (расширенные)
@@ -232,11 +261,11 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
 
                 # 6a. Проверка корреляции (букмекер + событие)
                 if not anti_ban.check_correlation(bm, event_id):
-                    print(f"[SCANNER] Корреляция: пропуск {bm}/{event_id}")
+                    logger.info("Корреляция: пропуск %s/%s", bm, event_id)
                     continue
 
                 if not anti_ban.check_frequency(bm):
-                    print(f"[SCANNER] Лимит ставок превышен для {bm}")
+                    logger.info("Лимит ставок превышен для %s", bm)
                     continue
 
                 # 6b. Адаптивная задержка по типу букмекера
@@ -251,11 +280,11 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 # 6d. Детектирование пре-бана
                 is_pre_ban, pre_ban_detail = anti_ban.detect_pre_ban(bm)
                 if is_pre_ban:
-                    print(f"[SCANNER] Пре-бан детектирован для {bm}")
+                    logger.warning("Пре-бан детектирован для %s", bm)
                     try:
                         await telegram_bot.send_pre_ban_alert(session, bm, pre_ban_detail)
                     except Exception as exc:  # noqa: BLE001
-                        print(f"[SCANNER] Ошибка отправки pre-ban алерта: {exc}")
+                        logger.error("Ошибка отправки pre-ban алерта: %s", exc)
                     continue
 
                 valid_allocations.append(alloc)
@@ -268,17 +297,20 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     for alloc in valid_allocations:
                         opp = alloc.get("opportunity", {})
                         if _deduplicator.is_duplicate(opp):
-                            print(f"[SCANNER] Дубликат пропущен: {opp.get('event_name', opp.get('event', ''))}")
+                            logger.info(
+                                "Дубликат пропущен: %s",
+                                opp.get("event_name", opp.get("event", "")),
+                            )
                             continue
                         unique_allocations.append(alloc)
 
                     if not unique_allocations:
-                        print("[SCANNER] Все аллокации - дубликаты, пропуск")
+                        logger.info("Все аллокации - дубликаты, пропуск")
                     else:
                         try:
                             results = await executor.execute(unique_allocations)
                         except Exception as exc:  # noqa: BLE001
-                            print(f"[SCANNER] Ошибка исполнения: {exc}")
+                            logger.error("Ошибка исполнения: %s", exc)
                             results = []
 
                         # 8. Запись в память
@@ -287,6 +319,11 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                             ai_score = opp.get("ai_score", 0)
                             # Fix 3: Корректный статус
                             status = "SIMULATED" if config.DRY_RUN else "PENDING"
+                            # A3: pass event_id
+                            opp_event_id = opp.get(
+                                "event_id",
+                                opp.get("details", {}).get("event_id", ""),
+                            )
                             arb_id = memory.record_arb(
                                 sport=opp.get("sport", ""),
                                 event=opp.get("event", ""),
@@ -297,6 +334,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                                 edge_pct=opp.get("edge_pct", 0.0),
                                 ai_score=ai_score,
                                 status=status,
+                                event_id=opp_event_id,
                             )
 
                             if i < len(results):
@@ -331,14 +369,13 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                             bookmakers = opp.get("bookmakers", [])
                             for bm in bookmakers:
                                 anti_ban.record_bet(bm)
-                                # Фиксируем acceptance time для пре-бан детектора.
-                                # В DRY_RUN симулируем длительность приёма (0.5-2.0с);
-                                # в live-режиме executor предоставит реальную длительность.
                                 if config.DRY_RUN:
                                     simulated_duration = random.uniform(0.5, 2.0)
                                     anti_ban.record_acceptance_time(bm, simulated_duration)
                                 elif i < len(results):
-                                    real_duration = results[i].get("acceptance_duration", 1.0)
+                                    real_duration = results[i].get(
+                                        "acceptance_duration", 1.0
+                                    )
                                     anti_ban.record_acceptance_time(bm, real_duration)
 
                             # 9. Telegram-алерт
@@ -348,41 +385,43 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                                         session, opp, ai_score
                                     )
                                 except Exception as exc:  # noqa: BLE001
-                                    print(f"[SCANNER] Ошибка отправки алерта: {exc}")
+                                    logger.error("Ошибка отправки алерта: %s", exc)
 
-            print(f"[SCANNER] Цикл завершён. Исполнено: {len(valid_allocations)}")
+            logger.info("Цикл завершён. Исполнено: %d", len(valid_allocations))
 
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            print(f"[SCANNER] Критическая ошибка в цикле: {exc}")
+            logger.error("Критическая ошибка в цикле: %s", exc)
 
-        await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+        sleep_interval = state.get("scan_interval_override", config.SCAN_INTERVAL_SEC)
+        await asyncio.sleep(sleep_interval)
 
 
 async def stats_loop(state: dict[str, Any], session: aiohttp.ClientSession) -> None:
     """Периодическое обновление статистики (каждый час)."""
-    print("[STATS] Цикл статистики запущен")
+    logger.info("Цикл статистики запущен")
     while True:
         try:
             await asyncio.sleep(3600)
             stats = memory.get_stats()
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            print(
-                f"[STATS] Обновление за {today}: "
-                f"арбитражей={stats.get('total_arbs', 0)}, "
-                f"ставок={stats.get('total_bets', 0)}, "
-                f"PnL={stats.get('total_pnl', 0.0):.2f}"
+            logger.info(
+                "Обновление за %s: арбитражей=%d, ставок=%d, PnL=%.2f",
+                today,
+                stats.get("total_arbs", 0),
+                stats.get("total_bets", 0),
+                stats.get("total_pnl", 0.0),
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            print(f"[STATS] Ошибка обновления статистики: {exc}")
+            logger.error("Ошибка обновления статистики: %s", exc)
 
 
 async def settlement_loop(state: dict[str, Any], session: aiohttp.ClientSession) -> None:
     """Периодический расчёт ставок (каждые 30 мин) и обучение (раз в 24ч)."""
-    print("[SETTLEMENT] Цикл расчёта ставок запущен")
+    logger.info("Цикл расчёта ставок запущен")
     engine = SettlementEngine()
     last_learn_time: float = 0.0
     learn_interval: float = 86400.0  # 24 часа
@@ -406,7 +445,7 @@ async def settlement_loop(state: dict[str, Any], session: aiohttp.ClientSession)
                 state["bankroll"] = new_bankroll
                 memory.save_bankroll_state(new_bankroll)
             except Exception as exc:  # noqa: BLE001
-                print(f"[SETTLEMENT] Ошибка расчёта: {exc}")
+                logger.error("Ошибка расчёта: %s", exc)
 
             # Обучение раз в 24 часа
             now = time.time()
@@ -415,19 +454,40 @@ async def settlement_loop(state: dict[str, Any], session: aiohttp.ClientSession)
                     await engine.learn(session)
                     last_learn_time = now
                 except Exception as exc:  # noqa: BLE001
-                    print(f"[SETTLEMENT] Ошибка обучения: {exc}")
+                    logger.error("Ошибка обучения: %s", exc)
 
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            print(f"[SETTLEMENT] Критическая ошибка: {exc}")
+            logger.error("Критическая ошибка в settlement: %s", exc)
+
+
+async def state_saver_loop(state: dict[str, Any]) -> None:
+    """Периодическое сохранение состояния бота в БД (каждые 5 мин)."""
+    logger.info("Цикл сохранения состояния запущен")
+    while True:
+        try:
+            await asyncio.sleep(300)
+            memory.save_bot_state("scanner_active", str(state.get("scanner_active", True)))
+            override = state.get("scan_interval_override")
+            if override is not None:
+                memory.save_bot_state("scan_interval_override", str(override))
+            else:
+                memory.save_bot_state("scan_interval_override", "")
+            logger.debug("Состояние сохранено в БД")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Ошибка сохранения состояния: %s", exc)
 
 
 async def main() -> None:
     """Главная функция: инициализация и запуск всех циклов."""
-    print(BANNER)
-    print(f"[MAIN] Запуск: {datetime.now(timezone.utc).isoformat()}")
-    print(f"[MAIN] Режим: {'DRY RUN' if config.DRY_RUN else 'LIVE'}")
+    setup_logging()
+
+    logger.info(BANNER)
+    logger.info("Запуск: %s", datetime.now(timezone.utc).isoformat())
+    logger.info("Режим: %s", "DRY RUN" if config.DRY_RUN else "LIVE")
 
     # Инициализация БД
     memory.init_db()
@@ -435,7 +495,7 @@ async def main() -> None:
     # Валидация конфига
     warnings = _validate_config()
     for w in warnings:
-        print(f"[MAIN] ВНИМАНИЕ: {w}")
+        logger.warning("ВНИМАНИЕ: %s", w)
 
     # Состояние бота
     state: dict[str, Any] = {
@@ -445,13 +505,27 @@ async def main() -> None:
         "start_time": datetime.now(timezone.utc).isoformat(),
     }
 
+    # A6: Загрузка состояния бота из БД (auto-recovery)
+    saved_scanner_active = memory.load_bot_state("scanner_active")
+    if saved_scanner_active is not None and saved_scanner_active != "":
+        state["scanner_active"] = saved_scanner_active.lower() in ("true", "1", "yes")
+        logger.info("scanner_active загружен из БД: %s", state["scanner_active"])
+
+    saved_override = memory.load_bot_state("scan_interval_override")
+    if saved_override is not None and saved_override != "":
+        try:
+            state["scan_interval_override"] = int(float(saved_override))
+            logger.info("scan_interval_override загружен из БД: %s", saved_override)
+        except (ValueError, TypeError):
+            pass
+
     # Загрузка банкролла из БД (persistent)
     saved_bankroll = memory.load_bankroll_state()
     if saved_bankroll is not None:
         state["bankroll"] = saved_bankroll
-        print(f"[MAIN] Банкролл загружен из БД: {saved_bankroll:.2f}")
+        logger.info("Банкролл загружен из БД: %.2f", saved_bankroll)
     else:
-        print("[MAIN] Банкролл по умолчанию: 1000.0")
+        logger.info("Банкролл по умолчанию: 1000.0")
 
     # Инициализация базового PnL для корректного учёта в settlement_loop
     initial_stats = memory.get_stats()
@@ -466,18 +540,24 @@ async def main() -> None:
         discovered = await odds_client_tmp.discover_active_sports()
         if discovered:
             config.SPORTS = discovered
-            print(f"[MAIN] Auto-discovery: {len(discovered)} активных спортов")
+            logger.info("Auto-discovery: %d активных спортов", len(discovered))
         else:
-            print(f"[MAIN] Auto-discovery не удалось, используем конфиг: {len(config.SPORTS)} спортов")
+            logger.info(
+                "Auto-discovery не удалось, используем конфиг: %d спортов",
+                len(config.SPORTS),
+            )
     except Exception as exc:
-        print(f"[MAIN] Auto-discovery ошибка: {exc}, используем конфиг: {len(config.SPORTS)} спортов")
+        logger.error(
+            "Auto-discovery ошибка: %s, используем конфиг: %d спортов",
+            exc, len(config.SPORTS),
+        )
 
     # Graceful shutdown
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()
 
     def _signal_handler() -> None:
-        print("\n[MAIN] Получен сигнал завершения. Остановка...")
+        logger.info("Получен сигнал завершения. Остановка...")
         shutdown_event.set()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -493,6 +573,7 @@ async def main() -> None:
         asyncio.create_task(telegram_bot.run_bot(state, session)),
         asyncio.create_task(stats_loop(state, session)),
         asyncio.create_task(settlement_loop(state, session)),
+        asyncio.create_task(state_saver_loop(state)),
     ]
 
     try:
@@ -507,7 +588,7 @@ async def main() -> None:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await session.close()
-        print("[MAIN] Бот остановлен")
+        logger.info("Бот остановлен")
 
 
 if __name__ == "__main__":

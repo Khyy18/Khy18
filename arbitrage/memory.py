@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 
@@ -65,6 +65,13 @@ def init_db() -> None:
             try:
                 conn.execute(
                     "ALTER TABLE arbs ADD COLUMN commence_time TEXT"
+                )
+            except sqlite3.OperationalError:
+                pass  # столбец уже существует
+            # Добавляем event_id если таблица уже существовала без этого столбца
+            try:
+                conn.execute(
+                    "ALTER TABLE arbs ADD COLUMN event_id TEXT"
                 )
             except sqlite3.OperationalError:
                 pass  # столбец уже существует
@@ -141,6 +148,15 @@ def init_db() -> None:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT,
+                    updated_ts TEXT
+                )
+                """
+            )
             conn.commit()
         print(f"[ARB_MEMORY] База данных инициализирована: {DB_PATH}")
     except sqlite3.Error as exc:
@@ -157,6 +173,7 @@ def record_arb(
     edge_pct: float,
     ai_score: int = 0,
     status: str = "FOUND",
+    event_id: Optional[str] = None,
 ) -> Optional[int]:
     """Записать найденный арбитраж. Возвращает id записи."""
     try:
@@ -165,8 +182,8 @@ def record_arb(
                 """
                 INSERT INTO arbs
                     (ts, sport, event, arb_type, bookmakers_json, odds_json,
-                     profit_pct, edge_pct, ai_score, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     profit_pct, edge_pct, ai_score, status, event_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _now_iso(),
@@ -179,6 +196,7 @@ def record_arb(
                     float(edge_pct),
                     int(ai_score),
                     str(status),
+                    event_id,
                 ),
             )
             conn.commit()
@@ -288,15 +306,16 @@ def get_stats() -> dict[str, Any]:
 def get_daily_pnl(days: int = 7) -> list[dict[str, Any]]:
     """Получить ежедневную статистику PnL за последние N дней."""
     try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).strftime("%Y-%m-%d")
         with _connect() as conn:
             rows = conn.execute(
                 """
                 SELECT id, date, total_staked, total_won, pnl, roi_pct
                 FROM daily_pnl
-                WHERE date >= date('now', ?)
+                WHERE date >= ?
                 ORDER BY date DESC
                 """,
-                (f"-{int(days)} days",),
+                (cutoff,),
             ).fetchall()
             return [dict(r) for r in rows]
     except sqlite3.Error as exc:
@@ -478,7 +497,7 @@ def get_pending_bets_for_settlement() -> list[dict[str, Any]]:
                 """
                 SELECT b.id, b.arb_id, b.ts, b.bookmaker, b.event,
                        b.outcome, b.stake, b.odds, b.result, b.pnl,
-                       a.arb_type, a.commence_time, a.sport
+                       a.arb_type, a.commence_time, a.sport, a.event_id
                 FROM bets b
                 LEFT JOIN arbs a ON a.id = b.arb_id
                 WHERE b.result IN ('PENDING', 'SIMULATED')
@@ -676,3 +695,40 @@ def get_recent_ai_feedback(limit: int = 5) -> list[dict[str, Any]]:
     except sqlite3.Error as exc:
         print(f"[ARB_MEMORY] Ошибка чтения AI feedback: {exc}")
         return []
+
+
+# --- Bot State (auto-recovery) ---
+
+
+def save_bot_state(key: str, value: str) -> None:
+    """Сохранить значение состояния бота по ключу."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO bot_state (key, value, updated_ts)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_ts = excluded.updated_ts
+                """,
+                (str(key), str(value), _now_iso()),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка сохранения bot_state '{key}': {exc}")
+
+
+def load_bot_state(key: str) -> Optional[str]:
+    """Загрузить значение состояния бота по ключу. None если нет записи."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM bot_state WHERE key = ?",
+                (str(key),),
+            ).fetchone()
+            if row:
+                return str(row["value"])
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка загрузки bot_state '{key}': {exc}")
+    return None

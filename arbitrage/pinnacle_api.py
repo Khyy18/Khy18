@@ -55,20 +55,25 @@ class PinnacleClient:
             await self._session.close()
 
     async def _request(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> Any:
-        """Выполняет GET-запрос к Pinnacle API."""
+        """Выполняет GET-запрос к Pinnacle API с retry."""
+        from arbitrage.retry import retry_request
+
         async with self._semaphore:
             session = await self._get_session()
             url = f"{BASE_URL}{endpoint}"
             headers = {"Authorization": self._auth_header}
 
             logger.debug("Pinnacle запрос: %s", url)
-            async with session.get(url, headers=headers, params=params) as resp:
+            resp = await retry_request(session, "GET", url, headers=headers, params=params)
+            try:
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error("Pinnacle ошибка %d: %s", resp.status, text)
                     return {}
                 data: Any = await resp.json()
                 return data
+            finally:
+                resp.release()
 
     async def get_fixtures(self, sport_id: int) -> list[dict[str, Any]]:
         """Получает список матчей для указанного вида спорта."""

@@ -12,7 +12,7 @@ import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 import aiohttp
 
@@ -101,9 +101,16 @@ class SettlementEngine:
                 memory.update_bet_result(bet_id, "UNRESOLVED", 0.0)
                 continue
 
-            # Ищем событие по названиям команд
+            # Ищем событие по event_id (точное совпадение) или по названиям команд
             event_name: str = bet.get("event", "")
-            match_data = self._find_match(scores, event_name)
+            event_id: str = bet.get("event_id", "") or ""
+            match_data = None
+
+            if event_id:
+                match_data = self._find_match_by_id(scores, event_id)
+
+            if match_data is None:
+                match_data = self._find_match(scores, event_name)
 
             if match_data is None:
                 memory.update_bet_result(bet_id, "UNRESOLVED", 0.0)
@@ -161,6 +168,18 @@ class SettlementEngine:
             if arb:
                 return arb.get("sport", "")
         return ""
+
+    @staticmethod
+    def _find_match_by_id(
+        scores: list[dict[str, Any]], event_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Ищет матч в списке результатов по event_id (точное совпадение)."""
+        if not event_id:
+            return None
+        for score_event in scores:
+            if score_event.get("id", "") == event_id:
+                return score_event
+        return None
 
     @staticmethod
     def _find_match(

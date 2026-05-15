@@ -77,7 +77,9 @@ class OddsAPIClient:
         }
 
     async def _request(self, endpoint: str, params: Optional[dict[str, Any]] = None) -> Any:
-        """Выполняет GET-запрос с rate-limiting."""
+        """Выполняет GET-запрос с rate-limiting и retry."""
+        from arbitrage.retry import retry_request
+
         async with self._semaphore:
             session = await self._get_session()
             url = f"{BASE_URL}{endpoint}"
@@ -87,10 +89,11 @@ class OddsAPIClient:
 
             logger.debug("OddsAPI запрос: %s params=%s", url, request_params)
             t_start: float = time.monotonic()
-            async with session.get(url, params=request_params) as resp:
-                t_end: float = time.monotonic()
-                self._last_latency_ms = (t_end - t_start) * 1000.0
+            resp = await retry_request(session, "GET", url, params=request_params)
+            t_end: float = time.monotonic()
+            self._last_latency_ms = (t_end - t_start) * 1000.0
 
+            try:
                 # Захват квоты из заголовков
                 remaining_hdr = resp.headers.get("x-requests-remaining")
                 used_hdr = resp.headers.get("x-requests-used")
@@ -117,6 +120,8 @@ class OddsAPIClient:
                     self._last_latency_ms,
                 )
                 return data
+            finally:
+                resp.release()
 
     async def get_sports(self) -> list[dict[str, Any]]:
         """Получает список доступных видов спорта."""

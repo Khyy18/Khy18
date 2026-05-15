@@ -56,18 +56,23 @@ class BetfairClient:
             await self._session.close()
 
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> Any:
-        """Выполняет POST-запрос к Betfair API."""
+        """Выполняет POST-запрос к Betfair API с retry."""
+        from arbitrage.retry import retry_request
+
         session = await self._get_session()
         url = f"{API_URL}{endpoint}"
 
         logger.debug("Betfair запрос: %s", endpoint)
-        async with session.post(url, json=payload, headers=self._headers) as resp:
+        resp = await retry_request(session, "POST", url, json=payload, headers=self._headers)
+        try:
             if resp.status != 200:
                 text = await resp.text()
                 logger.error("Betfair ошибка %d: %s", resp.status, text)
                 return []
             data: Any = await resp.json()
             return data
+        finally:
+            resp.release()
 
     async def login(self) -> bool:
         """Проверяет валидность текущего session_token (keep-alive)."""
