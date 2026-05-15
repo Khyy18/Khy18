@@ -371,6 +371,36 @@ async def _process_symbol(
     if signal is None:
         return "нет сигнала"
 
+    # --- MR-specific filters ---
+
+    if strategy_type == "MR":
+        # RSI momentum filter: не входить если RSI резко падает/растёт (начало тренда, не reversion)
+        if adx < cfg.MOMENTUM_ADX_RANGE_THRESHOLD:
+            if len(closes) > 33:
+                rsi_prev = calc_rsi(closes[max(0, len(closes) - 33):len(closes) - 3], 14)
+                rsi_delta = rsi - rsi_prev
+                # Если RSI падает быстро (delta < -10) -> не LONG (это breakdown, не reversion)
+                # Если RSI растёт быстро (delta > +10) -> не SHORT
+                if rsi < cfg.MOMENTUM_MR_RSI_OVERSOLD and rsi_delta < -10:
+                    return f"сигнал LONG, но RSI momentum слишком сильный ({rsi_delta:+.0f})"
+                if rsi > cfg.MOMENTUM_MR_RSI_OVERBOUGHT and rsi_delta > 10:
+                    return f"сигнал SHORT, но RSI momentum слишком сильный ({rsi_delta:+.0f})"
+
+        # Volume confirmation: вход только при повышенном volume (capitulation, не drift)
+        if len(klines) > 21:
+            volumes = [float(k.get("volume", 0)) for k in klines[-21:-1]]
+            avg_vol = sum(volumes) / len(volumes) if volumes else 0
+            cur_vol = float(klines[-1].get("volume", 0))
+            if avg_vol > 0 and cur_vol < avg_vol * cfg.MOMENTUM_MR_MIN_VOL_RATIO:
+                return f"сигнал {signal}, но volume слишком низкий ({cur_vol/avg_vol:.1f}x < {cfg.MOMENTUM_MR_MIN_VOL_RATIO}x)"
+
+        # BB width check: MR лучше работает при сжатых BB (range-bound)
+        if cfg.MOMENTUM_MR_MAX_BB_WIDTH > 0:
+            from regime_classifier import calc_bb_width
+            bb_w = calc_bb_width(closes[-20:], period=20)
+            if bb_w > cfg.MOMENTUM_MR_MAX_BB_WIDTH:
+                return f"сигнал {signal}, но BB width слишком широкий ({bb_w*100:.1f}% > {cfg.MOMENTUM_MR_MAX_BB_WIDTH*100:.0f}%)"
+
     # --- Guards ---
 
     # Cross-strategy exposure check
@@ -464,7 +494,10 @@ async def _open_position(
 
     # Strategy-specific stop-loss
     if strategy_type == "MR":
-        sl_pct = cfg.MOMENTUM_MR_SL_PCT
+        # Dynamic SL: max(fixed SL, ATR * 1.5)
+        atr = calc_atr(klines[-20:], period=14) if klines else 0
+        atr_sl = (atr / price * 1.5) if price > 0 and atr > 0 else 0
+        sl_pct = max(cfg.MOMENTUM_MR_SL_PCT, atr_sl)
     else:
         sl_pct = cfg.MOMENTUM_BO_SL_PCT
 
@@ -563,6 +596,20 @@ async def _manage_position(
         close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
 
     if not should_close and strategy_type == "MR":
+        # Break-even: если набрали +0.5% — перемещаем SL на entry
+        if pnl_pct >= 0.005 and current_sl < entry and pos_side == "LONG":
+            position["stop_loss"] = entry
+            try:
+                await adapter.set_trading_stop(session, symbol, stop_loss=entry)
+            except Exception:
+                pass
+        elif pnl_pct >= 0.005 and current_sl > entry and pos_side == "SHORT":
+            position["stop_loss"] = entry
+            try:
+                await adapter.set_trading_stop(session, symbol, stop_loss=entry)
+            except Exception:
+                pass
+
         # RSI reversion exit
         rsi_exit_long = cfg.MOMENTUM_MR_TP_RSI_EXIT
         rsi_exit_short = 100 - cfg.MOMENTUM_MR_TP_RSI_EXIT

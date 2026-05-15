@@ -214,10 +214,15 @@ GRID_REINVEST_PCT = float(os.getenv("GRID_REINVEST_PCT", "0.5") or 0.5)
 
 # Mean-Reversion RSI thresholds (used when ADX < ADX_RANGE_THRESHOLD)
 MOMENTUM_MR_RSI_OVERSOLD = float(os.getenv("MOMENTUM_MR_RSI_OVERSOLD", "25") or 25)
-MOMENTUM_MR_RSI_OVERBOUGHT = float(os.getenv("MOMENTUM_MR_RSI_OVERBOUGHT", "75") or 75)
+MOMENTUM_MR_RSI_OVERBOUGHT = float(os.getenv("MOMENTUM_MR_RSI_OVERBOUGHT", "78") or 78)
 MOMENTUM_MR_SL_PCT = float(os.getenv("MOMENTUM_MR_SL_PCT", "0.015") or 0.015)
 MOMENTUM_MR_TP_RSI_EXIT = float(os.getenv("MOMENTUM_MR_TP_RSI_EXIT", "55") or 55)
 MOMENTUM_MR_MAX_HOLD_BARS = int(os.getenv("MOMENTUM_MR_MAX_HOLD_BARS", "20") or 20)
+
+# Volume confirmation для MR: volume > N * avg_vol(20) (фильтрует drift без capitulation)
+MOMENTUM_MR_MIN_VOL_RATIO = float(os.getenv("MOMENTUM_MR_MIN_VOL_RATIO", "1.2") or 1.2)
+# BB width: если BB шире — рынок волатильный, не подходит для MR. 0 = выключено.
+MOMENTUM_MR_MAX_BB_WIDTH = float(os.getenv("MOMENTUM_MR_MAX_BB_WIDTH", "0.06") or 0.06)
 
 # Breakout parameters (used when ADX >= ADX_TREND_THRESHOLD)
 MOMENTUM_BO_LOOKBACK = int(os.getenv("MOMENTUM_BO_LOOKBACK", "20") or 20)

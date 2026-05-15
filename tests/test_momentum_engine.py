@@ -237,6 +237,8 @@ async def test_regime_routing_ranging():
             "close": 100.0,
             "volume": 1000.0,
         })
+    # Last bar volume must pass MR volume filter (>= 1.2x avg)
+    klines[-1]["volume"] = 1500.0
     adapter.get_klines = mock.AsyncMock(return_value=klines)
     adapter.get_instrument_info = mock.AsyncMock(return_value={"min_qty": 0.001, "qty_step": 0.001})
     adapter.validate_and_round_qty = mock.Mock(return_value=0.01)
