@@ -234,9 +234,20 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Списываем средства (подписка или баланс)
     charged = await billing.charge_or_use_subscription(user.id, service.price)
     if not charged:
+        balance = await database.get_client_balance(user.id)
+        body = [
+            f"<b>Ваш баланс:</b> {format_number(balance)} \u20bd",
+            f"<b>Стоимость:</b> {format_number(service.price)} \u20bd",
+            "",
+            "Недостаточно средств. Пополните баланс или оформите подписку.",
+        ]
+        text = _card("Недостаточно средств", "\U0001f6ab", body)
+        keyboard = [
+            [InlineKeyboardButton("\U0001f4b3 Пополнить", callback_data="topup")],
+            [InlineKeyboardButton("\U0001f4ab Подписки", callback_data="subscribe")],
+        ]
         await query.edit_message_text(
-            "\u274c Ошибка списания. Попробуйте позже.",
-            parse_mode=ParseMode.HTML,
+            text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
         )
         return ConversationHandler.END
 
@@ -389,7 +400,7 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         # Переделываем с улучшенным промптом
         improved_input = (
-            "The previous result was unsatisfactory. Please improve: " + input_text
+            "Предыдущий результат неудовлетворительный. Пожалуйста, улучшите текст: " + input_text
         )
         new_result = await pipeline.process_order(service_type, improved_input)
 

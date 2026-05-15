@@ -93,6 +93,13 @@ async def init_db() -> None:
             )
         except Exception:
             pass  # Колонка уже существует
+        # Миграция: добавляем last_upsell_at если отсутствует
+        try:
+            await db.execute(
+                "ALTER TABLE clients ADD COLUMN last_upsell_at TEXT"
+            )
+        except Exception:
+            pass  # Колонка уже существует
         await db.commit()
 
 
@@ -550,11 +557,43 @@ async def get_clients_inactive_days_not_notified(days: int, cooldown_hours: int 
 
 
 async def update_client_last_notified(telegram_id: int) -> None:
-    """Обновить время последнего уведомления клиента."""
+    """Обновить время последнего retention-уведомления клиента."""
     now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             "UPDATE clients SET last_notified_at = ? WHERE telegram_id = ?",
+            (now, telegram_id),
+        )
+        await db.commit()
+
+
+async def get_clients_for_upsell_not_notified(min_orders: int, cooldown_hours: int = 168) -> List[dict]:
+    """
+    Получить клиентов с min_orders+ заказов, которым не отправлялось
+    upsell-уведомление в течение cooldown_hours часов.
+    """
+    cooldown_threshold = (datetime.utcnow() - timedelta(hours=cooldown_hours)).isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT c.*, COUNT(o.id) as order_count
+               FROM clients c
+               LEFT JOIN orders o ON c.telegram_id = o.client_id
+               GROUP BY c.telegram_id
+               HAVING order_count >= ?
+               AND (c.last_upsell_at IS NULL OR c.last_upsell_at < ?)""",
+            (min_orders, cooldown_threshold),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def update_client_last_upsell(telegram_id: int) -> None:
+    """Обновить время последнего upsell-уведомления клиента."""
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE clients SET last_upsell_at = ? WHERE telegram_id = ?",
             (now, telegram_id),
         )
         await db.commit()

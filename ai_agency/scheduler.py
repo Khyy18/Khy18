@@ -54,27 +54,17 @@ async def upsell_check(bot: Bot) -> None:
     """
     Задача апселла: каждые 24ч находит клиентов с 3+ заказами
     без подписки и предлагает подписку.
-    Использует last_notified_at для дедупликации (cooldown 7 дней).
+    Использует last_upsell_at для дедупликации (cooldown 7 дней).
     """
     while True:
         try:
-            all_clients = await database.get_all_clients_with_orders()
+            candidates = await database.get_clients_for_upsell_not_notified(
+                min_orders=3, cooldown_hours=168
+            )
             sent = 0
-            for client in all_clients:
-                order_count = client.get("order_count", 0)
-                if order_count < 3:
-                    continue
+            for client in candidates:
                 telegram_id = client["telegram_id"]
-                # Проверяем cooldown по last_notified_at
-                last_notified = client.get("last_notified_at")
-                if last_notified:
-                    from datetime import datetime, timedelta
-                    try:
-                        last_dt = datetime.fromisoformat(last_notified)
-                        if datetime.utcnow() - last_dt < timedelta(days=7):
-                            continue
-                    except (ValueError, TypeError):
-                        pass
+                order_count = client.get("order_count", 0)
                 # Проверяем есть ли подписка
                 sub = await subscriptions.check_subscription(telegram_id)
                 if sub:
@@ -94,7 +84,7 @@ async def upsell_check(bot: Bot) -> None:
                         text=text,
                         parse_mode="HTML",
                     )
-                    await database.update_client_last_notified(telegram_id)
+                    await database.update_client_last_upsell(telegram_id)
                     sent += 1
                 except Exception as e:
                     logger.debug("Не удалось отправить upsell клиенту %d: %s", telegram_id, e)

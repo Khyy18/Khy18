@@ -109,15 +109,18 @@ def _verify_webhook_signature(body_bytes: bytes, signature: str) -> bool:
 
 async def handle_webhook(request: web.Request) -> web.Response:
     """Обработчик вебхука YooKassa с верификацией подписи и идемпотентностью."""
-    # Верификация подписи запроса
+    # Верификация подписи запроса (fail-closed: без секрета отклоняем все)
+    if not config.YOOKASSA_WEBHOOK_SECRET:
+        logger.error("YOOKASSA_WEBHOOK_SECRET не задан, вебхуки отклоняются")
+        return web.Response(status=403, text="Forbidden")
+
     body_bytes = await request.read()
     signature = request.headers.get("HTTP-Notification", "")
     if not signature:
         signature = request.headers.get("Content-Hmac", "")
-    if config.YOOKASSA_WEBHOOK_SECRET:
-        if not _verify_webhook_signature(body_bytes, signature):
-            logger.warning("Невалидная подпись вебхука, запрос отклонён")
-            return web.Response(status=403, text="Forbidden")
+    if not _verify_webhook_signature(body_bytes, signature):
+        logger.warning("Невалидная подпись вебхука, запрос отклонён")
+        return web.Response(status=403, text="Forbidden")
 
     try:
         import json

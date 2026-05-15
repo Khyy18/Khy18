@@ -57,12 +57,13 @@ async def check_can_order(telegram_id: int, price: float) -> bool:
     Проверить, может ли клиент оформить заказ.
 
     Сначала проверяет подписку (если активна и лимит не исчерпан - True).
-    Если нет подписки - проверяет баланс.
+    Если нет подписки - делегирует проверку charge_or_use_subscription,
+    которая атомарно проверяет и списывает. Здесь только проверяем подписку.
     """
     # Проверяем подписку
     if await subscriptions.can_place_order(telegram_id):
         return True
-    # Нет подписки или лимит исчерпан - проверяем баланс
+    # Нет подписки или лимит исчерпан - проверяем баланс (только для UX)
     balance = await database.get_client_balance(telegram_id)
     return balance >= price
 
