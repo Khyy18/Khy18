@@ -39,6 +39,8 @@ CB_AI_FORECAST: str = "arb:ai_forecast"
 CB_WITHDRAWAL: str = "arb:withdrawal"
 CB_MIDDLES: str = "arb:middles"
 CB_STEAM: str = "arb:steam"
+CB_MONTE_CARLO: str = "arb:monte_carlo"
+CB_ACCOUNTS: str = "arb:accounts"
 
 
 def set_keyboard() -> dict[str, Any]:
@@ -68,6 +70,10 @@ def set_keyboard() -> dict[str, Any]:
             [
                 {"text": "\U0001f3af \u041a\u041e\u0420\u0418\u0414\u041e\u0420\u042b", "callback_data": CB_MIDDLES},
                 {"text": "\u26a1 STEAM", "callback_data": CB_STEAM},
+            ],
+            [
+                {"text": "\U0001f3b2 \u041c\u041e\u041d\u0422\u0415-\u041a\u0410\u0420\u041b\u041e", "callback_data": CB_MONTE_CARLO},
+                {"text": "\U0001f465 \u0410\u041a\u041a\u0410\u0423\u041d\u0422\u042b", "callback_data": CB_ACCOUNTS},
             ],
         ]
     }
@@ -232,6 +238,57 @@ async def _handle_stats(
             day_pnl = day.get("pnl", 0.0)
             day_roi = day.get("roi_pct", 0.0)
             body.append(f"  {date_str}: {pnl_arrow(day_pnl)} (ROI {day_roi:.1f}%)")
+
+    # Drawdown & Kelly & Variance
+    try:
+        from arbitrage.dynamic_kelly import DynamicKelly
+        from arbitrage.variance_tracker import VarianceTracker
+
+        # Drawdown calculation
+        bankroll_current = state.get("bankroll", 1000.0)
+        hwm = state.get("hwm", bankroll_current)
+        if hwm < bankroll_current:
+            hwm = bankroll_current
+            state["hwm"] = hwm
+        drawdown_pct = (hwm - bankroll_current) / hwm * 100.0 if hwm > 0 else 0.0
+
+        # Kelly factor
+        dk = DynamicKelly()
+        recent_bets = memory.get_recent_bets(50)
+        pnls = [float(b.get("pnl") or 0.0) for b in recent_bets if b.get("pnl") is not None]
+        losing_streak = 0
+        for p in pnls:
+            if p < 0:
+                losing_streak += 1
+            else:
+                break
+        kelly_state = {
+            "hwm": hwm,
+            "current_bankroll": bankroll_current,
+            "recent_pnls": pnls,
+            "losing_streak": losing_streak,
+        }
+        kelly_factor = dk.get_reduction_factor(kelly_state)
+
+        # Variance
+        vt = VarianceTracker()
+        for p in pnls:
+            vt.update(p)
+        variance_status = vt.get_status()
+        if variance_status == "normal":
+            var_indicator = "\U0001f7e2"
+        elif variance_status == "high":
+            var_indicator = "\U0001f7e1"
+        else:
+            var_indicator = "\U0001f534"
+
+        body.append("")
+        body.append("<b>\u0420\u0438\u0441\u043a-\u043c\u0435\u0442\u0440\u0438\u043a\u0438:</b>")
+        body.append(f"  \u041f\u0440\u043e\u0441\u0430\u0434\u043a\u0430: <code>{drawdown_pct:.1f}%</code>")
+        body.append(f"  Kelly \u0444\u0430\u043a\u0442\u043e\u0440: <code>{kelly_factor:.2f}</code>")
+        body.append(f"  \u0414\u0438\u0441\u043f\u0435\u0440\u0441\u0438\u044f: {var_indicator} <code>{variance_status}</code>")
+    except Exception:
+        pass  # Graceful degradation
 
     return _card("\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430", "\ud83d\udcca", body)
 
@@ -630,6 +687,67 @@ async def _handle_steam(
     return _card("Steam Moves", "\u26a1", body)
 
 
+async def _handle_monte_carlo(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Показать прогноз P&L на 30 дней (Monte Carlo)."""
+    from arbitrage.monte_carlo import MonteCarloSimulator
+
+    bankroll = state.get("bankroll", 1000.0)
+    simulator = MonteCarloSimulator()
+    # Use 1000 scenarios for speed in Telegram response
+    result = simulator.simulate(bankroll, days=30, scenarios=1000)
+
+    body = [
+        f"\u0411\u0430\u043d\u043a\u0440\u043e\u043b\u043b: <code>{format_number(bankroll)}</code>",
+        f"\u0421\u0446\u0435\u043d\u0430\u0440\u0438\u0435\u0432: <code>{result.scenarios_count}</code>",
+        "",
+        "<b>\u041f\u0440\u043e\u0433\u043d\u043e\u0437 PnL (30 \u0434\u043d\u0435\u0439):</b>",
+        f"  \u041c\u0435\u0434\u0438\u0430\u043d\u0430: {pnl_arrow(result.median_pnl)}",
+        f"  \u0421\u0440\u0435\u0434\u043d\u0435\u0435: {pnl_arrow(result.mean_pnl)}",
+        f"  5% \u043f\u0435\u0440\u0446\u0435\u043d\u0442\u0438\u043b\u044c: {pnl_arrow(result.p5_pnl)}",
+        f"  95% \u043f\u0435\u0440\u0446\u0435\u043d\u0442\u0438\u043b\u044c: {pnl_arrow(result.p95_pnl)}",
+        "",
+        f"P(\u0440\u0430\u0437\u043e\u0440\u0435\u043d\u0438\u0435): <code>{result.prob_ruin:.1%}</code>",
+        f"\u041c\u0430\u043a\u0441. \u043f\u0440\u043e\u0441\u0430\u0434\u043a\u0430: <code>{result.max_drawdown_pct:.1f}%</code>",
+        f"\u041e\u0436\u0438\u0434\u0430\u0435\u043c\u044b\u0439 ROI: <code>{result.expected_roi_pct:.1f}%</code>",
+    ]
+    return _card("\u041c\u043e\u043d\u0442\u0435-\u041a\u0430\u0440\u043b\u043e \u043f\u0440\u043e\u0433\u043d\u043e\u0437", "\U0001f3b2", body)
+
+
+async def _handle_accounts(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Показать пул аккаунтов и их состояние."""
+    accounts = memory.get_pool_accounts()
+    if not accounts:
+        return _card("\u041f\u0443\u043b \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432", "\U0001f465", ["\u041d\u0435\u0442 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432 \u0432 \u043f\u0443\u043b\u0435"])
+
+    body: list[str] = []
+    for acc in accounts[:15]:
+        status = acc.get("status", "active")
+        if status == "active":
+            indicator = "\U0001f7e2"
+        elif status == "cooldown":
+            indicator = "\U0001f7e1"
+        elif status == "limited":
+            indicator = "\U0001f534"
+        else:
+            indicator = "\u2620\ufe0f"
+
+        daily_used = acc.get("daily_used", 0.0)
+        daily_limit = acc.get("daily_limit", 1000.0)
+        usage_pct = (daily_used / daily_limit * 100.0) if daily_limit > 0 else 0.0
+        bar = progress_bar(usage_pct / 100.0)
+
+        body.append(
+            f"{indicator} <b>{acc.get('account_name', '?')}</b> @ {acc.get('bookmaker', '?')}\n"
+            f"  \u0411\u0430\u043b\u0430\u043d\u0441: <code>{format_number(acc.get('balance', 0.0))}</code> | "
+            f"\u041b\u0438\u043c\u0438\u0442: {bar} {daily_used:.0f}/{daily_limit:.0f}"
+        )
+    return _card("\u041f\u0443\u043b \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432", "\U0001f465", body)
+
+
 # --- Маппинг обработчиков ---
 
 _HANDLERS: dict[str, Any] = {
@@ -646,6 +764,8 @@ _HANDLERS: dict[str, Any] = {
     CB_WITHDRAWAL: _handle_withdrawal,
     CB_MIDDLES: _handle_middles,
     CB_STEAM: _handle_steam,
+    CB_MONTE_CARLO: _handle_monte_carlo,
+    CB_ACCOUNTS: _handle_accounts,
 }
 
 
