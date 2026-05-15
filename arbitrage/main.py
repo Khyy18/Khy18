@@ -301,15 +301,28 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
 
                             if i < len(results):
                                 res = results[i]
-                                memory.record_bet(
-                                    arb_id=arb_id,
-                                    bookmaker=res.get("bookmaker", ""),
-                                    event=res.get("event", ""),
-                                    outcome=res.get("outcome", ""),
-                                    stake=res.get("stake", 0.0),
-                                    odds=res.get("odds", 0.0),
-                                    result=res.get("status", "PENDING"),
-                                )
+                                # Record each leg separately for multi-leg surebets
+                                if res.get("legs"):
+                                    for leg_res in res["legs"]:
+                                        memory.record_bet(
+                                            arb_id=arb_id,
+                                            bookmaker=leg_res.get("bookmaker", ""),
+                                            event=res.get("event", ""),
+                                            outcome=leg_res.get("outcome", ""),
+                                            stake=leg_res.get("stake", 0.0),
+                                            odds=leg_res.get("odds", 0.0),
+                                            result=leg_res.get("status", "PENDING"),
+                                        )
+                                else:
+                                    memory.record_bet(
+                                        arb_id=arb_id,
+                                        bookmaker=res.get("bookmaker", ""),
+                                        event=res.get("event", ""),
+                                        outcome=res.get("outcome", ""),
+                                        stake=res.get("stake", 0.0),
+                                        odds=res.get("odds", 0.0),
+                                        result=res.get("status", "PENDING"),
+                                    )
 
                             # Отмечаем как исполненные в дедупликаторе
                             _deduplicator.mark_executed(opp)
@@ -382,10 +395,14 @@ async def settlement_loop(state: dict[str, Any], session: aiohttp.ClientSession)
             # Расчёт ставок
             try:
                 await engine.settle_bets(session)
-                # Обновление банкролла после расчёта
+                # Обновление банкролла: только прибавляем PnL текущего цикла
                 stats = memory.get_stats()
-                total_pnl = stats.get("total_pnl", 0.0)
-                new_bankroll = 1000.0 + total_pnl
+                total_pnl_now = stats.get("total_pnl", 0.0)
+                pnl_before = state.get("_last_total_pnl", 0.0)
+                settlement_pnl = total_pnl_now - pnl_before
+                state["_last_total_pnl"] = total_pnl_now
+
+                new_bankroll = state.get("bankroll", 1000.0) + settlement_pnl
                 state["bankroll"] = new_bankroll
                 memory.save_bankroll_state(new_bankroll)
             except Exception as exc:  # noqa: BLE001
@@ -435,6 +452,10 @@ async def main() -> None:
         print(f"[MAIN] Банкролл загружен из БД: {saved_bankroll:.2f}")
     else:
         print("[MAIN] Банкролл по умолчанию: 1000.0")
+
+    # Инициализация базового PnL для корректного учёта в settlement_loop
+    initial_stats = memory.get_stats()
+    state["_last_total_pnl"] = initial_stats.get("total_pnl", 0.0)
 
     # Создание HTTP-сессии
     session = aiohttp.ClientSession()

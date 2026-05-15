@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-import aiohttp
-
 from arbitrage import config
 
 

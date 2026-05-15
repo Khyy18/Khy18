@@ -204,6 +204,9 @@ class ArbFilter:
                 avg_died_score = sum(died_scores) / len(died_scores)
                 calibration_offset = int(avg_died_score - 50)
 
+        # Clamp offset to prevent over-correction (max +-15 points)
+        calibration_offset = max(-15, min(15, calibration_offset))
+
         score = score - calibration_offset
         score = max(0, min(100, score))
 

@@ -109,11 +109,11 @@ class RecheckEngine:
             logger.info("recheck пропущен: данные свежие")
             return True
 
-        # Проверка минимального профита: слишком низкий profit - пропускаем recheck
+        # Проверка минимального профита: слишком низкий profit - арб отклонён
         profit_pct: float = opportunity.get("profit_pct", 0.0)
         if profit_pct < config.RECHECK_MIN_PROFIT_PCT:
-            logger.info("recheck пропущен: profit < %.1f%%", config.RECHECK_MIN_PROFIT_PCT)
-            return True
+            logger.info("Recheck: profit %.2f%% < %.1f%%, арб отклонён", profit_pct, config.RECHECK_MIN_PROFIT_PCT)
+            return False  # Reject - too fragile to execute without verification
 
         sport: str = opportunity.get("sport", "")
         event_name: str = opportunity.get("event_name", opportunity.get("event", ""))
@@ -127,9 +127,10 @@ class RecheckEngine:
         # Используем кэшированные данные если доступны (батчевый режим)
         if sport in self._sport_cache:
             fresh_events = self._sport_cache[sport]
-            # Пустой кэш означает ошибку сети - fail-open
+            # Пустой кэш означает ошибку сети - fail-closed для безопасности
             if not fresh_events:
-                return True
+                logger.warning("Recheck: нет данных для %s (ошибка API) - арб отклонён", sport)
+                return False
         else:
             # Fallback: одиночный запрос (обратная совместимость)
             try:
