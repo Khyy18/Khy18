@@ -105,5 +105,12 @@ class Settings(BaseSettings):
     s3_backup_access_key: str = ""
     s3_backup_secret_key: str = ""
 
+    # Competitive intelligence settings
+    competitive_intel_enabled: bool = False
+    competitive_intel_competitors: str = "[]"
+
+    # LinkedIn self-healing
+    linkedin_self_healing_enabled: bool = True
+
 
 settings = Settings()  # type: ignore[call-arg]
