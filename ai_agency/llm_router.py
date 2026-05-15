@@ -215,12 +215,12 @@ async def _call_provider(provider: LLMProvider, messages: List[Dict[str, str]],
 
 
 def _select_provider(providers: List[LLMProvider]) -> Optional[LLMProvider]:
-    """Select the cheapest available (working) provider."""
+    """Select the best available (working) provider by priority, cost as tiebreaker."""
     available = [p for p in providers if p.is_available()]
     if not available:
         return None
-    # Sort by cost_per_token (cheapest first), then by priority
-    available.sort(key=lambda p: (p.cost_per_token, p.priority))
+    # Sort by priority first (lower = preferred), cost as tiebreaker
+    available.sort(key=lambda p: (p.priority, p.cost_per_token))
     return available[0]
 
 
@@ -271,12 +271,23 @@ async def generate(
 
 
 async def health_check_provider(provider: LLMProvider) -> bool:
-    """Run a lightweight health check on a provider."""
-    test_messages = [{"role": "user", "content": "ping"}]
+    """Run a lightweight health check on a provider (no API call, no billable tokens).
+
+    Checks: API key is configured and circuit breaker is not open.
+    """
     try:
-        result = await _call_provider(provider, test_messages, 0.0, 5)
-        provider._healthy = result is not None
-        return provider._healthy
+        # Check that client exists (API key was configured)
+        if provider._client is None:
+            provider._healthy = False
+            return False
+
+        # Check circuit breaker state (if available)
+        if provider._circuit and not provider._circuit.can_execute():
+            provider._healthy = False
+            return False
+
+        provider._healthy = True
+        return True
     except Exception:
         provider._healthy = False
         return False

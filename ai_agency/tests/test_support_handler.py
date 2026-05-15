@@ -14,10 +14,13 @@ import support_handler
 class TestSupportHandler:
 
     async def test_detect_question_with_question_mark(self):
-        """Text with '?' returns True."""
+        """Text with '?' and at least 3 words returns True."""
         assert support_handler.detect_question("Сколько стоит услуга?") is True
-        assert support_handler.detect_question("Это вопрос?") is True
-        assert support_handler.detect_question("? ") is True
+        assert support_handler.detect_question("Это вопрос или нет?") is True
+        assert support_handler.detect_question("Как мне заказать?") is True
+        # Too short (less than 3 words) - should not trigger
+        assert support_handler.detect_question("Это вопрос?") is False
+        assert support_handler.detect_question("? ") is False
 
     async def test_detect_question_with_trigger_words(self):
         """Text starting with trigger words returns True."""
@@ -33,6 +36,10 @@ class TestSupportHandler:
         assert support_handler.detect_question("Отлично работает") is False
         assert support_handler.detect_question("Хочу заказать текст") is False
         assert support_handler.detect_question("") is False
+        # Single-word trigger words should not fire (min 3 words)
+        assert support_handler.detect_question("Что") is False
+        assert support_handler.detect_question("Как") is False
+        assert support_handler.detect_question("Что это") is False
 
     async def test_answer_question_from_faq(self):
         """Question matching FAQ returns answer without LLM call."""

@@ -32,60 +32,60 @@ def _make_provider(name, priority, cost, healthy=True):
 class TestLLMRouter:
 
     async def test_generate_uses_first_healthy_provider(self, monkeypatch):
-        """generate() picks the cheapest healthy provider and uses it."""
+        """generate() picks the highest-priority healthy provider and uses it."""
         provider_a = _make_provider("openai", 0, 0.00003)
         provider_b = _make_provider("groq", 1, 0.000005)
 
         providers = [provider_a, provider_b]
         monkeypatch.setattr(llm_router, "_providers", providers)
 
-        # groq is cheapest so it should be selected first
+        # openai has highest priority (0) so it should be selected first
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Hello from groq"
-        provider_b._client.chat.completions.create = AsyncMock(return_value=mock_response)
+        mock_response.choices[0].message.content = "Hello from openai"
+        provider_a._client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         with patch("llm_router._call_provider", wraps=llm_router._call_provider):
             result = await llm_router.generate(
                 [{"role": "user", "content": "test"}]
             )
 
-        assert result == "Hello from groq"
+        assert result == "Hello from openai"
 
     async def test_generate_fallback_on_error(self, monkeypatch):
-        """If the cheapest provider fails, generate() falls back to next available."""
+        """If the highest-priority provider fails, generate() falls back to next."""
         provider_a = _make_provider("openai", 0, 0.00003)
         provider_b = _make_provider("groq", 1, 0.000005)
 
         providers = [provider_a, provider_b]
         monkeypatch.setattr(llm_router, "_providers", providers)
 
-        # groq (cheapest) fails
-        provider_b._client.chat.completions.create = AsyncMock(
-            side_effect=Exception("Groq error")
+        # openai (highest priority) fails
+        provider_a._client.chat.completions.create = AsyncMock(
+            side_effect=Exception("OpenAI error")
         )
 
-        # openai succeeds
+        # groq succeeds
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Hello from openai"
-        provider_a._client.chat.completions.create = AsyncMock(return_value=mock_response)
+        mock_response.choices[0].message.content = "Hello from groq"
+        provider_b._client.chat.completions.create = AsyncMock(return_value=mock_response)
 
         result = await llm_router.generate(
             [{"role": "user", "content": "test"}]
         )
 
-        assert result == "Hello from openai"
+        assert result == "Hello from groq"
 
     async def test_cheapest_provider_selection(self):
-        """_select_provider returns the cheapest available provider."""
+        """_select_provider returns the highest-priority available provider."""
         expensive = _make_provider("openai", 0, 0.00003)
         cheap = _make_provider("groq", 1, 0.000005)
         medium = _make_provider("anthropic", 2, 0.000025)
 
         providers = [expensive, medium, cheap]
         selected = _select_provider(providers)
-        assert selected.name == "groq"
+        assert selected.name == "openai"
 
     async def test_all_providers_fail_returns_none(self, monkeypatch):
         """When all providers fail, generate() returns None."""

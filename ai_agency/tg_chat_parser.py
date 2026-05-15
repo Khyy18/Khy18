@@ -46,6 +46,17 @@ MONITOR_KEYWORDS: List[str] = [
 # Anti-spam tracking: {chat_id: [timestamp, ...]}
 _response_timestamps: Dict[int, List[float]] = defaultdict(list)
 
+# Shutdown event for graceful stop
+_shutdown_event: Optional[asyncio.Event] = None
+
+
+def _get_shutdown_event() -> asyncio.Event:
+    """Get or create the module-level shutdown event."""
+    global _shutdown_event
+    if _shutdown_event is None:
+        _shutdown_event = asyncio.Event()
+    return _shutdown_event
+
 # Lazy singleton clients
 _openai_client: Optional[object] = None
 _pyrogram_client: Optional[object] = None
@@ -216,12 +227,20 @@ async def _process_message(client_instance, message) -> None:
         logger.warning("tg_chat_parser: failed to respond in chat %d: %s", chat_id, e)
 
 
+async def stop_monitoring() -> None:
+    """Signal the monitoring loop to stop gracefully."""
+    event = _get_shutdown_event()
+    event.set()
+    logger.info("tg_chat_parser: shutdown signal sent")
+
+
 async def start_monitoring() -> None:
     """
     Start monitoring Telegram chats for order-related keywords.
 
     Uses pyrogram userbot to listen for messages in configured chats.
     Gracefully disabled if pyrogram not available or not configured.
+    Supports graceful shutdown via stop_monitoring() or task cancellation.
     """
     if not is_configured():
         logger.info("tg_chat_parser: disabled (not configured)")
@@ -233,6 +252,7 @@ async def start_monitoring() -> None:
         return
 
     monitor_chats = _get_monitor_chats()
+    shutdown_event = _get_shutdown_event()
     logger.info("tg_chat_parser: starting monitoring for %d chats", len(monitor_chats))
 
     try:
@@ -242,11 +262,16 @@ async def start_monitoring() -> None:
         async def handle_message(client_obj, message):
             await _process_message(client_obj, message)
 
-        # Keep running
+        # Keep running until shutdown is requested
         logger.info("tg_chat_parser: monitoring active")
-        while True:
-            await asyncio.sleep(60)
+        while not shutdown_event.is_set():
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                pass
 
+    except asyncio.CancelledError:
+        logger.info("tg_chat_parser: monitoring cancelled")
     except Exception as e:
         logger.error("tg_chat_parser: monitoring error: %s", e)
     finally:
@@ -255,3 +280,4 @@ async def start_monitoring() -> None:
                 await client_instance.stop()
         except Exception:
             pass
+        logger.info("tg_chat_parser: monitoring stopped")

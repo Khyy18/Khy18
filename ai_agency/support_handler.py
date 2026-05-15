@@ -60,10 +60,14 @@ _UNCERTAINTY_MARKERS = ("не уверен", "возможно", "не знаю"
 
 
 def detect_question(text: str) -> bool:
-    """Return True if text looks like a question."""
+    """Return True if text looks like a question (at least 3 words to avoid false positives)."""
     if not text:
         return False
     text_stripped = text.strip()
+    # Require minimum length: at least 3 words to avoid triggering on "Что" or "Как"
+    words = text_stripped.split()
+    if len(words) < 3:
+        return False
     if "?" in text_stripped:
         return True
     text_lower = text_stripped.lower()
