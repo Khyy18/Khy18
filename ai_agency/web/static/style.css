@@ -1,0 +1,35 @@
+/* Custom overrides - Tailwind handles layout and utilities */
+
+:root {
+    --primary: #1a1a3e;
+    --secondary: #4a2d8a;
+    --accent: #7c4dff;
+    --bg: #0d0d1f;
+    --card-bg: #1e1e40;
+}
+
+/* Hero gradient background */
+.hero-gradient {
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+}
+
+/* CTA gradient background */
+.cta-gradient {
+    background: linear-gradient(135deg, var(--secondary), var(--primary));
+}
+
+/* Hero title animation */
+.hero-title {
+    animation: fadeInUp 0.8s ease-out;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

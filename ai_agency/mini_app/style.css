@@ -1,0 +1,47 @@
+/* AI Agency Mini App - Additional styles */
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.nav-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #6b7280;
+    transition: all 0.2s;
+}
+
+.nav-btn.active {
+    background-color: #3b82f6;
+    color: white;
+}
+
+.nav-btn:hover:not(.active) {
+    background-color: #f3f4f6;
+}
+
+.page {
+    animation: fadeIn 0.2s ease-in;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Telegram theme integration */
+:root {
+    --tg-theme-bg-color: #ffffff;
+    --tg-theme-text-color: #000000;
+    --tg-theme-hint-color: #999999;
+    --tg-theme-link-color: #2481cc;
+    --tg-theme-button-color: #2481cc;
+    --tg-theme-button-text-color: #ffffff;
+}
+
+body {
+    background-color: var(--tg-theme-bg-color, #f9fafb);
+    color: var(--tg-theme-text-color, #111827);
+}

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI-Agency - автоматизированные текстовые услуги: копирайтинг, рерайт, SEO, переводы, контент-планы и деловые документы.">
+    <meta name="keywords" content="AI agency, копирайтинг, текстовые услуги, рерайт, SEO-оптимизация, контент-план, деловые документы, перевод, нейросеть, автоматизация">
+    <title>AI-Agency - Automated text services</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/style.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#1a1a3e',
+                        secondary: '#4a2d8a',
+                        accent: '#7c4dff',
+                        dark: '#0d0d1f',
+                        card: '#1e1e40',
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-dark text-gray-200 font-sans leading-relaxed">
+
+    <!-- Hero -->
+    <header class="hero-gradient py-20 px-4 text-center">
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-5xl md:text-6xl font-bold mb-4 text-white hero-title">AI-Agency</h1>
+            <p class="text-xl md:text-2xl text-gray-300 mb-4">Автоматизированные текстовые услуги на базе искусственного интеллекта</p>
+            {% if total_orders > 0 %}
+            <p class="text-lg text-accent mb-8">Выполнено заказов: <span class="font-bold text-2xl">{{ total_orders }}</span></p>
+            {% endif %}
+            <a href="https://t.me/{{ bot_username }}" class="inline-block px-8 py-4 bg-accent text-white font-semibold rounded-xl text-lg hover:scale-105 hover:shadow-lg hover:shadow-accent/40 transition-all duration-200">
+                Начать сейчас
+            </a>
+        </div>
+    </header>
+
+    <!-- Services -->
+    <section class="py-16 px-4">
+        <div class="max-w-6xl mx-auto">
+            <h2 class="text-3xl md:text-4xl font-bold text-center mb-12">Наши услуги</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {% for svc in services %}
+                <div class="bg-card rounded-xl p-6 hover:-translate-y-1 transition-transform duration-200">
+                    <h3 class="text-xl font-semibold mb-2 text-white">{{ svc.name }}</h3>
+                    <p class="text-gray-400 mb-4">{{ svc.description }}</p>
+                    <span class="text-accent text-xl font-bold">{{ svc.price | int }} &#8381;</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing -->
+    <section class="py-16 px-4 bg-primary/30">
+        <div class="max-w-4xl mx-auto">
+            <h2 class="text-3xl md:text-4xl font-bold text-center mb-12">Подписки</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-2xl mx-auto">
+                <div class="bg-card rounded-xl p-8 text-center hover:-translate-y-1 transition-transform duration-200">
+                    <h3 class="text-2xl font-bold mb-2 text-white">Basic</h3>
+                    <div class="text-4xl font-bold text-accent my-4">{{ basic_price }} &#8381;<span class="text-base text-gray-400">/мес</span></div>
+                    <ul class="text-gray-400 space-y-2 mb-6">
+                        <li>{{ basic_orders }} заказов в месяц</li>
+                        <li>Все услуги доступны</li>
+                        <li>Приоритетная обработка</li>
+                    </ul>
+                    <a href="https://t.me/{{ bot_username }}" class="inline-block px-6 py-3 border-2 border-accent text-accent rounded-xl font-semibold hover:bg-accent hover:text-white transition-colors duration-200">
+                        Подключить
+                    </a>
+                </div>
+                <div class="bg-card rounded-xl p-8 text-center ring-2 ring-accent hover:-translate-y-1 transition-transform duration-200">
+                    <h3 class="text-2xl font-bold mb-2 text-white">Pro</h3>
+                    <div class="text-4xl font-bold text-accent my-4">{{ pro_price }} &#8381;<span class="text-base text-gray-400">/мес</span></div>
+                    <ul class="text-gray-400 space-y-2 mb-6">
+                        <li>Безлимитные заказы</li>
+                        <li>Все услуги доступны</li>
+                        <li>Приоритетная обработка</li>
+                        <li>Персональная поддержка</li>
+                    </ul>
+                    <a href="https://t.me/{{ bot_username }}" class="inline-block px-6 py-3 bg-accent text-white rounded-xl font-semibold hover:scale-105 hover:shadow-lg hover:shadow-accent/40 transition-all duration-200">
+                        Подключить
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Reviews -->
+    <section class="py-16 px-4">
+        <div class="max-w-4xl mx-auto">
+            <h2 class="text-3xl md:text-4xl font-bold text-center mb-12">Отзывы клиентов</h2>
+            {% if reviews %}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {% for review in reviews[:6] %}
+                <div class="bg-card rounded-xl p-6">
+                    <div class="flex items-center mb-3">
+                        {% for star in range(5) %}
+                        <span class="text-yellow-400 text-lg">&#11088;</span>
+                        {% endfor %}
+                    </div>
+                    <p class="text-gray-400">Услуга: <span class="text-white">{{ review.service_type }}</span></p>
+                    <p class="text-gray-500 text-sm mt-2">{{ review.created_at[:10] if review.created_at else '' }}</p>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-center text-gray-400">Станьте нашим первым клиентом с 5-звёздочным отзывом!</p>
+            {% endif %}
+        </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="py-16 px-4 bg-primary/30">
+        <div class="max-w-3xl mx-auto">
+            <h2 class="text-3xl md:text-4xl font-bold text-center mb-12">Часто задаваемые вопросы</h2>
+            <div class="space-y-4">
+                <details class="bg-card rounded-xl p-6 group">
+                    <summary class="text-white font-semibold cursor-pointer flex justify-between items-center">
+                        Как сделать заказ?
+                        <span class="text-accent group-open:rotate-45 transition-transform">+</span>
+                    </summary>
+                    <p class="text-gray-400 mt-3">Откройте бота в Telegram, выберите нужную услугу, отправьте текст и подтвердите заказ. Результат будет готов через несколько минут.</p>
+                </details>
+                <details class="bg-card rounded-xl p-6 group">
+                    <summary class="text-white font-semibold cursor-pointer flex justify-between items-center">
+                        Какие способы оплаты доступны?
+                        <span class="text-accent group-open:rotate-45 transition-transform">+</span>
+                    </summary>
+                    <p class="text-gray-400 mt-3">Мы принимаем оплату через YooKassa (банковские карты) и Telegram Stars. Также доступны подписки для регулярных клиентов.</p>
+                </details>
+                <details class="bg-card rounded-xl p-6 group">
+                    <summary class="text-white font-semibold cursor-pointer flex justify-between items-center">
+                        Что если результат не устроит?
+                        <span class="text-accent group-open:rotate-45 transition-transform">+</span>
+                    </summary>
+                    <p class="text-gray-400 mt-3">При оценке 1-2 звезды мы автоматически переделываем заказ бесплатно. Если результат по-прежнему не устраивает, средства возвращаются на баланс.</p>
+                </details>
+                <details class="bg-card rounded-xl p-6 group">
+                    <summary class="text-white font-semibold cursor-pointer flex justify-between items-center">
+                        Сколько времени занимает обработка?
+                        <span class="text-accent group-open:rotate-45 transition-transform">+</span>
+                    </summary>
+                    <p class="text-gray-400 mt-3">Обычный заказ обрабатывается за 2-5 минут. Срочные заказы получают приоритет в очереди и выполняются быстрее.</p>
+                </details>
+                <details class="bg-card rounded-xl p-6 group">
+                    <summary class="text-white font-semibold cursor-pointer flex justify-between items-center">
+                        Есть ли реферальная программа?
+                        <span class="text-accent group-open:rotate-45 transition-transform">+</span>
+                    </summary>
+                    <p class="text-gray-400 mt-3">Да! Приглашайте друзей по реферальной ссылке и получайте процент от их первого заказа на свой баланс.</p>
+                </details>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="py-20 px-4 text-center">
+        <div class="max-w-3xl mx-auto cta-gradient rounded-2xl p-12">
+            <h2 class="text-3xl md:text-4xl font-bold mb-4 text-white">Готовы начать?</h2>
+            <p class="text-gray-300 mb-8 text-lg">Откройте бота в Telegram и закажите первый текст за пару кликов</p>
+            <a href="https://t.me/{{ bot_username }}" class="inline-block px-8 py-4 bg-accent text-white font-semibold rounded-xl text-lg hover:scale-105 hover:shadow-lg hover:shadow-accent/40 transition-all duration-200">
+                Начать сейчас
+            </a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="py-8 px-4 text-center text-gray-500 text-sm">
+        <p>&copy; 2024 AI-Agency. Все права защищены.</p>
+    </footer>
+
+    <!-- Google Analytics -->
+    {% if google_analytics_id %}
+    <script async src="https://www.googletagmanager.com/gtag/js?id={{ google_analytics_id }}"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', '{{ google_analytics_id }}');
+    </script>
+    {% endif %}
+
+    <!-- Yandex Metrika -->
+    {% if yandex_metrika_id %}
+    <script>
+        (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+        m[i].l=1*new Date();
+        for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+        k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
+        (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+        ym({{ yandex_metrika_id }}, "init", {clickmap:true, trackLinks:true, accurateTrackBounce:true});
+    </script>
+    <noscript><div><img src="https://mc.yandex.ru/watch/{{ yandex_metrika_id }}" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+    {% endif %}
+
+</body>
+</html>
