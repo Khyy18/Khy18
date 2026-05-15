@@ -112,7 +112,10 @@ def _calc_grid_order_size(state: dict[str, Any], n_levels: int) -> float:
         grid_profit = float(state.get("grid", {}).get("total_profit_usdt", 0.0))
         if grid_profit > 0:
             reinvest = grid_profit * cfg.GRID_REINVEST_PCT
-            order_size += reinvest / max(1, n_levels)
+            reinvest_per_level = reinvest / max(1, n_levels)
+            # Cap: reinvestment per order should not exceed base order size
+            reinvest_per_level = min(reinvest_per_level, order_size)
+            order_size += reinvest_per_level
 
     return max(5.0, order_size)  # минимум $5 на ордер
 

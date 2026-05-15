@@ -627,7 +627,6 @@ async def _manage_position(
             and trail_activate > 0
             and pnl_pct >= trail_activate
             and not position.get("_partial_closed")):
-        position["_partial_closed"] = True
         half_qty = float(position["qty"]) * cfg.MOMENTUM_PARTIAL_CLOSE_PCT
         close_side = "Sell" if pos_side == "LONG" else "Buy"
         try:
@@ -635,6 +634,7 @@ async def _manage_position(
                 session, symbol=symbol, side=close_side, qty=half_qty, reduce_only=True,
             )
             if partial_result and partial_result.get("fill_price"):
+                position["_partial_closed"] = True
                 partial_fill = float(partial_result["fill_price"])
                 entry = float(position["entry_price"])
                 if pos_side == "LONG":
