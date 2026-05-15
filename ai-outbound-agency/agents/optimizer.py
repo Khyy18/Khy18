@@ -18,6 +18,7 @@ from core.models import (
     ABTest,
     ABTestAssignment,
     ABTestStatus,
+    Campaign,
     Event,
     EventType,
     Message,
@@ -127,9 +128,10 @@ class OptimizerAgent:
                 reply_rate = replies / sends if sends > 0 else 0.0
                 book_rate = books / sends if sends > 0 else 0.0
 
-                # Score: reply_rate*0.5 + positive_reply_rate*0.3 + book_rate*0.2
-                # For simplicity, positive_reply_rate is approximated as reply_rate
-                score = reply_rate * 0.5 + reply_rate * 0.3 + book_rate * 0.2
+                # Score: reply_rate*0.5 + open_rate*0.3 + book_rate*0.2
+                # Using open_rate as the second signal until positive reply tracking
+                # is available (originally intended as positive_reply_rate).
+                score = reply_rate * 0.5 + open_rate * 0.3 + book_rate * 0.2
 
                 variant_stats.append({
                     "test_id": str(test.id),
@@ -457,16 +459,15 @@ class OptimizerAgent:
 
         Returns ranked list of day/hour combinations with engagement scores.
         """
-        # Query events with their occurrence times
+        # Query events with their occurrence times, filtered by tenant
         stmt = (
             select(Event.occurred_at, Event.event_type)
             .join(Message, Event.message_id == Message.id)
-            .join(
-                # Filter by tenant via campaign -> tenant relationship
-                # We use a subquery approach through messages
-                Message.campaign,
+            .join(Campaign, Message.campaign_id == Campaign.id)
+            .where(
+                Campaign.tenant_id == tenant_id,
+                Event.event_type.in_([EventType.open, EventType.reply, EventType.click]),
             )
-            .where(Event.event_type.in_([EventType.open, EventType.reply, EventType.click]))
             .limit(5000)
         )
 

@@ -17,7 +17,6 @@ from channels.email.sender import AsyncEmailSender
 from channels.email.tracker import EmailTracker
 from core.models import (
     ABTest,
-    ABTestAssignment,
     ABTestStatus,
     Campaign,
     CampaignStatus,
@@ -224,45 +223,25 @@ class SequenceRunner:
 
         variant_config: dict[str, Any] | None = None
         if active_test:
-            # Get or create assignment for this lead
-            existing_stmt = select(ABTestAssignment).where(
-                ABTestAssignment.test_id == active_test.id,
-                ABTestAssignment.lead_id == lead.id,
+            # Use OptimizerAgent.assign_variant to get or create the assignment
+            from agents.optimizer import OptimizerAgent
+            from core.config import settings
+            from core.llm import LLMClient
+
+            # Instantiate a lightweight optimizer for variant assignment
+            llm_client = LLMClient(provider="openai", api_key=settings.openai_api_key, model="gpt-4")
+            optimizer = OptimizerAgent(
+                llm_client=llm_client,
+                session_factory=self._session_factory,
+                redis_url=self._redis_url,
             )
-            existing_result = await session.execute(existing_stmt)
-            assignment = existing_result.scalar_one_or_none()
+            variant_key = await optimizer.assign_variant(active_test.id, lead.id, session)
 
-            if assignment is None:
-                # Round-robin assignment
-                variants = active_test.variants or []
-                variant_keys = [v.get("key", "") for v in variants]
-                if variant_keys:
-                    from sqlalchemy import func as sqlfunc
-                    counts_stmt = (
-                        select(ABTestAssignment.variant_key, sqlfunc.count())
-                        .where(ABTestAssignment.test_id == active_test.id)
-                        .group_by(ABTestAssignment.variant_key)
-                    )
-                    counts_result = await session.execute(counts_stmt)
-                    counts: dict[str, int] = {k: 0 for k in variant_keys}
-                    for row in counts_result.fetchall():
-                        counts[row[0]] = row[1]
-                    chosen_key = min(variant_keys, key=lambda k: counts.get(k, 0))
-
-                    assignment = ABTestAssignment(
-                        test_id=active_test.id,
-                        lead_id=lead.id,
-                        variant_key=chosen_key,
-                    )
-                    session.add(assignment)
-                    await session.flush()
-
-            if assignment:
-                # Find the variant config matching the assigned key
-                for v in (active_test.variants or []):
-                    if v.get("key") == assignment.variant_key:
-                        variant_config = v
-                        break
+            # Find the variant config matching the assigned key
+            for v in (active_test.variants or []):
+                if v.get("key") == variant_key:
+                    variant_config = v
+                    break
 
         # Apply variant overrides to campaign context if A/B test active
         if variant_config:

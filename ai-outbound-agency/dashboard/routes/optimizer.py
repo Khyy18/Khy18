@@ -1,6 +1,8 @@
 """Optimizer API routes for A/B testing and campaign optimization."""
 
-from typing import Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,7 +20,12 @@ from dashboard.schemas import (
     SuggestionResponse,
 )
 
+if TYPE_CHECKING:
+    from agents.optimizer import OptimizerAgent
+
 router = APIRouter(prefix="/api/optimizer", tags=["optimizer"])
+
+_optimizer_instance: OptimizerAgent | None = None
 
 
 async def _get_session():
@@ -28,23 +35,25 @@ async def _get_session():
         yield session
 
 
-def _get_optimizer():
-    """Get or create the OptimizerAgent instance."""
-    from agents.optimizer import OptimizerAgent
-    from core.config import settings
-    from core.db import async_session_factory
-    from core.llm import LLMClient
+def _get_optimizer() -> OptimizerAgent:
+    """Get or create the cached OptimizerAgent instance."""
+    global _optimizer_instance
+    if _optimizer_instance is None:
+        from core.config import settings
+        from core.db import async_session_factory
+        from core.llm import LLMClient
 
-    llm_client = LLMClient(
-        provider="openai",
-        api_key=settings.openai_api_key,
-        model="gpt-4",
-    )
-    return OptimizerAgent(
-        llm_client=llm_client,
-        session_factory=async_session_factory,
-        redis_url=settings.redis_url,
-    )
+        llm_client = LLMClient(
+            provider="openai",
+            api_key=settings.openai_api_key,
+            model="gpt-4",
+        )
+        _optimizer_instance = OptimizerAgent(
+            llm_client=llm_client,
+            session_factory=async_session_factory,
+            redis_url=settings.redis_url,
+        )
+    return _optimizer_instance
 
 
 @router.get("/tests", response_model=ABTestListResponse)

@@ -40,20 +40,41 @@ class LinkedInActions:
             return True
         return False
 
+    async def _handle_action_failure(self, reason: str) -> None:
+        """Handle action failure by marking account restricted if challenge detected."""
+        if reason == "challenge_detected":
+            account_id = self._browser._account_id
+            logger.warning(
+                "Marking account %s as restricted due to challenge detection",
+                account_id,
+            )
+            await self._pool.mark_restricted(account_id)
+
     async def _retry_with_backoff(
-        self, action_name: str, coro_factory: Any, account_id: str, action_type: str
+        self,
+        action_name: str,
+        coro_factory: Any,
+        account_id: str,
+        action_type: str,
+        rate_limit_key: str | None = None,
     ) -> dict[str, Any]:
         """Execute an action with exponential backoff retry on transient failures."""
         for attempt in range(MAX_RETRIES):
             try:
                 # Check for challenge before each attempt
                 if await self._check_and_handle_challenge():
+                    await self._handle_action_failure("challenge_detected")
                     return {"success": False, "reason": "challenge_detected"}
 
                 result = await coro_factory()
 
-                # Record successful action
+                # Record successful action in session pool
                 await self._pool.record_action(account_id, action_type)
+
+                # Record in rate limiter sliding window so limits are enforced
+                if rate_limit_key:
+                    await self._rate_limiter.record_request(rate_limit_key, 86400)
+
                 return {"success": True, "result": result}
 
             except Exception as exc:
@@ -70,6 +91,7 @@ class LinkedInActions:
                     await asyncio.sleep(wait_time)
 
         logger.error("All %d attempts failed for %s", MAX_RETRIES, action_name)
+        await self._handle_action_failure("max_retries_exceeded")
         return {"success": False, "reason": "max_retries_exceeded"}
 
     async def view_profile(self, url: str) -> dict[str, Any]:
@@ -93,8 +115,9 @@ class LinkedInActions:
             await self._anti.random_pause(min_s=1.0, max_s=2.0)
             return page.url
 
+        rate_key = f"linkedin:rate:{account_id}:profile_view"
         return await self._retry_with_backoff(
-            "view_profile", _execute, account_id, "profile_view"
+            "view_profile", _execute, account_id, "profile_view", rate_limit_key=rate_key
         )
 
     async def send_connection_request(
@@ -146,8 +169,9 @@ class LinkedInActions:
             logger.info("Connection request sent to %s", url)
             return "connection_request_sent"
 
+        rate_key = f"linkedin:rate:{account_id}:connection_request"
         return await self._retry_with_backoff(
-            "send_connection_request", _execute, account_id, "connection_request"
+            "send_connection_request", _execute, account_id, "connection_request", rate_limit_key=rate_key
         )
 
     async def send_message(self, url: str, text: str) -> dict[str, Any]:
@@ -192,8 +216,9 @@ class LinkedInActions:
             logger.info("Message sent to %s", url)
             return "message_sent"
 
+        rate_key = f"linkedin:rate:{account_id}:message"
         return await self._retry_with_backoff(
-            "send_message", _execute, account_id, "message"
+            "send_message", _execute, account_id, "message", rate_limit_key=rate_key
         )
 
     async def check_connection_status(self, url: str) -> dict[str, Any]:
