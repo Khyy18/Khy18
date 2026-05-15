@@ -27,7 +27,7 @@ def _get_openai_client():
 
 
 # ConversationHandler states
-SELECT_URGENCY = 2
+ENTER_TEXT = 1
 
 
 async def extract_text_from_image(image_bytes: bytes) -> Optional[str]:
@@ -70,7 +70,8 @@ async def extract_text_from_image(image_bytes: bytes) -> Optional[str]:
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Обработка фото: извлечение текста через GPT-4o Vision.
-    Устанавливает context.user_data["input_text"] и возвращает SELECT_URGENCY.
+    Устанавливает context.user_data["input_text"] и возвращает ENTER_TEXT
+    так чтобы enter_text() обработал валидацию при следующем сообщении.
     """
     message = update.message
     photo = message.photo
@@ -80,7 +81,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "\u274c Не удалось получить фото. Попробуйте ещё раз.",
             parse_mode=ParseMode.HTML,
         )
-        return SELECT_URGENCY
+        return ENTER_TEXT
 
     # Берём наибольший размер фото
     largest_photo = photo[-1]
@@ -94,7 +95,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "\u274c Ошибка загрузки фото. Попробуйте ещё раз.",
             parse_mode=ParseMode.HTML,
         )
-        return SELECT_URGENCY
+        return ENTER_TEXT
 
     await message.reply_text(
         "\U0001f50d Анализирую изображение...",
@@ -109,20 +110,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "\u274c Не удалось извлечь текст из изображения. Отправьте текст вручную.",
             parse_mode=ParseMode.HTML,
         )
-        from voice_handler import ENTER_TEXT
         return ENTER_TEXT
 
-    # Сохраняем извлечённый текст
+    # Сохраняем извлечённый текст в user_data для использования enter_text()
     context.user_data["input_text"] = extracted_text
 
     body = [
         "<b>Извлечённый текст:</b>",
         f"<pre>{extracted_text[:500]}</pre>",
         "",
-        "Текст будет использован для обработки.",
+        "Отправьте любое сообщение для подтверждения или введите свой текст.",
     ]
     card = _card("Текст с изображения", "\U0001f4f7", body)
 
     await message.reply_text(card, parse_mode=ParseMode.HTML)
 
-    return SELECT_URGENCY
+    return ENTER_TEXT

@@ -128,6 +128,9 @@ CONTENT_FARM_CHANNELS: str = os.getenv("CONTENT_FARM_CHANNELS", "[]")
 # White-label система
 WHITELABEL_ENABLED: bool = os.getenv("WHITELABEL_ENABLED", "False").lower() in ("true", "1", "yes")
 
+# USD to RUB exchange rate
+USD_TO_RUB_RATE: float = float(os.getenv("USD_TO_RUB_RATE", "90.0"))
+
 
 def validate_config() -> List[str]:
     """

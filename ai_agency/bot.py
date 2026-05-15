@@ -97,6 +97,12 @@ try:
 except ImportError:
     marketplace_module = None
 
+# Интеграция whitelabel (graceful)
+try:
+    import whitelabel as whitelabel_module
+except ImportError:
+    whitelabel_module = None
+
 
 def set_order_queue(queue) -> None:
     """Set the shared order queue instance (called from main_multi.py)."""
@@ -578,6 +584,20 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             reply_markup=InlineKeyboardMarkup(rating_keyboard),
             parse_mode=ParseMode.HTML,
         )
+
+        # Record whitelabel revenue if this is a whitelabel bot
+        if whitelabel_module and context.bot_data.get("whitelabel_bot_id"):
+            try:
+                bot_id = context.bot_data["whitelabel_bot_id"]
+                revenue_share = context.bot_data.get("whitelabel_revenue_share", 0.3)
+                await whitelabel_module.record_whitelabel_revenue(
+                    bot_id=bot_id,
+                    order_id=order_id,
+                    amount=price,
+                    revenue_share=revenue_share,
+                )
+            except Exception as e:
+                logger.warning("Ошибка записи whitelabel revenue: %s", e)
     else:
         await database.update_order_status(order_id, OrderStatus.FAILED.value)
         # Возврат средств (только если не бесплатный триал)
@@ -1217,6 +1237,61 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 # --- Post-init: запуск планировщика ---
 
+async def _handle_voice_confirmation_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Wrapper для обработки подтверждения голосового ввода."""
+    if voice_handler_module:
+        result = await voice_handler_module.handle_voice_confirmation(update, context)
+        # If confirmed and input_text is set, proceed to urgency selection
+        if result == ENTER_TEXT and context.user_data.get("input_text"):
+            # Simulate what enter_text does: show urgency selection
+            user = update.effective_user
+            lang = await database.get_client_language(user.id)
+            service_type = context.user_data["service_type"]
+            input_text = context.user_data["input_text"]
+            service = get_service(service_type)
+
+            normal_price = pricing.calculate_price(service_type.value, len(input_text), urgent=False)
+            urgent_price = pricing.calculate_price(service_type.value, len(input_text), urgent=True)
+
+            body = [
+                f"<b>Услуга:</b> {service.name}",
+                f"<b>Обычный:</b> {format_number(normal_price)} \u20bd",
+                f"<b>Срочный:</b> {format_number(urgent_price)} \u20bd",
+                "",
+                i18n.get_text(lang, "urgency_prompt"),
+            ]
+            text = _card("Срочность", "\u23f0", body)
+
+            keyboard = [
+                [
+                    InlineKeyboardButton(
+                        i18n.get_text(lang, "urgency_normal"),
+                        callback_data="urgency:normal",
+                    ),
+                    InlineKeyboardButton(
+                        i18n.get_text(lang, "urgency_urgent"),
+                        callback_data="urgency:urgent",
+                    ),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            query = update.callback_query
+            await query.edit_message_text(
+                text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
+            )
+            return SELECT_URGENCY
+        return result
+    # If module unavailable, just stay in ENTER_TEXT
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "\u274c Голосовой ввод временно недоступен.",
+        parse_mode=ParseMode.HTML,
+    )
+    return ENTER_TEXT
+
+
 async def _handle_voice_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Wrapper для обработки голосовых сообщений."""
     if voice_handler_module:
@@ -1262,6 +1337,10 @@ def create_application() -> Application:
                 CallbackQueryHandler(select_service),
             ],
             ENTER_TEXT: [
+                CallbackQueryHandler(
+                    _handle_voice_confirmation_wrapper,
+                    pattern=r"^voice_(confirm|cancel)$",
+                ),
                 MessageHandler(filters.VOICE | filters.AUDIO, _handle_voice_wrapper),
                 MessageHandler(filters.PHOTO, _handle_photo_wrapper),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, enter_text),

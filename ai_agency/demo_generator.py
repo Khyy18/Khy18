@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 # Lazy OpenAI client
 _openai_client = None
 
+# Module-level cache for generated demos and creatives
+_demo_cache: Dict[str, Optional[str]] = {}
+_creative_cache: Dict[str, Dict[str, str]] = {}
+
 
 def _get_openai_client():
     """Получить или создать singleton AsyncOpenAI клиент."""
@@ -139,20 +143,29 @@ async def select_best_cases(limit: int = 5) -> List[dict]:
 
 
 async def auto_generate_demos() -> Dict[str, Optional[str]]:
-    """Сгенерировать демо для всех типов услуг."""
+    """Сгенерировать демо для всех типов услуг и сохранить в кеш."""
     results = {}
     for service_type in SERVICE_DESCRIPTIONS:
         demo = await generate_demo_for_service(service_type)
         results[service_type] = demo
+        if demo:
+            _demo_cache[service_type] = demo
     return results
 
 
 async def get_demo_creatives() -> List[dict]:
-    """Получить рекламные креативы для всех услуг."""
+    """Получить рекламные креативы для всех услуг (из кеша или генерировать)."""
     creatives = []
     for service_type in SERVICE_DESCRIPTIONS:
+        # Use cached creative if available
+        if service_type in _creative_cache:
+            creative = dict(_creative_cache[service_type])
+            creative["service_type"] = service_type
+            creatives.append(creative)
+            continue
         creative = await generate_ad_creative(service_type)
         if creative:
+            _creative_cache[service_type] = creative
             creative["service_type"] = service_type
             creatives.append(creative)
     return creatives

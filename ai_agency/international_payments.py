@@ -92,7 +92,7 @@ async def handle_stripe_webhook(payload: bytes, signature: str) -> Optional[dict
         amount_cents = session.get("amount_total", 0)
         amount_usd = amount_cents / 100.0
         # Конвертируем USD -> RUB (примерный курс)
-        amount_rub = amount_usd * 90.0
+        amount_rub = amount_usd * config.USD_TO_RUB_RATE
 
         if client_id:
             # Пополняем баланс
@@ -161,15 +161,14 @@ async def handle_crypto_webhook(payload: dict) -> Optional[dict]:
     if not config.NOWPAYMENTS_IPN_SECRET:
         return None
 
-    # Верификация подписи
+    # Верификация подписи - pop verify_hash BEFORE serializing
+    received_sig = payload.pop("verify_hash", "")
     sorted_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     expected_sig = hmac.new(
         config.NOWPAYMENTS_IPN_SECRET.encode(),
         sorted_payload.encode(),
         hashlib.sha512,
     ).hexdigest()
-
-    received_sig = payload.pop("verify_hash", "")
     if not hmac.compare_digest(expected_sig, received_sig):
         logger.warning("NOWPayments IPN signature mismatch")
         return None
@@ -190,7 +189,7 @@ async def handle_crypto_webhook(payload: dict) -> Optional[dict]:
         return None
 
     amount_usd = float(payload.get("price_amount", 0))
-    amount_rub = amount_usd * 90.0
+    amount_rub = amount_usd * config.USD_TO_RUB_RATE
 
     if client_id and amount_rub > 0:
         balance = await database.get_client_balance(client_id)
@@ -210,7 +209,7 @@ async def handle_crypto_webhook(payload: dict) -> Optional[dict]:
 
 def get_payment_methods_keyboard(amount_rub: float) -> InlineKeyboardMarkup:
     """Создать клавиатуру с методами оплаты."""
-    amount_usd = amount_rub / 90.0
+    amount_usd = amount_rub / config.USD_TO_RUB_RATE
     keyboard = [
         [InlineKeyboardButton(
             f"\U0001f4b3 YooKassa ({int(amount_rub)} \u20bd)",

@@ -46,10 +46,10 @@ class TestVisionHandler:
 
         context = MagicMock()
         result = await vision_handler.handle_photo(update, context)
-        assert result == vision_handler.SELECT_URGENCY
+        assert result == vision_handler.ENTER_TEXT
 
     async def test_handle_photo_success(self):
-        """handle_photo extracts text and returns SELECT_URGENCY."""
+        """handle_photo extracts text and returns ENTER_TEXT."""
         mock_photo = MagicMock()
         mock_photo.file_id = "test_file_id"
 
@@ -70,5 +70,5 @@ class TestVisionHandler:
         ):
             with patch("vision_handler.extract_text_from_image", AsyncMock(return_value="OCR text")):
                 result = await vision_handler.handle_photo(update, context)
-                assert result == vision_handler.SELECT_URGENCY
+                assert result == vision_handler.ENTER_TEXT
                 assert context.user_data["input_text"] == "OCR text"

@@ -390,6 +390,17 @@ async def update_balance(telegram_id: int, new_balance: float) -> None:
         await db.commit()
 
 
+async def atomic_deduct_balance(telegram_id: int, amount: float) -> bool:
+    """Атомарно списать средства с баланса. Возвращает True при успехе."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE clients SET balance = balance - ? WHERE telegram_id = ? AND balance >= ?",
+            (amount, telegram_id, amount),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
 async def update_total_spent(telegram_id: int, amount: float) -> None:
     """Увеличить общую сумму расходов клиента."""
     async with aiosqlite.connect(config.DATABASE_PATH) as db:

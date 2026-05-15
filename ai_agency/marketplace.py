@@ -100,14 +100,13 @@ async def purchase_template(client_id: int, template_id: int) -> bool:
         return False
 
     price = template["price"]
-    balance = await database.get_client_balance(client_id)
 
-    if balance < price:
+    # Atomic balance deduction to prevent race conditions
+    deducted = await database.atomic_deduct_balance(client_id, price)
+    if not deducted:
         return False
 
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
-        # Списываем средства
-        await database.update_balance(client_id, balance - price)
         # Записываем покупку
         await db.execute(
             "INSERT INTO template_purchases (client_id, template_id) VALUES (?, ?)",

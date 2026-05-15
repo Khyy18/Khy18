@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from telegram import Bot
 
@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 # Lazy OpenAI client
 _openai_client = None
+
+# Track last posted hour per channel to avoid double-posting
+_last_posted_hour: Dict[str, int] = {}
 
 
 def _get_openai_client():
@@ -107,6 +110,7 @@ async def check_and_post(bot: Optional[Bot] = None) -> int:
     """
     Проверить расписание и опубликовать посты в каналы.
     Возвращает количество опубликованных постов.
+    Tracks last posted hour per channel to avoid double-posting.
     """
     channels = _parse_channels()
     if not channels or not bot:
@@ -127,6 +131,11 @@ async def check_and_post(bot: Optional[Bot] = None) -> int:
         if current_hour not in schedule:
             continue
 
+        # Skip if already posted this hour for this channel
+        channel_key = str(channel_id)
+        if _last_posted_hour.get(channel_key) == current_hour:
+            continue
+
         post = await generate_post(niche)
         if not post:
             continue
@@ -138,6 +147,7 @@ async def check_and_post(bot: Optional[Bot] = None) -> int:
                 parse_mode="HTML",
             )
             posted += 1
+            _last_posted_hour[channel_key] = current_hour
             logger.info("Опубликован пост в канал %s (ниша: %s)", channel_id, niche)
         except Exception as e:
             logger.error("Ошибка публикации в канал %s: %s", channel_id, e)
