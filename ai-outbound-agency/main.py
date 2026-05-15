@@ -414,6 +414,57 @@ async def health_check() -> JSONResponse:
     )
 
 
+@app.get("/health/detailed")
+async def health_detailed() -> JSONResponse:
+    """Detailed health check endpoint with per-service circuit breaker status."""
+    from datetime import datetime as _dt, timezone as _tz
+    from core.resilience import CircuitBreakerRegistry, CircuitState
+
+    registry = getattr(app.state, "circuit_breaker_registry", None)
+    if registry is None:
+        registry = CircuitBreakerRegistry()
+        app.state.circuit_breaker_registry = registry
+
+    all_status = registry.get_all_status()
+
+    # Determine overall status
+    services_output: dict = {}
+    has_open = False
+    has_degraded = False
+
+    for service_name, status_info in all_status.items():
+        state_val = status_info["state"]
+        if state_val == CircuitState.OPEN.value:
+            has_open = True
+            svc_status = "unhealthy"
+        elif state_val == CircuitState.HALF_OPEN.value:
+            has_degraded = True
+            svc_status = "degraded"
+        else:
+            svc_status = "healthy"
+
+        services_output[service_name] = {
+            "status": svc_status,
+            "circuit_state": state_val,
+        }
+
+    if has_open:
+        overall_status = "unhealthy"
+    elif has_degraded:
+        overall_status = "degraded"
+    else:
+        overall_status = "healthy"
+
+    return JSONResponse(
+        content={
+            "overall_status": overall_status,
+            "services": services_output,
+            "timestamp": _dt.now(_tz.utc).isoformat(),
+        },
+        status_code=200,
+    )
+
+
 @app.get("/metrics")
 async def metrics(request: Request) -> Response:
     """Prometheus metrics endpoint.
