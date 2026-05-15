@@ -88,6 +88,37 @@ def calc_atr(klines: list[dict[str, Any]], period: int = 14) -> float:
     return sum(recent) / len(recent) if recent else 0.0
 
 
+def calc_rsi(closes: list[float], period: int = 14) -> float:
+    """Relative Strength Index (Wilder smoothing).
+
+    Returns RSI value (0-100). Returns 50.0 if insufficient data.
+    """
+    if len(closes) < period + 1:
+        return 50.0
+
+    # Calculate price changes
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+
+    # Initial average gain/loss (SMA of first `period` changes)
+    gains = [max(0, d) for d in deltas[:period]]
+    losses = [max(0, -d) for d in deltas[:period]]
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+
+    # Wilder smoothing for remaining
+    for i in range(period, len(deltas)):
+        change = deltas[i]
+        gain = max(0, change)
+        loss = max(0, -change)
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
 def detect_crossover(
     fast_ema: list[float],
     slow_ema: list[float],
@@ -326,6 +357,20 @@ async def _process_symbol(
     if current_price > 0 and atr / current_price < cfg.MOMENTUM_MIN_ATR_PCT:
         return f"сигнал {signal}, но ATR слишком мал ({atr/current_price*100:.2f}%)"
 
+    # ADX filter: не входим если нет тренда
+    if cfg.MOMENTUM_MIN_ADX > 0:
+        from regime_classifier import calc_adx
+        adx = calc_adx(klines, period=14)
+        if adx < cfg.MOMENTUM_MIN_ADX:
+            return f"сигнал {signal}, но ADX слишком мал ({adx:.1f} < {cfg.MOMENTUM_MIN_ADX})"
+
+    # RSI filter: не входим в перекупленность/перепроданность
+    rsi = calc_rsi(closes, period=14)
+    if signal == "LONG" and rsi > cfg.MOMENTUM_RSI_OVERBOUGHT:
+        return f"сигнал LONG, но RSI перекуплен ({rsi:.1f} > {cfg.MOMENTUM_RSI_OVERBOUGHT})"
+    if signal == "SHORT" and rsi < cfg.MOMENTUM_RSI_OVERSOLD:
+        return f"сигнал SHORT, но RSI перепродан ({rsi:.1f} < {cfg.MOMENTUM_RSI_OVERSOLD})"
+
     # #6: Cross-strategy exposure check
     max_exposure = cfg.RISK_MAX_EXPOSURE_PER_SYMBOL_PCT
     if max_exposure > 0:
@@ -376,7 +421,7 @@ async def _process_symbol(
 
     # Открываем позицию
     return await _open_position(
-        session, state, adapter, symbol, signal, current_price
+        session, state, adapter, symbol, signal, current_price, klines=klines
     )
 
 
@@ -396,6 +441,7 @@ async def _open_position(
     symbol: str,
     signal: str,
     price: float,
+    klines: list[dict[str, Any]] | None = None,
 ) -> str:
     """Открыть позицию по сигналу."""
     mom_state = state["momentum"]
@@ -413,13 +459,24 @@ async def _open_position(
     # Определяем side
     side = "Buy" if signal == "LONG" else "Sell"
 
-    # Стоп-лосс
+    # Стоп-лосс и тейк-профит
+    sl_pct = cfg.MOMENTUM_STOP_LOSS_PCT
+    tp_pct = cfg.MOMENTUM_TAKE_PROFIT_PCT
+
+    # ATR-based stops
+    if cfg.MOMENTUM_USE_ATR_STOPS and klines:
+        atr = calc_atr(klines, period=14)
+        if atr > 0 and price > 0:
+            atr_pct = atr / price
+            sl_pct = atr_pct * cfg.MOMENTUM_ATR_SL_MULT
+            tp_pct = atr_pct * cfg.MOMENTUM_ATR_TP_MULT
+
     if signal == "LONG":
-        stop_loss = price * (1 - cfg.MOMENTUM_STOP_LOSS_PCT)
-        take_profit = price * (1 + cfg.MOMENTUM_TAKE_PROFIT_PCT) if cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 else None
+        stop_loss = price * (1 - sl_pct)
+        take_profit = price * (1 + tp_pct) if tp_pct > 0 else None
     else:
-        stop_loss = price * (1 + cfg.MOMENTUM_STOP_LOSS_PCT)
-        take_profit = price * (1 - cfg.MOMENTUM_TAKE_PROFIT_PCT) if cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 else None
+        stop_loss = price * (1 + sl_pct)
+        take_profit = price * (1 - tp_pct) if tp_pct > 0 else None
 
     # Размещаем ордер
     result = await adapter.place_order_with_fallback(

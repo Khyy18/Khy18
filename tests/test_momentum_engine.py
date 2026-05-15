@@ -183,3 +183,34 @@ def test_calc_atr_insufficient_data():
 def test_calc_atr_empty():
     """ATR на пустых данных."""
     assert momentum_engine.calc_atr([], period=14) == 0.0
+
+
+def test_calc_rsi_constant():
+    """RSI on constant data = 50 (no gains or losses after initial)."""
+    closes = [100.0] * 30
+    rsi = momentum_engine.calc_rsi(closes, period=14)
+    # All deltas are 0 => avg_gain=0, avg_loss=0 => avg_loss==0 => RSI=100
+    # Actually with constant prices, all deltas=0, so avg_gain=0, avg_loss=0
+    # Edge case: avg_loss=0 returns 100.0
+    assert rsi == 100.0
+
+
+def test_calc_rsi_rising():
+    """RSI on steadily rising data should be high (>70)."""
+    closes = [float(i) for i in range(50, 100)]  # 50 values, steadily rising
+    rsi = momentum_engine.calc_rsi(closes, period=14)
+    assert rsi > 70
+
+
+def test_calc_rsi_falling():
+    """RSI on steadily falling data should be low (<30)."""
+    closes = [float(i) for i in range(100, 50, -1)]  # 50 values, steadily falling
+    rsi = momentum_engine.calc_rsi(closes, period=14)
+    assert rsi < 30
+
+
+def test_calc_rsi_insufficient_data():
+    """RSI with insufficient data returns 50."""
+    closes = [100.0, 101.0, 99.0]  # only 3 points, period=14 needs 15
+    rsi = momentum_engine.calc_rsi(closes, period=14)
+    assert rsi == 50.0

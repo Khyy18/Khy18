@@ -70,8 +70,8 @@ MOMENTUM_SYMBOLS: list[str] = [
 MOMENTUM_EXCHANGE = os.getenv("MOMENTUM_EXCHANGE", "bybit").strip().lower()
 
 # EMA параметры.
-MOMENTUM_EMA_FAST = int(os.getenv("MOMENTUM_EMA_FAST", "9") or 9)
-MOMENTUM_EMA_SLOW = int(os.getenv("MOMENTUM_EMA_SLOW", "21") or 21)
+MOMENTUM_EMA_FAST = int(os.getenv("MOMENTUM_EMA_FAST", "12") or 12)
+MOMENTUM_EMA_SLOW = int(os.getenv("MOMENTUM_EMA_SLOW", "26") or 26)
 
 # Плечо.
 MOMENTUM_LEVERAGE = int(os.getenv("MOMENTUM_LEVERAGE", "3") or 3)
@@ -150,6 +150,20 @@ GRID_TREND_BIAS_LEVELS = int(os.getenv("GRID_TREND_BIAS_LEVELS", "2") or 2)
 MOMENTUM_CONFIRMATION_BAR = os.getenv("MOMENTUM_CONFIRMATION_BAR", "true").strip().lower() in (
     "1", "true", "yes", "on",
 )
+
+
+# ─── Momentum: адаптивные стопы и фильтры ─────────────────────────────
+# ATR-based SL/TP: если True — SL и TP рассчитываются из ATR * multiplier.
+MOMENTUM_USE_ATR_STOPS = os.getenv("MOMENTUM_USE_ATR_STOPS", "true").strip().lower() in ("1", "true", "yes", "on")
+MOMENTUM_ATR_SL_MULT = float(os.getenv("MOMENTUM_ATR_SL_MULT", "2.0") or 2.0)
+MOMENTUM_ATR_TP_MULT = float(os.getenv("MOMENTUM_ATR_TP_MULT", "3.0") or 3.0)
+
+# Минимальный ADX для входа (нет тренда = нет входа).
+MOMENTUM_MIN_ADX = float(os.getenv("MOMENTUM_MIN_ADX", "20.0") or 20.0)
+
+# RSI фильтр: не входить в LONG если RSI > overbought, не SHORT если RSI < oversold.
+MOMENTUM_RSI_OVERBOUGHT = float(os.getenv("MOMENTUM_RSI_OVERBOUGHT", "70.0") or 70.0)
+MOMENTUM_RSI_OVERSOLD = float(os.getenv("MOMENTUM_RSI_OVERSOLD", "30.0") or 30.0)
 
 
 # ─── Риск-менеджмент ──────────────────────────────────────────────────
