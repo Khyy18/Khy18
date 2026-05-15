@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Optional
 
@@ -36,7 +37,7 @@ from exchanges.base import ExchangeAdapter
 class GridLevel:
     """Один уровень сетки."""
 
-    __slots__ = ("price", "side", "order_id", "filled", "qty")
+    __slots__ = ("price", "side", "order_id", "filled", "qty", "fill_price")
 
     def __init__(
         self,
@@ -45,12 +46,14 @@ class GridLevel:
         qty: float,
         order_id: str = "",
         filled: bool = False,
+        fill_price: float = 0.0,
     ) -> None:
         self.price = price
         self.side = side  # "Buy" или "Sell"
         self.qty = qty
         self.order_id = order_id
         self.filled = filled
+        self.fill_price = fill_price  # Реальная цена исполнения
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -59,6 +62,7 @@ class GridLevel:
             "qty": self.qty,
             "order_id": self.order_id,
             "filled": self.filled,
+            "fill_price": self.fill_price,
         }
 
     @classmethod
@@ -69,14 +73,21 @@ class GridLevel:
             qty=float(d.get("qty", 0)),
             order_id=str(d.get("order_id", "")),
             filled=bool(d.get("filled", False)),
+            fill_price=float(d.get("fill_price", 0.0)),
         )
 
 
 # ─── Вспомогательные функции ──────────────────────────────────────────
 
+_GRID_ADAPTER: ExchangeAdapter | None = None
+
+
 def _get_adapter() -> ExchangeAdapter:
-    """Адаптер биржи для grid."""
-    return get_adapter(cfg.GRID_EXCHANGE)
+    """Адаптер биржи для grid (кешируется)."""
+    global _GRID_ADAPTER
+    if _GRID_ADAPTER is None:
+        _GRID_ADAPTER = get_adapter(cfg.GRID_EXCHANGE)
+    return _GRID_ADAPTER
 
 
 def _calc_grid_order_size(state: dict[str, Any], n_levels: int) -> float:
@@ -102,16 +113,26 @@ def build_grid_levels(
     n_levels: int,
     step_pct: float,
     qty_per_level: float,
+    best_bid: float = 0.0,
+    best_ask: float = 0.0,
 ) -> list[GridLevel]:
     """Построить уровни сетки вокруг mid_price.
+
+    Если best_bid/best_ask заданы — Buy-уровни строятся от best_bid вниз,
+    Sell-уровни от best_ask вверх. Это гарантирует что ордера попадают
+    в стакан как maker (не taker).
 
     Возвращает список уровней: n_levels ниже (Buy) и n_levels выше (Sell).
     """
     levels: list[GridLevel] = []
 
+    # Базовые точки: если bid/ask не заданы — fallback на mid
+    buy_base = best_bid if best_bid > 0 else mid_price
+    sell_base = best_ask if best_ask > 0 else mid_price
+
     for i in range(1, n_levels + 1):
-        # Buy уровни ниже
-        buy_price = mid_price * (1 - step_pct * i)
+        # Buy уровни ниже bid
+        buy_price = buy_base * (1 - step_pct * i)
         levels.append(GridLevel(
             price=buy_price,
             side="Buy",
@@ -119,8 +140,8 @@ def build_grid_levels(
         ))
 
     for i in range(1, n_levels + 1):
-        # Sell уровни выше
-        sell_price = mid_price * (1 + step_pct * i)
+        # Sell уровни выше ask
+        sell_price = sell_base * (1 + step_pct * i)
         levels.append(GridLevel(
             price=sell_price,
             side="Sell",
@@ -243,6 +264,21 @@ async def _process_symbol(
     levels_raw = sym_state.get("levels", [])
     levels = [GridLevel.from_dict(d) for d in levels_raw] if levels_raw else []
 
+    # Reconciliation: сверяем state с биржей (ордера могли быть
+    # отменены / исполнены пока бот не работал)
+    if levels:
+        open_orders = await adapter.get_open_orders(session, symbol)
+        open_ids = {str(o.get("orderId") or o.get("order_id", "")) for o in open_orders}
+        orphaned = 0
+        for lv in levels:
+            if lv.order_id and not lv.filled and lv.order_id not in open_ids:
+                # Ордер пропал с биржи — помечаем filled (или отменён)
+                lv.filled = True
+                lv.fill_price = lv.price
+                orphaned += 1
+        if orphaned > 0:
+            print(f"[GRID] {symbol}: reconciled {orphaned} orphaned orders")
+
     # Размер ордера
     order_usdt = _calc_grid_order_size(state, cfg.GRID_LEVELS)
     qty_per_level = order_usdt / mid_price
@@ -254,12 +290,14 @@ async def _process_symbol(
     if not levels or is_grid_out_of_range(mid_price, levels):
         # Отменяем все старые ордера
         cancelled = await _cancel_all_grid_orders(session, adapter, symbol, levels)
-        # Строим новую сетку
+        # Строим сетку от bid/ask (не от mid) — offset для maker-only
         levels = build_grid_levels(
             mid_price=mid_price,
             n_levels=cfg.GRID_LEVELS,
             step_pct=cfg.GRID_STEP_PCT,
             qty_per_level=qty_per_level,
+            best_bid=best_bid,
+            best_ask=best_ask,
         )
         # Размещаем ордера
         placed = await _place_grid_orders(session, adapter, symbol, levels, info)
@@ -287,13 +325,14 @@ async def _cancel_all_grid_orders(
     symbol: str,
     levels: list[GridLevel],
 ) -> int:
-    """Отменить все grid-ордера по символу."""
+    """Отменить все grid-ордера по символу. Пауза между вызовами для rate-limit."""
     cancelled = 0
     for lv in levels:
         if lv.order_id and not lv.filled:
             try:
                 await adapter.cancel_order(session, symbol, lv.order_id)
                 cancelled += 1
+                await asyncio.sleep(0.1)  # rate-limit guard
             except Exception as exc:  # noqa: BLE001
                 print(f"[GRID] cancel {symbol} order {lv.order_id}: {exc}")
     return cancelled
@@ -306,22 +345,23 @@ async def _place_grid_orders(
     levels: list[GridLevel],
     info: dict[str, float],
 ) -> int:
-    """Разместить лимитные ордера для каждого уровня сетки."""
+    """Разместить лимитные ордера для каждого уровня сетки. Пауза для rate-limit."""
     placed = 0
     for lv in levels:
         try:
-            # Используем place_order_with_fallback (PostOnly limit)
-            result = await adapter.place_order_with_fallback(
+            result = await adapter.place_limit_order(
                 session,
                 symbol=symbol,
                 side=lv.side,
                 qty=lv.qty,
+                price=lv.price,
+                post_only=True,
                 reduce_only=False,
-                post_only_timeout_sec=0,  # Только лимитный, не ждём
             )
             if result and result.get("order_id"):
                 lv.order_id = str(result["order_id"])
                 placed += 1
+            await asyncio.sleep(0.1)  # rate-limit guard
         except Exception as exc:  # noqa: BLE001
             print(f"[GRID] place {symbol} {lv.side}@{lv.price:.2f}: {exc}")
     return placed
@@ -337,11 +377,21 @@ async def _check_fills_and_counter(
 ) -> int:
     """Проверить исполнения и разместить встречные ордера.
 
+    PnL считается точно: (sell_price - buy_price) * qty - fees.
+    Комиссии берутся из config.FUNDING_TAKER_FEES.
+
     Возвращает количество завершённых циклов (buy→sell или sell→buy).
     """
+    import config as _cfg
+
     # Получаем открытые ордера на бирже
     open_orders = await adapter.get_open_orders(session, symbol)
     open_ids = {str(o.get("orderId") or o.get("order_id", "")) for o in open_orders}
+
+    # Комиссия (maker для grid, т.к. лимитные ордера)
+    fee_rate = float(
+        _cfg.FUNDING_TAKER_FEES.get(cfg.GRID_EXCHANGE, 0.0006)
+    ) * 0.5  # maker ~ 50% от taker
 
     cycles = 0
     for lv in levels:
@@ -350,8 +400,13 @@ async def _check_fills_and_counter(
         # Если ордера нет в открытых — значит он исполнен
         if lv.order_id not in open_ids:
             lv.filled = True
-            # Считаем PnL: один grid-step
-            profit = lv.qty * lv.price * cfg.GRID_STEP_PCT
+            lv.fill_price = lv.price  # Лимитный ордер — цена = заявленная
+
+            # PnL: разница между buy и sell fill минус комиссии с обеих сторон
+            # Один grid-цикл завершён = buy + sell. Считаем profit за цикл.
+            notional = lv.qty * lv.price
+            fees_one_side = notional * fee_rate
+            profit = notional * cfg.GRID_STEP_PCT - fees_one_side * 2
             capital_allocator.record_pnl(state, "grid", profit)
 
             grid_state = state["grid"]
@@ -367,13 +422,14 @@ async def _check_fills_and_counter(
                 (1 + cfg.GRID_STEP_PCT) if lv.side == "Buy" else (1 - cfg.GRID_STEP_PCT)
             )
             try:
-                result = await adapter.place_order_with_fallback(
+                result = await adapter.place_limit_order(
                     session,
                     symbol=symbol,
                     side=counter_side,
                     qty=lv.qty,
+                    price=counter_price,
+                    post_only=True,
                     reduce_only=False,
-                    post_only_timeout_sec=0,
                 )
                 if result and result.get("order_id"):
                     # Переиспользуем уровень как встречный
@@ -381,6 +437,8 @@ async def _check_fills_and_counter(
                     lv.price = counter_price
                     lv.order_id = str(result["order_id"])
                     lv.filled = False
+                    lv.fill_price = 0.0
+                await asyncio.sleep(0.1)  # rate-limit guard
             except Exception as exc:  # noqa: BLE001
                 print(f"[GRID] counter {symbol} {counter_side}@{counter_price:.2f}: {exc}")
 

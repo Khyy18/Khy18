@@ -54,13 +54,16 @@ def init_allocator_state(state: dict[str, Any]) -> None:
 def get_strategy_capital(state: dict[str, Any], strategy: str) -> float:
     """Сколько USDT выделено стратегии (с учётом текущего equity).
 
+    Использует get_current_equity() (capital + PnL), а не константу
+    total_capital. Так при росте/падении equity стратегии масштабируются.
+
     strategy: "funding" | "grid" | "momentum"
     """
+    equity = get_current_equity(state)
     g = state.get("global", {})
-    total = float(g.get("total_capital", cfg.TOTAL_CAPITAL_USDT))
     alloc = g.get("capital_allocation", {})
     pct = float(alloc.get(strategy, 0.0))
-    return total * pct
+    return equity * pct
 
 
 def get_current_equity(state: dict[str, Any]) -> float:

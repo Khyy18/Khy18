@@ -96,6 +96,16 @@ MOMENTUM_ENABLED = os.getenv("MOMENTUM_ENABLED", "true").strip().lower() in (
     "1", "true", "yes", "on",
 )
 
+# Минимальная волатильность (ATR/price) для входа. Фильтрует боковик.
+# 0.005 = 0.5% ATR от цены — если меньше, не входим (слишком спокойно).
+MOMENTUM_MIN_ATR_PCT = float(os.getenv("MOMENTUM_MIN_ATR_PCT", "0.005") or 0.005)
+
+# Trailing stop: после достижения TRAIL_ACTIVATE_PCT прибыли — SL
+# подтягивается на расстоянии TRAIL_DISTANCE_PCT от текущей цены.
+# 0 = trailing отключён.
+MOMENTUM_TRAIL_ACTIVATE_PCT = float(os.getenv("MOMENTUM_TRAIL_ACTIVATE_PCT", "0.02") or 0.02)
+MOMENTUM_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_TRAIL_DISTANCE_PCT", "0.01") or 0.01)
+
 
 # ─── Валидация ────────────────────────────────────────────────────────
 

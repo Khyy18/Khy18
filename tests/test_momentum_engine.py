@@ -156,3 +156,30 @@ def test_ema_trending_up():
     ema = momentum_engine.calc_ema(prices, period=9)
     assert ema[-1] < 50.0  # отстаёт от цены
     assert ema[-1] > 1.0
+
+
+
+def test_calc_atr_basic():
+    """ATR на простых свечах."""
+    klines = []
+    for i in range(20):
+        klines.append({
+            "open": 100.0 + i,
+            "high": 102.0 + i,
+            "low": 98.0 + i,
+            "close": 101.0 + i,
+        })
+    atr = momentum_engine.calc_atr(klines, period=14)
+    # TR каждого бара ≈ high - low = 4.0 (при последовательном росте)
+    assert 3.5 < atr < 5.0
+
+
+def test_calc_atr_insufficient_data():
+    """ATR с недостатком данных = 0."""
+    klines = [{"open": 100, "high": 102, "low": 98, "close": 101}]
+    assert momentum_engine.calc_atr(klines, period=14) == 0.0
+
+
+def test_calc_atr_empty():
+    """ATR на пустых данных."""
+    assert momentum_engine.calc_atr([], period=14) == 0.0

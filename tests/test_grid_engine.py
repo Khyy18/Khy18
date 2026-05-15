@@ -92,19 +92,21 @@ def test_is_grid_out_of_range_outside():
 def test_grid_level_serialization():
     """to_dict / from_dict round-trip."""
     lv = grid_engine.GridLevel(
-        price=50100.0, side="Sell", qty=0.001, order_id="abc123", filled=True
+        price=50100.0, side="Sell", qty=0.001, order_id="abc123", filled=True, fill_price=50099.5
     )
     d = lv.to_dict()
     assert d["price"] == 50100.0
     assert d["side"] == "Sell"
     assert d["order_id"] == "abc123"
     assert d["filled"] is True
+    assert d["fill_price"] == 50099.5
 
     restored = grid_engine.GridLevel.from_dict(d)
     assert restored.price == lv.price
     assert restored.side == lv.side
     assert restored.order_id == lv.order_id
     assert restored.filled == lv.filled
+    assert restored.fill_price == lv.fill_price
 
 
 def test_calc_grid_order_size():
@@ -128,3 +130,31 @@ def test_get_grid_status():
     assert "total_profit_usdt" in status
     assert "exchange" in status
     assert "levels_per_side" in status
+
+
+
+def test_build_grid_levels_with_bid_ask():
+    """Grid строится от bid/ask если заданы."""
+    levels = grid_engine.build_grid_levels(
+        mid_price=1000.0,
+        n_levels=3,
+        step_pct=0.01,
+        qty_per_level=1.0,
+        best_bid=999.0,
+        best_ask=1001.0,
+    )
+    buy_levels = sorted([lv for lv in levels if lv.side == "Buy"], key=lambda l: l.price, reverse=True)
+    sell_levels = sorted([lv for lv in levels if lv.side == "Sell"], key=lambda l: l.price)
+
+    # Buy строятся от best_bid (999), не от mid (1000)
+    assert abs(buy_levels[0].price - 999.0 * 0.99) < 1.0
+    # Sell строятся от best_ask (1001), не от mid (1000)
+    assert abs(sell_levels[0].price - 1001.0 * 1.01) < 1.0
+
+
+def test_grid_level_fill_price_default():
+    """fill_price по умолчанию = 0."""
+    lv = grid_engine.GridLevel(price=100.0, side="Buy", qty=1.0)
+    assert lv.fill_price == 0.0
+    d = lv.to_dict()
+    assert d["fill_price"] == 0.0

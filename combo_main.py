@@ -260,6 +260,13 @@ async def _main_loop(
                 if grid_result.get("errors"):
                     for err in grid_result["errors"]:
                         print(f"[COMBO] grid error: {err}")
+                # Нотификации о завершённых циклах grid
+                processed = grid_result.get("processed", [])
+                for msg in processed:
+                    if "циклов завершено" in msg:
+                        await _notify(session, combo_telegram._card(
+                            "Grid", "\u25a6", [msg]
+                        ))
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMBO] grid_tick exception: {exc}")
 
@@ -269,6 +276,13 @@ async def _main_loop(
                 if mom_result.get("errors"):
                     for err in mom_result["errors"]:
                         print(f"[COMBO] momentum error: {err}")
+                # Нотификации об открытии/закрытии momentum
+                processed = mom_result.get("processed", [])
+                for msg in processed:
+                    if "ОТКРЫТО" in msg or "ЗАКРЫТО" in msg:
+                        await _notify(session, combo_telegram._card(
+                            "Momentum", "\U0001f4c8", [msg]
+                        ))
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMBO] momentum_tick exception: {exc}")
 

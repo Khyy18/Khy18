@@ -63,6 +63,30 @@ def calc_ema(prices: list[float], period: int) -> list[float]:
     return ema
 
 
+def calc_atr(klines: list[dict[str, Any]], period: int = 14) -> float:
+    """Average True Range за последние period баров.
+
+    TR = max(high - low, |high - prev_close|, |low - prev_close|)
+    ATR = SMA(TR, period)
+
+    Возвращает 0.0 при недостатке данных.
+    """
+    if len(klines) < period + 1:
+        return 0.0
+
+    trs: list[float] = []
+    for i in range(1, len(klines)):
+        high = float(klines[i]["high"])
+        low = float(klines[i]["low"])
+        prev_close = float(klines[i - 1]["close"])
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+
+    # ATR = SMA последних period значений TR
+    recent = trs[-period:]
+    return sum(recent) / len(recent) if recent else 0.0
+
+
 def detect_crossover(
     fast_ema: list[float],
     slow_ema: list[float],
@@ -97,9 +121,15 @@ def detect_crossover(
 
 # ─── Вспомогательные ──────────────────────────────────────────────────
 
+_MOMENTUM_ADAPTER: ExchangeAdapter | None = None
+
+
 def _get_adapter() -> ExchangeAdapter:
-    """Адаптер биржи для momentum."""
-    return get_adapter(cfg.MOMENTUM_EXCHANGE)
+    """Адаптер биржи для momentum (кешируется)."""
+    global _MOMENTUM_ADAPTER
+    if _MOMENTUM_ADAPTER is None:
+        _MOMENTUM_ADAPTER = get_adapter(cfg.MOMENTUM_EXCHANGE)
+    return _MOMENTUM_ADAPTER
 
 
 def _calc_position_size(state: dict[str, Any], price: float) -> float:
@@ -201,7 +231,7 @@ async def _process_symbol(
     existing = _find_position(mom_state, symbol)
 
     if existing:
-        # Управляем открытой позицией
+        # Управляем открытой позицией (trailing stop + выход)
         return await _manage_position(
             session, state, adapter, symbol, existing, fast_ema, slow_ema, current_price
         )
@@ -211,9 +241,15 @@ async def _process_symbol(
     if signal is None:
         return "нет сигнала"
 
+    # ATR-фильтр: не входим если волатильность слишком низкая (боковик)
+    atr = calc_atr(klines, period=14)
+    if current_price > 0 and atr / current_price < cfg.MOMENTUM_MIN_ATR_PCT:
+        return f"сигнал {signal}, но ATR слишком мал ({atr/current_price*100:.2f}%)"
+
     # Проверяем лимит позиций
     positions = mom_state.get("positions", [])
-    if len(positions) >= cfg.MOMENTUM_MAX_POSITIONS:
+    open_count = sum(1 for p in positions if p.get("status") == "OPEN")
+    if open_count >= cfg.MOMENTUM_MAX_POSITIONS:
         return f"сигнал {signal}, но макс. позиций ({cfg.MOMENTUM_MAX_POSITIONS})"
 
     # Открываем позицию
@@ -318,7 +354,7 @@ async def _manage_position(
     slow_ema: list[float],
     current_price: float,
 ) -> str:
-    """Управление открытой позицией: проверка выхода."""
+    """Управление открытой позицией: trailing stop + проверка выхода."""
     signal = detect_crossover(fast_ema, slow_ema)
     pos_side = position["side"]  # "LONG" или "SHORT"
 
@@ -333,19 +369,49 @@ async def _manage_position(
         should_close = True
         close_reason = "обратный сигнал (LONG cross)"
 
-    # Проверка SL/TP (на случай если биржа не сработала)
+    # Рассчитываем текущий PnL%
     entry = float(position["entry_price"])
     if pos_side == "LONG":
         pnl_pct = (current_price - entry) / entry
-        if pnl_pct <= -cfg.MOMENTUM_STOP_LOSS_PCT:
+    else:
+        pnl_pct = (entry - current_price) / entry
+
+    # Trailing stop логика
+    trail_activate = cfg.MOMENTUM_TRAIL_ACTIVATE_PCT
+    trail_distance = cfg.MOMENTUM_TRAIL_DISTANCE_PCT
+    current_sl = float(position.get("stop_loss", 0.0))
+
+    if trail_activate > 0 and trail_distance > 0 and pnl_pct >= trail_activate:
+        # Прибыль достигла порога — подтягиваем SL
+        if pos_side == "LONG":
+            new_sl = current_price * (1 - trail_distance)
+            if new_sl > current_sl:
+                position["stop_loss"] = new_sl
+                # Обновляем SL на бирже
+                try:
+                    await adapter.set_trading_stop(session, symbol, stop_loss=new_sl)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[MOMENTUM] trailing SL update {symbol}: {exc}")
+        else:
+            new_sl = current_price * (1 + trail_distance)
+            if new_sl < current_sl or current_sl == 0:
+                position["stop_loss"] = new_sl
+                try:
+                    await adapter.set_trading_stop(session, symbol, stop_loss=new_sl)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[MOMENTUM] trailing SL update {symbol}: {exc}")
+
+    # Проверка SL/TP (на случай если биржа не сработала)
+    current_sl = float(position.get("stop_loss", 0.0))
+    if pos_side == "LONG":
+        if current_sl > 0 and current_price <= current_sl:
             should_close = True
             close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
         elif cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 and pnl_pct >= cfg.MOMENTUM_TAKE_PROFIT_PCT:
             should_close = True
             close_reason = f"тейк-профит ({pnl_pct*100:.1f}%)"
     else:
-        pnl_pct = (entry - current_price) / entry
-        if pnl_pct <= -cfg.MOMENTUM_STOP_LOSS_PCT:
+        if current_sl > 0 and current_price >= current_sl:
             should_close = True
             close_reason = f"стоп-лосс ({pnl_pct*100:.1f}%)"
         elif cfg.MOMENTUM_TAKE_PROFIT_PCT > 0 and pnl_pct >= cfg.MOMENTUM_TAKE_PROFIT_PCT:
@@ -354,7 +420,10 @@ async def _manage_position(
 
     if not should_close:
         held_h = (time.time() - float(position.get("opened_epoch", 0))) / 3600
-        return f"держим {pos_side} ({held_h:.1f}ч, PnL {pnl_pct*100:+.1f}%)"
+        trail_info = ""
+        if trail_activate > 0 and pnl_pct >= trail_activate:
+            trail_info = " [trail]"
+        return f"держим {pos_side} ({held_h:.1f}ч, PnL {pnl_pct*100:+.1f}%{trail_info})"
 
     # Закрываем позицию
     return await _close_position(

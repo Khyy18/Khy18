@@ -112,6 +112,35 @@ class ExchangeAdapter(abc.ABC):
     ) -> float:
         """Привести qty к биржевым фильтрам. 0.0 если невалидно."""
 
+    async def place_limit_order(
+        self,
+        session: Any,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        post_only: bool = True,
+        reduce_only: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        """Разместить чистый лимитный ордер (без fallback в market).
+
+        Возвращает dict с ключами: order_id, status, price, qty.
+        None при ошибке. Дефолтная реализация использует
+        place_order_with_fallback с post_only_timeout_sec=0.
+
+        Биржевые адаптеры ДОЛЖНЫ переопределить этот метод для
+        корректной работы grid-бота (чтобы не было market fallback).
+        """
+        # Fallback: используем существующий метод (не идеально, но работает)
+        return await self.place_order_with_fallback(
+            session,
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            reduce_only=reduce_only,
+            post_only_timeout_sec=0,
+        )
+
     async def get_funding_info(
         self, session: Any, symbol: str
     ) -> Optional[dict[str, Any]]:
