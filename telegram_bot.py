@@ -318,7 +318,7 @@ async def _handle_start(
     _g(state)["bot_running"] = True
     return _card("Сканер запущен", "\u2705", [
         "Арбитраж-сканер активен.",
-        "Бот ищет и ведёт funding-пары.",
+        "Бот ищет и ведёт funding-связки.",
     ])
 
 
@@ -327,7 +327,7 @@ async def _handle_stop(
 ) -> str:
     _g(state)["bot_running"] = False
     return _card("Сканер на паузе", "\u23f8", [
-        "Новые пары НЕ открываются.",
+        "Новые связки НЕ открываются.",
         "Активные позиции мониторятся до закрытия.",
     ])
 
@@ -395,7 +395,7 @@ async def _handle_positions(
     if not all_positions:
         return _card("Арб-позиции", "\U0001f4b0", [
             f"Слотов: 0/{max_pos}",
-            "Активных пар нет.",
+            "Активных связок нет.",
         ])
 
     body: list[str] = [f"Слотов: {len(all_positions)}/{max_pos}"]
@@ -488,7 +488,7 @@ async def _handle_panic(
     positions = arb_storage.get_all_active()
     if not positions:
         return (
-            _card("PANIC", "\U0001f6a8", ["Активных пар нет — закрывать нечего."]),
+            _card("PANIC", "\U0001f6a8", ["Активных связок нет — закрывать нечего."]),
             set_keyboard(),
         )
     pair_lines = [
@@ -497,7 +497,7 @@ async def _handle_panic(
         for p in positions
     ]
     body = [
-        f"Будет закрыто пар: {len(positions)}",
+        f"Будет закрыто связок: {len(positions)}",
         "",
     ] + pair_lines + [
         "",
@@ -508,7 +508,7 @@ async def _handle_panic(
     keyboard = {
         "inline_keyboard": [
             [
-                {"text": "\u26a0\ufe0f ДА, ЗАКРЫТЬ", "callback_data": CB_PANIC_CONFIRM},
+                {"text": "\u26a0\ufe0f ДА, ЗАКРЫТЬ ВСЕ", "callback_data": CB_PANIC_CONFIRM},
                 {"text": "Отмена", "callback_data": CB_PANIC_CANCEL},
             ]
         ]
@@ -523,7 +523,7 @@ async def _handle_panic_confirm(
     _g(state)["bot_running"] = False
     positions = arb_storage.get_all_active()
     if not positions:
-        return _card("PANIC", "\U0001f6a8", ["Активных пар уже нет."])
+        return _card("PANIC", "\U0001f6a8", ["Активных связок уже нет."])
     if getattr(config, "DRY_RUN", False):
         return "[DRY RUN] Принудительное закрытие имитировано."
     results: list[str] = []
@@ -608,7 +608,7 @@ async def _handle_exchanges(
         "Нажмите на биржу чтобы вкл/выкл.",
         "\U0001f7e2 = включена  |  \U0001f534 = отключена",
         "",
-        "Отключение останавливает поиск новых пар.",
+        "Отключение останавливает поиск новых связок.",
         "Открытые позиции мониторятся до закрытия.",
     ]
     text = _card("Управление биржами", "\U0001f3e6", body)
@@ -905,7 +905,7 @@ async def _process_message(
                 "Кнопки:",
                 "  Статус    - сводка по арб-сделкам",
                 "  Фандинг   - текущий funding-скан",
-                "  Пары      - детали открытых позиций",
+                "  Пары      - детали открытых связок",
                 "  Балансы   - отчёт executor'а",
                 "  Символы   - вкл/выкл символы скана",
                 "  Биржи     - вкл/выкл биржи",

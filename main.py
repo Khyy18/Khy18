@@ -190,11 +190,11 @@ def _arb_notify(session: aiohttp.ClientSession):
 
 
 def _format_batch_open(arb_ids: list[int], state: dict[str, Any]) -> str:
-    """Сводное уведомление об открытии batch'а арб-пар."""
+    """Сводное уведомление об открытии batch'а арб-связок."""
     active_all = arb_storage.get_all_active()
     active_map = {int(p["id"]): p for p in active_all}
     max_pos = int(getattr(config, "ARB_MAX_POSITIONS", 3))
-    lines: list[str] = ["\U0001f4c8 <b>Открытие пар</b>"]
+    lines: list[str] = ["\U0001f4c8 <b>Открыты связки</b>"]
     total_notional = 0.0
     total_edge = 0.0
     count = 0
@@ -225,7 +225,7 @@ def _format_batch_open(arb_ids: list[int], state: dict[str, Any]) -> str:
         total_active = len(active_all)
         total_not_all = sum(float(p.get("notional_usdt") or 0) for p in active_all)
         lines.append(f"\n<b>Портфель:</b>")
-        lines.append(f"  Пар: {total_active}/{max_pos} | Notional: ${total_not_all:.0f}")
+        lines.append(f"  Связок: {total_active}/{max_pos} | Notional: ${total_not_all:.0f}")
         lines.append(f"  Средний edge: {avg_edge*100:.1f}% APR")
         lines.append(f"  Ожидаемый PnL (7д): ~${expected_7d:.2f} USDT")
 
@@ -233,8 +233,8 @@ def _format_batch_open(arb_ids: list[int], state: dict[str, Any]) -> str:
 
 
 def _format_batch_close(closed_records: list[dict], state: dict[str, Any]) -> str:
-    """Сводное уведомление о закрытии batch'а арб-пар."""
-    lines: list[str] = ["\U0001f4c9 <b>Закрытие пар</b>"]
+    """Сводное уведомление о закрытии batch'а арб-связок."""
+    lines: list[str] = ["\U0001f4c9 <b>Закрыты связки</b>"]
     total_pnl = 0.0
     for r in closed_records:
         arb_id = r.get("id", "?")
@@ -251,7 +251,7 @@ def _format_batch_close(closed_records: list[dict], state: dict[str, Any]) -> st
     # Оставшиеся позиции
     remaining = arb_storage.get_all_active()
     max_pos = int(getattr(config, "ARB_MAX_POSITIONS", 3))
-    lines.append(f"Пар осталось: {len(remaining)}/{max_pos}")
+    lines.append(f"Связок осталось: {len(remaining)}/{max_pos}")
     return "\n".join(lines)
 
 
@@ -780,7 +780,7 @@ async def _heartbeat_tick(
         f"<pre>Время: {now.strftime('%Y-%m-%d %H:%M UTC')}",
         f"Executor: {'ON' if executor_on else 'OFF'}  |  Bot: {bot_running}  |  Kill: {ks}",
         f"Funding-snap: {snap_age_str}",
-        f"Открытых пар: {active_count}/{max_pos}",
+        f"Связок: {active_count}/{max_pos}",
         f"Daily PnL: {daily:+.2f}  |  Weekly: {weekly:+.2f}",
         f"Total: {cumul:+.2f} USDT</pre>",
     ]

@@ -1337,7 +1337,7 @@ def format_status() -> str:
     lines = [
         "🤖 <b>ARB executor</b>",
         f"Статус: <b>{enabled_str}</b>",
-        f"Открытых пар: <b>{len(positions)}/{max_pos}</b>",
+        f"Открытых связок: <b>{len(positions)}/{max_pos}</b>",
     ]
     if not enabled:
         lines.append(
@@ -1372,7 +1372,7 @@ def format_status() -> str:
             )
     else:
         lines.append("")
-        lines.append("Активных позиций нет.")
+        lines.append("Активных связок нет.")
 
     lines.append("")
     lines.append("<b>Кумулятив по закрытым:</b>")
