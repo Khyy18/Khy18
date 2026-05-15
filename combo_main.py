@@ -24,8 +24,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
+from aiohttp import web
 
 _SHUTDOWN_STATE: dict[str, Any] | None = None
+_START_TIME = time.time()
 
 import capital_allocator
 import combo_config as cfg
@@ -436,6 +438,24 @@ async def _main_loop(
         print(f"[COMBO] shutdown notify error: {exc}")
 
 
+# ─── Health endpoint ───────────────────────────────────────────────────
+
+async def _health_handler(request):
+    """Liveness probe for Docker."""
+    return web.json_response({"status": "ok", "uptime": time.time() - _START_TIME})
+
+
+async def _start_health_server():
+    """Start health endpoint on port 8081."""
+    app = web.Application()
+    app.router.add_get("/health", _health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8081)
+    await site.start()
+    print("[COMBO] Health endpoint: http://0.0.0.0:8081/health")
+
+
 # ─── Entry point ───────────────────────────────────────────────────────
 
 async def main() -> None:
@@ -459,6 +479,8 @@ async def main() -> None:
           f"momentum={cfg.ALLOC_MOMENTUM_PCT*100:.0f}%")
     print(f"[COMBO] Капитал: ${cfg.TOTAL_CAPITAL_USDT}")
     print(f"[COMBO] Kill порог: {cfg.GLOBAL_MAX_DRAWDOWN_PCT*100:.0f}%")
+
+    await _start_health_server()
 
     async with aiohttp.ClientSession() as session:
         # Стартовое сообщение

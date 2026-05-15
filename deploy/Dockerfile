@@ -21,7 +21,7 @@ USER zenith
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=8)" \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8081/health', timeout=8)" \
     || exit 1
 
 # combo_main.py — единая точка входа (funding + grid + momentum)

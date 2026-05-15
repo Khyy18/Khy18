@@ -12,9 +12,11 @@ Graceful shutdown: при SIGTERM/SIGINT main ловит сигнал, вызы�
 from __future__ import annotations
 
 import json
+import os
 import signal
 import sqlite3
 import sys
+import tempfile
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -169,3 +171,41 @@ def setup_graceful_shutdown(state: dict[str, Any]) -> None:
 
     signal.signal(signal.SIGTERM, _handler)
     signal.signal(signal.SIGINT, _handler)
+
+
+# ─── JSON file-based atomic persistence ────────────────────────────────
+
+def _get_state_path() -> str:
+    """Path to JSON state file."""
+    return os.getenv("STATE_DB_PATH", "/app/data/state.json")
+
+
+def save_state(state: dict) -> None:
+    """Atomic save: write to tmp file, then os.replace (atomic on POSIX)."""
+    path = _get_state_path()
+    dir_name = os.path.dirname(path) or "."
+    os.makedirs(dir_name, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(state, f, ensure_ascii=False, default=_json_serializer)
+        os.replace(tmp_path, path)  # atomic on POSIX
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def load_state() -> dict | None:
+    """Load state from JSON file. Returns None if file missing or corrupt."""
+    path = _get_state_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"[STATE] Error loading state from {path}: {exc}")
+        return None

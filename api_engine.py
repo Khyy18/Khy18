@@ -230,6 +230,7 @@ async def get_positions(
 # --- v2: инструментальные фильтры ---
 
 _INSTRUMENT_CACHE: dict[str, dict[str, float]] = {}
+_INSTRUMENT_CACHE_TS: dict[str, float] = {}
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -276,13 +277,15 @@ async def instrument_info_cached(
 ) -> Optional[dict[str, float]]:
     """Кэшированная версия get_instruments_info: первый вызов ходит в сеть,
     последующие отдают значение из _INSTRUMENT_CACHE. На сетевом сбое
-    возвращаем None и кэш не портим."""
+    возвращаем None и кэш не портим. Cache TTL: 900 seconds (15 min)."""
     cached = _INSTRUMENT_CACHE.get(symbol)
-    if cached is not None:
+    cached_ts = _INSTRUMENT_CACHE_TS.get(symbol, 0)
+    if cached is not None and (time.time() - cached_ts) < 900:  # 15 min TTL
         return cached
     info = await get_instruments_info(session, symbol)
     if info is not None:
         _INSTRUMENT_CACHE[symbol] = info
+        _INSTRUMENT_CACHE_TS[symbol] = time.time()
     return info
 
 

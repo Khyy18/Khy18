@@ -120,6 +120,7 @@ class OKXAdapter(ExchangeAdapter):
         self.is_testnet = bool(getattr(config, "IS_TESTNET", True))
         self.base_url = _OKX_BASE_URL
         self._instrument_cache: dict[str, dict[str, float]] = {}
+        self._instrument_cache_ts: dict[str, float] = {}
 
     # --- ctVal конвертация ------------------------------------------------
     # OKX SWAP-перпетуалы принимают/возвращают размер в КОНТРАКТАХ, не в
@@ -273,7 +274,8 @@ class OKXAdapter(ExchangeAdapter):
         Первый вызов ходит в сеть, последующие отдают из self._instrument_cache."""
         norm = _normalize_symbol(symbol)
         cached = self._instrument_cache.get(norm)
-        if cached is not None:
+        cached_ts = self._instrument_cache_ts.get(norm, 0)
+        if cached is not None and (time.time() - cached_ts) < 900:  # 15 min TTL
             return cached
         params = {"instType": "SWAP", "instId": norm}
         resp = await self._request(
@@ -302,6 +304,7 @@ class OKXAdapter(ExchangeAdapter):
             "contractValueCcy": str(item.get("ctValCcy") or ""),
         }
         self._instrument_cache[norm] = info
+        self._instrument_cache_ts[norm] = time.time()
         return info
 
     async def instrument_info_cached(

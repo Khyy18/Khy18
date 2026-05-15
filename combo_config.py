@@ -227,7 +227,7 @@ MOMENTUM_MR_MAX_BB_WIDTH = float(os.getenv("MOMENTUM_MR_MAX_BB_WIDTH", "0") or 0
 
 # RSI momentum filter: не входить если delta RSI за 3 бара > порога (breakdown detection)
 # -15 = мягкий (пропускает только сильный breakdown). -10 = жёсткий.
-MOMENTUM_MR_RSI_DELTA_THRESHOLD = float(os.getenv("MOMENTUM_MR_RSI_DELTA_THRESHOLD", "15") or 15)
+MOMENTUM_MR_RSI_DELTA_THRESHOLD = float(os.getenv("MOMENTUM_MR_RSI_DELTA_THRESHOLD", "20") or 20)
 
 # Breakout parameters (used when ADX >= ADX_TREND_THRESHOLD)
 MOMENTUM_BO_LOOKBACK = int(os.getenv("MOMENTUM_BO_LOOKBACK", "20") or 20)

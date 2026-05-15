@@ -12,10 +12,13 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import capital_allocator
 import combo_config as cfg
+
+KILL_FILE_PATH = os.getenv("KILL_FILE_PATH", "/app/data/KILL")
 
 
 def check_global_kill(state: dict[str, Any]) -> bool:
@@ -50,7 +53,15 @@ def check_global_kill(state: dict[str, Any]) -> bool:
 def is_kill_active(state: dict[str, Any]) -> bool:
     """Активен ли глобальный kill-switch (read-only проверка)."""
     g = state.get("global", {})
-    return bool(g.get("global_kill_active", False))
+    if g.get("global_kill_active", False):
+        return True
+    # File-based fallback: if KILL file exists, kill is active
+    try:
+        if os.path.exists(KILL_FILE_PATH):
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def get_kill_reason(state: dict[str, Any]) -> str:
