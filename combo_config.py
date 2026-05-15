@@ -70,8 +70,8 @@ MOMENTUM_SYMBOLS: list[str] = [
 MOMENTUM_EXCHANGE = os.getenv("MOMENTUM_EXCHANGE", "bybit").strip().lower()
 
 # EMA параметры.
-MOMENTUM_EMA_FAST = int(os.getenv("MOMENTUM_EMA_FAST", "12") or 12)
-MOMENTUM_EMA_SLOW = int(os.getenv("MOMENTUM_EMA_SLOW", "26") or 26)
+MOMENTUM_EMA_FAST = int(os.getenv("MOMENTUM_EMA_FAST", "9") or 9)
+MOMENTUM_EMA_SLOW = int(os.getenv("MOMENTUM_EMA_SLOW", "21") or 21)
 
 # Плечо.
 MOMENTUM_LEVERAGE = int(os.getenv("MOMENTUM_LEVERAGE", "3") or 3)
@@ -80,10 +80,12 @@ MOMENTUM_LEVERAGE = int(os.getenv("MOMENTUM_LEVERAGE", "3") or 3)
 MOMENTUM_TIMEFRAME = os.getenv("MOMENTUM_TIMEFRAME", "15").strip()  # минуты
 
 # Стоп-лосс в процентах от входа.
-MOMENTUM_STOP_LOSS_PCT = float(os.getenv("MOMENTUM_STOP_LOSS_PCT", "0.02") or 0.02)
+# 2.5% — оптимально для BTC 15m (не выбивает на шуме, ниже ATR*3)
+MOMENTUM_STOP_LOSS_PCT = float(os.getenv("MOMENTUM_STOP_LOSS_PCT", "0.025") or 0.025)
 
-# Тейк-профит в процентах от входа (0 = без TP, только по обратному сигналу).
-MOMENTUM_TAKE_PROFIT_PCT = float(os.getenv("MOMENTUM_TAKE_PROFIT_PCT", "0.04") or 0.04)
+# Тейк-профит в процентах от входа.
+# 0 = без TP, прибыль фиксируется trailing stop (позволяет тренду бежать)
+MOMENTUM_TAKE_PROFIT_PCT = float(os.getenv("MOMENTUM_TAKE_PROFIT_PCT", "0.0") or 0.0)
 
 # Период проверки сигналов (секунды).
 MOMENTUM_TICK_INTERVAL_SEC = float(os.getenv("MOMENTUM_TICK_INTERVAL_SEC", "60") or 60)
@@ -97,14 +99,16 @@ MOMENTUM_ENABLED = os.getenv("MOMENTUM_ENABLED", "true").strip().lower() in (
 )
 
 # Минимальная волатильность (ATR/price) для входа. Фильтрует боковик.
-# 0.005 = 0.5% ATR от цены — если меньше, не входим (слишком спокойно).
-MOMENTUM_MIN_ATR_PCT = float(os.getenv("MOMENTUM_MIN_ATR_PCT", "0.005") or 0.005)
+# 0.4% ATR от цены — если меньше, не входим (слишком спокойно).
+MOMENTUM_MIN_ATR_PCT = float(os.getenv("MOMENTUM_MIN_ATR_PCT", "0.004") or 0.004)
 
 # Trailing stop: после достижения TRAIL_ACTIVATE_PCT прибыли — SL
 # подтягивается на расстоянии TRAIL_DISTANCE_PCT от текущей цены.
 # 0 = trailing отключён.
-MOMENTUM_TRAIL_ACTIVATE_PCT = float(os.getenv("MOMENTUM_TRAIL_ACTIVATE_PCT", "0.02") or 0.02)
-MOMENTUM_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_TRAIL_DISTANCE_PCT", "0.01") or 0.01)
+# 1.2% — агрессивный trailing для быстрой фиксации
+MOMENTUM_TRAIL_ACTIVATE_PCT = float(os.getenv("MOMENTUM_TRAIL_ACTIVATE_PCT", "0.012") or 0.012)
+# 0.8% — расстояние от цены до trailing SL
+MOMENTUM_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_TRAIL_DISTANCE_PCT", "0.008") or 0.008)
 
 
 # ─── Grid: защита от unrealized loss ───────────────────────────────────
@@ -146,8 +150,9 @@ GRID_TREND_BIAS_LEVELS = int(os.getenv("GRID_TREND_BIAS_LEVELS", "2") or 2)
 
 # ─── Momentum: confirmation bar ───────────────────────────────────────
 # Если True — вход не на свече кросса, а на следующей (если цена всё ещё
-# подтверждает направление). Снижает ложные сигналы на ~30%.
-MOMENTUM_CONFIRMATION_BAR = os.getenv("MOMENTUM_CONFIRMATION_BAR", "true").strip().lower() in (
+# подтверждает направление).
+# false — тесты показывают +4.5% без vs -1.4% с confirmation
+MOMENTUM_CONFIRMATION_BAR = os.getenv("MOMENTUM_CONFIRMATION_BAR", "false").strip().lower() in (
     "1", "true", "yes", "on",
 )
 
