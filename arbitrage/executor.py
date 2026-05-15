@@ -12,7 +12,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from arbitrage import config
 from arbitrage.betfair_api import BetfairClient
@@ -110,15 +110,38 @@ class BetExecutor:
             )
             # Attempt Betfair lay hedge for successful legs
             try:
-                betfair = BetfairClient(session=None)
                 if self.dry_run:
                     logger.warning(
                         "[EXECUTOR] PARTIAL_FILL: would attempt Betfair hedge for %s", event
                     )
+                elif config.BETFAIR_APP_KEY:
+                    for sleg in successful_legs:
+                        if sleg.get("bookmaker") == "betfair" and sleg.get("bet_id"):
+                            # Place LAY hedge on same selection
+                            hedge_result = await self._place_bet(
+                                bookmaker="betfair",
+                                event=event,
+                                outcome=sleg.get("outcome", ""),
+                                stake=sleg.get("stake", 0.0),
+                                odds=sleg.get("odds", 0.0),
+                                selection_id=sleg.get("selection_id"),
+                                market_id=sleg.get("market_id"),
+                                side="LAY",
+                            )
+                            if hedge_result.get("status") == STATUS_PLACED:
+                                logger.info(
+                                    "[EXECUTOR] Betfair LAY hedge успешен: %s",
+                                    hedge_result.get("bet_id"),
+                                )
+                            else:
+                                logger.error(
+                                    "[EXECUTOR] Betfair LAY hedge неудачен: %s",
+                                    hedge_result.get("error", "unknown"),
+                                )
                 else:
-                    # Attempt hedge (placeholder - real implementation requires market lookup)
                     logger.warning(
-                        "[EXECUTOR] PARTIAL_FILL: Betfair hedge attempted for %s", event
+                        "[EXECUTOR] PARTIAL_FILL: Betfair hedge невозможен (нет APP_KEY) для %s",
+                        event,
                     )
             except Exception as hedge_exc:
                 logger.error("[EXECUTOR] Betfair hedge failed: %s", hedge_exc)
@@ -225,11 +248,111 @@ class BetExecutor:
         outcome: str,
         stake: float,
         odds: float,
+        selection_id: Optional[str] = None,
+        market_id: Optional[str] = None,
+        side: str = "BACK",
     ) -> dict[str, Any]:
-        """Разместить реальную ставку (placeholder для будущей реализации).
+        """Разместить реальную ставку.
 
-        TODO: Интеграция с API каждого букмекера.
+        Для Betfair: использует BetfairClient.place_orders если BETFAIR_APP_KEY задан.
+        Для остальных букмекеров: placeholder (NOT_IMPLEMENTED).
         """
+        # Betfair real placement
+        if bookmaker == "betfair" and config.BETFAIR_APP_KEY and not self.dry_run:
+            if not market_id or not selection_id:
+                logger.warning(
+                    "[EXECUTOR] Betfair: нет market_id или selection_id для %s",
+                    outcome,
+                )
+                return {
+                    "bookmaker": bookmaker,
+                    "event": event,
+                    "outcome": outcome,
+                    "stake": stake,
+                    "odds": odds,
+                    "status": STATUS_FAILED,
+                    "error": "market_id или selection_id не указан",
+                }
+
+            instruction: dict[str, Any] = {
+                "selectionId": selection_id,
+                "handicap": "0",
+                "side": side,
+                "orderType": "LIMIT",
+                "limitOrder": {
+                    "size": stake,
+                    "price": odds,
+                    "persistenceType": "LAPSE",
+                },
+            }
+
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                try:
+                    client = BetfairClient()
+                    try:
+                        result = await client.place_orders(market_id, [instruction])
+                    finally:
+                        await client.close()
+
+                    if result.get("status") == "SUCCESS":
+                        reports = result.get("instructionReports", [])
+                        bet_id = ""
+                        if reports:
+                            bet_id = reports[0].get("betId", "")
+                        logger.info(
+                            "[EXECUTOR] Betfair ставка размещена: bet_id=%s %s %.2f @ %.2f",
+                            bet_id, side, stake, odds,
+                        )
+                        return {
+                            "bookmaker": bookmaker,
+                            "event": event,
+                            "outcome": outcome,
+                            "stake": stake,
+                            "odds": odds,
+                            "status": STATUS_PLACED,
+                            "bet_id": bet_id,
+                            "market_id": market_id,
+                            "selection_id": selection_id,
+                        }
+                    else:
+                        error_code = result.get("errorCode", "UNKNOWN")
+                        logger.warning(
+                            "[EXECUTOR] Betfair ставка не принята (попытка %d/%d): %s",
+                            attempt + 1, max_attempts, error_code,
+                        )
+                        if attempt < max_attempts - 1:
+                            await asyncio.sleep(0.5 * (attempt + 1))
+                            continue
+                        return {
+                            "bookmaker": bookmaker,
+                            "event": event,
+                            "outcome": outcome,
+                            "stake": stake,
+                            "odds": odds,
+                            "status": STATUS_FAILED,
+                            "error": f"Betfair отклонил: {error_code}",
+                        }
+
+                except Exception as exc:
+                    logger.error(
+                        "[EXECUTOR] Betfair ошибка (попытка %d/%d): %s",
+                        attempt + 1, max_attempts, exc,
+                    )
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
+                    return {
+                        "bookmaker": bookmaker,
+                        "event": event,
+                        "outcome": outcome,
+                        "stake": stake,
+                        "odds": odds,
+                        "status": STATUS_FAILED,
+                        "error": str(exc),
+                    }
+
+        # Fallback for non-betfair or missing config
         logger.warning(
             "[EXECUTOR] Реальное исполнение не реализовано: "
             "ставка %.2f @ %.2f на %s (%s)",

@@ -1,16 +1,18 @@
-"""Заготовка для Betfair Exchange Streaming API.
+"""Betfair Exchange Streaming API клиент.
 
-Для production необходимо:
-  - Колокация в дата-центре Betfair (Лондон)
-  - Betfair Premium API доступ
-  - Реальный WebSocket клиент для stream-api.betfair.com
-
-TODO: Реализовать реальное WebSocket подключение.
+WebSocket-клиент для получения обновлений цен в реальном времени
+через stream-api.betfair.com. Поддерживает:
+  - Аутентификацию через appKey и session token
+  - Подписку на рынки (marketSubscription)
+  - Обработку MCM (market change messages)
+  - Автоматическое переподключение с экспоненциальным backoff
+  - Heartbeat / clk tracking для reconnection
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -31,9 +33,14 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+STREAM_URL: str = "wss://stream-api.betfair.com/stream"
+RECONNECT_BASE_DELAY: float = 1.0
+RECONNECT_MAX_DELAY: float = 30.0
+HEARTBEAT_TIMEOUT: float = 60.0
+
 
 class BetfairStreamClient:
-    """WebSocket-клиент для Betfair Streaming API (заготовка)."""
+    """WebSocket-клиент для Betfair Streaming API."""
 
     def __init__(
         self,
@@ -42,31 +49,275 @@ class BetfairStreamClient:
     ) -> None:
         self._app_key: str = app_key or config.BETFAIR_APP_KEY
         self._session_token: str = session_token or config.BETFAIR_SESSION_TOKEN
-        self._subscriptions: dict[str, Callable[[dict[str, Any]], None]] = {}
+        self._ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        self._http_session: Optional[aiohttp.ClientSession] = None
         self._connected: bool = False
+        self._running: bool = False
+        self._connection_id: Optional[str] = None
+        self._clk: Optional[str] = None
+        self._initial_clk: Optional[str] = None
+        self._subscription_id: int = 0
+        self._subscribed_markets: list[str] = []
         self._price_callback: Optional[Callable[[dict[str, Any]], None]] = None
+        self._reconnect_attempts: int = 0
+        self._last_heartbeat: float = 0.0
+        self._listen_task: Optional[asyncio.Task[None]] = None
+
+    @property
+    def connected(self) -> bool:
+        """Флаг подключения."""
+        return self._connected
 
     async def connect(self) -> None:
-        """Подключиться к Betfair Streaming API. TODO: реальная реализация."""
-        # TODO: WebSocket подключение к stream-api.betfair.com:443
-        print("[BETFAIR_STREAM] connect() - заглушка, реальное подключение не реализовано")
-        self._connected = True
+        """Подключиться к Betfair Streaming API и аутентифицироваться."""
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession()
+
+        try:
+            self._ws = await self._http_session.ws_connect(STREAM_URL)
+            self._connected = True
+            self._running = True
+            self._reconnect_attempts = 0
+            logger.info("Betfair Stream: WebSocket подключен к %s", STREAM_URL)
+
+            # Ждем connection message
+            msg = await self._ws.receive(timeout=10.0)
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                self._handle_message(data)
+
+            # Отправляем authentication
+            await self._authenticate()
+
+            # Запускаем фоновый listener
+            self._listen_task = asyncio.create_task(self._listen_loop())
+
+        except Exception as exc:
+            logger.error("Betfair Stream: ошибка подключения: %s", exc)
+            self._connected = False
+            raise
 
     async def disconnect(self) -> None:
         """Отключиться от потока."""
+        self._running = False
         self._connected = False
-        self._subscriptions.clear()
-        print("[BETFAIR_STREAM] disconnect()")
+
+        if self._listen_task and not self._listen_task.done():
+            self._listen_task.cancel()
+            try:
+                await self._listen_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
+
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+
+        self._subscribed_markets.clear()
+        logger.info("Betfair Stream: отключен")
+
+    async def _authenticate(self) -> None:
+        """Отправить сообщение аутентификации."""
+        if not self._ws or self._ws.closed:
+            return
+
+        auth_msg = {
+            "op": "authentication",
+            "appKey": self._app_key,
+            "session": self._session_token,
+        }
+        await self._ws.send_json(auth_msg)
+        logger.debug("Betfair Stream: отправлена аутентификация")
+
+        # Ждем ответ status
+        msg = await self._ws.receive(timeout=10.0)
+        if msg.type == aiohttp.WSMsgType.TEXT:
+            data = json.loads(msg.data)
+            self._handle_message(data)
+            if data.get("op") == "status" and data.get("statusCode") != "SUCCESS":
+                error_msg = data.get("errorMessage", "unknown")
+                logger.error("Betfair Stream: аутентификация неудачна: %s", error_msg)
+                raise ConnectionError(f"Auth failed: {error_msg}")
 
     async def subscribe_market(self, market_id: str) -> None:
-        """Подписаться на обновления рынка. TODO: реальная подписка."""
-        # TODO: Отправить marketSubscription message через WebSocket
-        print(f"[BETFAIR_STREAM] subscribe_market({market_id}) - заглушка")
+        """Подписаться на обновления рынка.
+
+        Args:
+            market_id: ID рынка Betfair (например '1.234567890')
+        """
+        if not self._ws or self._ws.closed:
+            logger.warning("Betfair Stream: невозможно подписаться - нет соединения")
+            return
+
+        self._subscription_id += 1
+        sub_msg: dict[str, Any] = {
+            "op": "marketSubscription",
+            "id": self._subscription_id,
+            "marketFilter": {"marketIds": [market_id]},
+            "marketDataFilter": {"fields": ["EX_BEST_OFFERS"]},
+        }
+
+        # Если есть clk от предыдущей сессии, используем для reconnection
+        if self._clk:
+            sub_msg["clk"] = self._clk
+        if self._initial_clk:
+            sub_msg["initialClk"] = self._initial_clk
+
+        await self._ws.send_json(sub_msg)
+
+        if market_id not in self._subscribed_markets:
+            self._subscribed_markets.append(market_id)
+
+        logger.info("Betfair Stream: подписка на рынок %s (id=%d)", market_id, self._subscription_id)
 
     def on_price_change(self, callback: Callable[[dict[str, Any]], None]) -> None:
-        """Зарегистрировать callback для обновления цен."""
+        """Зарегистрировать callback для обновления цен.
+
+        Callback вызывается с dict содержащим:
+          market_id, runners (list of {selectionId, back_prices, lay_prices})
+        """
         self._price_callback = callback
-        print("[BETFAIR_STREAM] on_price_change callback зарегистрирован")
+        logger.debug("Betfair Stream: on_price_change callback зарегистрирован")
+
+    async def _listen_loop(self) -> None:
+        """Фоновый цикл приема сообщений от WebSocket."""
+        import time
+
+        self._last_heartbeat = time.time()
+
+        while self._running and self._ws and not self._ws.closed:
+            try:
+                msg = await asyncio.wait_for(
+                    self._ws.receive(),
+                    timeout=HEARTBEAT_TIMEOUT,
+                )
+
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    self._last_heartbeat = time.time()
+                    data = json.loads(msg.data)
+                    self._handle_message(data)
+
+                elif msg.type == aiohttp.WSMsgType.CLOSED:
+                    logger.warning("Betfair Stream: WebSocket закрыт сервером")
+                    break
+
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    logger.error("Betfair Stream: ошибка WebSocket: %s", self._ws.exception())
+                    break
+
+            except asyncio.TimeoutError:
+                logger.warning("Betfair Stream: heartbeat timeout, переподключение...")
+                break
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.error("Betfair Stream: ошибка в listen_loop: %s", exc)
+                break
+
+        # Если цикл завершился и мы должны работать - переподключаемся
+        if self._running:
+            self._connected = False
+            await self._reconnect()
+
+    def _handle_message(self, data: dict[str, Any]) -> None:
+        """Обработать входящее сообщение.
+
+        Типы сообщений:
+          - connection: сохраняем connectionId
+          - status: проверяем statusCode
+          - mcm (market change message): извлекаем данные цен
+        """
+        op = data.get("op", "")
+
+        if op == "connection":
+            self._connection_id = data.get("connectionId")
+            logger.info("Betfair Stream: connection id=%s", self._connection_id)
+
+        elif op == "status":
+            status_code = data.get("statusCode", "")
+            if status_code != "SUCCESS" and data.get("id"):
+                logger.warning("Betfair Stream: status %s: %s",
+                               status_code, data.get("errorMessage", ""))
+
+        elif op == "mcm":
+            # Обновляем clk для reconnection
+            if "clk" in data:
+                self._clk = data["clk"]
+            if "initialClk" in data:
+                self._initial_clk = data["initialClk"]
+
+            # Извлекаем данные рынков
+            market_changes = data.get("mc", [])
+            for mc in market_changes:
+                market_id = mc.get("id", "")
+                runners = mc.get("rc", [])
+                if runners and self._price_callback:
+                    parsed_runners: list[dict[str, Any]] = []
+                    for runner in runners:
+                        selection_id = runner.get("id")
+                        # atb = available to back, atl = available to lay
+                        back_prices = runner.get("atb", [])
+                        lay_prices = runner.get("atl", [])
+                        parsed_runners.append({
+                            "selectionId": selection_id,
+                            "back_prices": back_prices,
+                            "lay_prices": lay_prices,
+                        })
+                    self._price_callback({
+                        "market_id": market_id,
+                        "runners": parsed_runners,
+                    })
+
+    async def _reconnect(self) -> None:
+        """Переподключиться с экспоненциальным backoff."""
+        while self._running:
+            delay = min(
+                RECONNECT_BASE_DELAY * (2 ** self._reconnect_attempts),
+                RECONNECT_MAX_DELAY,
+            )
+            self._reconnect_attempts += 1
+            logger.info(
+                "Betfair Stream: переподключение через %.1f сек (попытка %d)",
+                delay, self._reconnect_attempts,
+            )
+            await asyncio.sleep(delay)
+
+            try:
+                # Закрываем старые ресурсы
+                if self._ws and not self._ws.closed:
+                    await self._ws.close()
+                if self._http_session and not self._http_session.closed:
+                    await self._http_session.close()
+
+                self._http_session = aiohttp.ClientSession()
+                self._ws = await self._http_session.ws_connect(STREAM_URL)
+                self._connected = True
+                self._reconnect_attempts = 0
+
+                # Ждем connection message
+                msg = await self._ws.receive(timeout=10.0)
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    data = json.loads(msg.data)
+                    self._handle_message(data)
+
+                # Re-authenticate
+                await self._authenticate()
+
+                # Re-subscribe to markets
+                for market_id in self._subscribed_markets:
+                    await self.subscribe_market(market_id)
+
+                # Restart listen loop
+                self._listen_task = asyncio.create_task(self._listen_loop())
+                logger.info("Betfair Stream: переподключение успешно")
+                return
+
+            except Exception as exc:
+                logger.error("Betfair Stream: ошибка переподключения: %s", exc)
+                self._connected = False
+                continue
 
 
 class MarketMaker:
