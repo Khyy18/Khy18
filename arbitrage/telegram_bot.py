@@ -1,0 +1,437 @@
+"""Telegram-терминал для арбитражного бота.
+
+Long polling через aiohttp напрямую (без python-telegram-bot).
+Авторизация по chat_id. HTML parse_mode, inline keyboards.
+Визуальный стиль: моноширинные блоки (pre), сепараторы (24x),
+U+202F для чисел, прогресс-бары (10 символов), PnL-стрелки.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+import aiohttp
+
+from arbitrage import config, memory
+from arbitrage.utils import (
+    SEPARATOR,
+    _card,
+    format_number,
+    pnl_arrow,
+    progress_bar,
+)
+
+
+# --- Callback data ids ---
+CB_SCANNER_ON: str = "arb:scan_on"
+CB_SCANNER_OFF: str = "arb:scan_off"
+CB_STATS: str = "arb:stats"
+CB_ACTIVE: str = "arb:active"
+CB_BANK: str = "arb:bank"
+CB_SETTINGS: str = "arb:settings"
+CB_LAST_BETS: str = "arb:bets"
+
+
+def set_keyboard() -> dict[str, Any]:
+    """Инлайн-клавиатура с кнопками управления (3 строки по 2)."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "\u25b6\ufe0f \u0421\u041a\u0410\u041d\u0415\u0420 \u0412\u041a\u041b", "callback_data": CB_SCANNER_ON},
+                {"text": "\u23f8 \u0421\u041a\u0410\u041d\u0415\u0420 \u0412\u042b\u041a\u041b", "callback_data": CB_SCANNER_OFF},
+            ],
+            [
+                {"text": "\ud83d\udcca \u0421\u0422\u0410\u0422\u0418\u0421\u0422\u0418\u041a\u0410", "callback_data": CB_STATS},
+                {"text": "\ud83d\udcc2 \u0410\u041a\u0422\u0418\u0412\u041d\u042b\u0415 \u0410\u0420\u0411\u042b", "callback_data": CB_ACTIVE},
+            ],
+            [
+                {"text": "\ud83d\udcb0 \u0411\u0410\u041d\u041a", "callback_data": CB_BANK},
+                {"text": "\ud83d\udcdd \u041f\u041e\u0421\u041b\u0415\u0414\u041d\u0418\u0415 \u0421\u0422\u0410\u0412\u041a\u0418", "callback_data": CB_LAST_BETS},
+            ],
+        ]
+    }
+
+
+def _bot_url(method: str) -> str:
+    """URL для вызова метода Telegram Bot API."""
+    return f"{config.TELEGRAM_API_URL}/bot{config.TELEGRAM_TOKEN}/{method}"
+
+
+async def send_message(
+    session: aiohttp.ClientSession,
+    text: str,
+    reply_markup: Optional[dict[str, Any]] = None,
+    chat_id: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Отправить сообщение в Telegram. HTML parse_mode."""
+    if not config.TELEGRAM_TOKEN:
+        print("[ARB_TG] TELEGRAM_TOKEN не задан - пропускаем отправку")
+        return None
+    payload: dict[str, Any] = {
+        "chat_id": chat_id if chat_id is not None else config.TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+
+    try:
+        async with session.post(_bot_url("sendMessage"), data=payload, timeout=15) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                print(f"[ARB_TG] sendMessage статус {resp.status}: {body[:200]}")
+                return None
+            return await resp.json()
+    except aiohttp.ClientError as exc:
+        print(f"[ARB_TG] Сетевая ошибка sendMessage: {exc}")
+        return None
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB_TG] Неожиданная ошибка sendMessage: {exc}")
+        return None
+
+
+async def answer_callback(
+    session: aiohttp.ClientSession,
+    callback_id: str,
+    text: str = "",
+) -> None:
+    """answerCallbackQuery - убирает часики у нажатой кнопки."""
+    if not config.TELEGRAM_TOKEN:
+        return
+    payload = {
+        "callback_query_id": callback_id,
+        "text": text[:200],
+    }
+    try:
+        async with session.post(
+            _bot_url("answerCallbackQuery"), data=payload, timeout=10
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                print(f"[ARB_TG] answerCallbackQuery статус {resp.status}: {body[:200]}")
+    except aiohttp.ClientError as exc:
+        print(f"[ARB_TG] Сетевая ошибка answerCallbackQuery: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB_TG] Неожиданная ошибка answerCallbackQuery: {exc}")
+
+
+def _is_authorized(update: dict[str, Any]) -> bool:
+    """True только если from.id и chat.id совпадают с TELEGRAM_CHAT_ID."""
+    allowed = config.TELEGRAM_CHAT_ID
+    if not allowed:
+        return False
+    try:
+        allowed_int = int(allowed)
+    except (TypeError, ValueError):
+        return False
+
+    try:
+        msg = update.get("message") or update.get("edited_message")
+        if msg:
+            from_id = (msg.get("from") or {}).get("id")
+            chat_id = (msg.get("chat") or {}).get("id")
+            return from_id == allowed_int and chat_id == allowed_int
+        cb = update.get("callback_query")
+        if cb:
+            from_id = (cb.get("from") or {}).get("id")
+            chat_id = ((cb.get("message") or {}).get("chat") or {}).get("id")
+            if chat_id is None:
+                return from_id == allowed_int
+            return from_id == allowed_int and chat_id == allowed_int
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB_TG] Ошибка проверки авторизации: {exc}")
+    return False
+
+
+# --- Обработчики кнопок ---
+
+
+async def _handle_scanner_on(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    state["scanner_active"] = True
+    return "\u2705 Сканер <b>запущен</b>. Поиск арбитражей активен."
+
+
+async def _handle_scanner_off(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    state["scanner_active"] = False
+    return "\u23f8 Сканер <b>остановлен</b>. Поиск арбитражей приостановлен."
+
+
+async def _handle_stats(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    stats = memory.get_stats()
+    total_arbs = stats.get("total_arbs", 0)
+    executed = stats.get("executed_arbs", 0)
+    total_bets = stats.get("total_bets", 0)
+    won = stats.get("won_bets", 0)
+    lost = stats.get("lost_bets", 0)
+    total_pnl = stats.get("total_pnl", 0.0)
+
+    win_rate = (won / total_bets * 100.0) if total_bets > 0 else 0.0
+    roi = (total_pnl / max(executed, 1)) * 100.0 if executed > 0 else 0.0
+
+    body = [
+        f"Найдено арбитражей: <code>{format_number(total_arbs)}</code>",
+        f"Исполнено: <code>{format_number(executed)}</code>",
+        f"Всего ставок: <code>{format_number(total_bets)}</code>",
+        f"Побед / Поражений: <code>{won}</code> / <code>{lost}</code>",
+        f"Винрейт: <code>{win_rate:.1f}%</code>",
+        f"ROI: {pnl_arrow(roi)}",
+        f"Суммарный PnL: {pnl_arrow(total_pnl)}",
+    ]
+    return _card("\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430", "\ud83d\udcca", body)
+
+
+async def _handle_active(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    arbs = memory.get_active_arbs()
+    if not arbs:
+        return _card("\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0435 \u0430\u0440\u0431\u0438\u0442\u0440\u0430\u0436\u0438", "\ud83d\udcc2", ["\u041d\u0435\u0442 \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0445 \u0430\u0440\u0431\u0438\u0442\u0440\u0430\u0436\u0435\u0439"])
+
+    body: list[str] = []
+    for arb in arbs[:10]:
+        sport = arb.get("sport", "?")
+        event = arb.get("event", "?")
+        profit = arb.get("profit_pct", 0.0)
+        ai_score = arb.get("ai_score", 0)
+        body.append(
+            f"\u2022 <code>{sport}</code> | {event}\n"
+            f"  \u0414\u043e\u0445\u043e\u0434: <code>{profit:.2f}%</code> | AI: {progress_bar(ai_score / 100.0)} {ai_score}"
+        )
+    return _card("\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0435 \u0430\u0440\u0431\u0438\u0442\u0440\u0430\u0436\u0438", "\ud83d\udcc2", body)
+
+
+async def _handle_bank(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    bankroll = state.get("bankroll", 0.0)
+    exposure = state.get("exposure", 0.0)
+    available = bankroll - exposure
+
+    body = [
+        f"\u0411\u0430\u043d\u043a\u0440\u043e\u043b\u043b: <code>{format_number(bankroll)}</code>",
+        f"\u042d\u043a\u0441\u043f\u043e\u0437\u0438\u0446\u0438\u044f: <code>{format_number(exposure)}</code>",
+        f"\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u043e: <code>{format_number(available)}</code>",
+        f"\u041c\u0430\u043a\u0441. \u044d\u043a\u0441\u043f\u043e\u0437\u0438\u0446\u0438\u044f: <code>{config.MAX_BANKROLL_EXPOSURE}%</code>",
+    ]
+    return _card("\u0411\u0430\u043d\u043a", "\ud83d\udcb0", body)
+
+
+async def _handle_settings(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    dry_status = "\ud83d\udfe2 DRY RUN" if config.DRY_RUN else "\ud83d\udd34 LIVE"
+    body = [
+        f"MIN_ARB_PROFIT: <code>{config.MIN_ARB_PROFIT}%</code>",
+        f"MIN_VALUE_EDGE: <code>{config.MIN_VALUE_EDGE}%</code>",
+        f"SCAN_INTERVAL: <code>{config.SCAN_INTERVAL_SEC} \u0441\u0435\u043a</code>",
+        f"MAX_BET_PCT: <code>{config.MAX_BET_PCT}%</code>",
+        f"\u0420\u0435\u0436\u0438\u043c: {dry_status}",
+        f"\u0421\u043f\u043e\u0440\u0442\u044b: <code>{', '.join(config.SPORTS)}</code>",
+    ]
+    return _card("\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", "\u2699\ufe0f", body)
+
+
+async def _handle_last_bets(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    bets = memory.get_recent_bets(10)
+    if not bets:
+        return _card("\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 \u0441\u0442\u0430\u0432\u043a\u0438", "\ud83d\udcdd", ["\u0421\u0442\u0430\u0432\u043e\u043a \u043f\u043e\u043a\u0430 \u043d\u0435\u0442"])
+
+    body: list[str] = []
+    for bet in bets:
+        result = bet.get("result", "PENDING")
+        if result == "WON":
+            indicator = "\ud83d\udfe2"
+        elif result == "LOST":
+            indicator = "\ud83d\udd34"
+        else:
+            indicator = "\ud83d\udfe1"
+        pnl = bet.get("pnl") or 0.0
+        body.append(
+            f"{indicator} {bet.get('bookmaker', '?')} | "
+            f"{bet.get('outcome', '?')} @ {bet.get('odds', 0):.2f} | "
+            f"\u0421\u0442\u0430\u0432\u043a\u0430: {format_number(bet.get('stake', 0))} | "
+            f"PnL: {pnl_arrow(pnl)}"
+        )
+    return _card("\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 \u0441\u0442\u0430\u0432\u043a\u0438", "\ud83d\udcdd", body)
+
+
+# --- Алерт при обнаружении арбитража ---
+
+
+async def send_arb_alert(
+    session: aiohttp.ClientSession,
+    opportunity: dict[str, Any],
+    ai_score: int,
+) -> None:
+    """Отправить алерт о найденном арбитраже."""
+    sport = opportunity.get("sport", "?")
+    event_name = opportunity.get("event_name", opportunity.get("event", "?"))
+    home = opportunity.get("home", "")
+    away = opportunity.get("away", "")
+    bookmakers = opportunity.get("bookmakers", [])
+    odds = opportunity.get("odds", [])
+    profit_pct = opportunity.get("profit_pct", 0.0)
+    arb_type = opportunity.get("type", "surebet")
+
+    confidence = ai_score / 100.0
+    bar = progress_bar(confidence)
+
+    body = [
+        f"\u0422\u0438\u043f: <code>{arb_type}</code>",
+        f"\u0421\u043f\u043e\u0440\u0442: <code>{sport}</code>",
+        f"\u0421\u043e\u0431\u044b\u0442\u0438\u0435: <b>{event_name}</b>",
+    ]
+    if home and away:
+        body.append(f"\u041a\u043e\u043c\u0430\u043d\u0434\u044b: {home} vs {away}")
+    if bookmakers:
+        body.append(f"\u0411\u0443\u043a\u043c\u0435\u043a\u0435\u0440\u044b: <code>{', '.join(str(b) for b in bookmakers)}</code>")
+    if odds:
+        body.append(f"\u041a\u043e\u044d\u0444\u0444\u0438\u0446\u0438\u0435\u043d\u0442\u044b: <code>{' / '.join(f'{o:.2f}' for o in odds)}</code>")
+    body.append(f"\u041f\u0440\u0438\u0431\u044b\u043b\u044c: <code>{profit_pct:.2f}%</code>")
+    body.append(f"AI Score: {bar} <code>{ai_score}/100</code>")
+
+    text = _card("\u041d\u043e\u0432\u044b\u0439 \u0430\u0440\u0431\u0438\u0442\u0440\u0430\u0436!", "\ud83d\udea8", body)
+    await send_message(session, text, reply_markup=set_keyboard())
+
+
+# --- Маппинг обработчиков ---
+
+_HANDLERS: dict[str, Any] = {
+    CB_SCANNER_ON: _handle_scanner_on,
+    CB_SCANNER_OFF: _handle_scanner_off,
+    CB_STATS: _handle_stats,
+    CB_ACTIVE: _handle_active,
+    CB_BANK: _handle_bank,
+    CB_SETTINGS: _handle_settings,
+    CB_LAST_BETS: _handle_last_bets,
+}
+
+
+async def _process_callback(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    cb: dict[str, Any],
+) -> None:
+    """Обработка callback_query."""
+    cb_id = cb.get("id")
+    data = cb.get("data", "")
+    handler = _HANDLERS.get(data)
+    if not handler:
+        if cb_id:
+            await answer_callback(session, cb_id, "\u041d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u0430\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u0430")
+        return
+    try:
+        text = await handler(session, state)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ARB_TG] \u041e\u0448\u0438\u0431\u043a\u0430 \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0430 {data}: {exc}")
+        text = f"\u041e\u0448\u0438\u0431\u043a\u0430: {exc}"
+
+    if cb_id:
+        await answer_callback(session, cb_id, "\u0413\u043e\u0442\u043e\u0432\u043e")
+    await send_message(session, text, reply_markup=set_keyboard())
+
+
+async def _process_message(
+    session: aiohttp.ClientSession,
+    state: dict[str, Any],
+    msg: dict[str, Any],
+) -> None:
+    """Обработка текстового сообщения."""
+    text = (msg.get("text") or "").strip().lower()
+    if text in ("/start", "/help", "/menu"):
+        await send_message(
+            session,
+            "\ud83c\udfaf <b>Arbitrage Bot</b>\n"
+            "\u0410\u0440\u0431\u0438\u0442\u0440\u0430\u0436\u043d\u044b\u0439 \u0431\u043e\u0442 \u0434\u043b\u044f \u0441\u043f\u043e\u0440\u0442\u0438\u0432\u043d\u044b\u0445 \u0441\u0442\u0430\u0432\u043e\u043a \u0441 \u0418\u0418.\n\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043a\u043d\u043e\u043f\u043a\u043e\u0439 \u043d\u0438\u0436\u0435.",
+            reply_markup=set_keyboard(),
+        )
+        return
+    if text == "/settings":
+        reply = await _handle_settings(session, state)
+        await send_message(session, reply, reply_markup=set_keyboard())
+        return
+    # Любое другое сообщение - показываем меню
+    await send_message(
+        session,
+        "\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0438 \u043d\u0438\u0436\u0435 \u0434\u043b\u044f \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f \u0431\u043e\u0442\u043e\u043c.",
+        reply_markup=set_keyboard(),
+    )
+
+
+async def run_bot(state: dict[str, Any], session: aiohttp.ClientSession) -> None:
+    """Основной long-polling цикл Telegram бота."""
+    if not config.TELEGRAM_TOKEN or not config.TELEGRAM_CHAT_ID:
+        print("[ARB_TG] Бот не запущен: нет TELEGRAM_TOKEN или TELEGRAM_CHAT_ID")
+        while True:
+            await asyncio.sleep(3600)
+
+    print("[ARB_TG] Long-polling Telegram запущен")
+    offset: Optional[int] = None
+    while True:
+        try:
+            params: dict[str, Any] = {
+                "timeout": 30,
+                "allowed_updates": json.dumps(["message", "callback_query"]),
+            }
+            if offset is not None:
+                params["offset"] = offset
+            async with session.get(
+                _bot_url("getUpdates"), params=params, timeout=40
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    print(f"[ARB_TG] getUpdates статус {resp.status}: {body[:200]}")
+                    await asyncio.sleep(5)
+                    continue
+                data = await resp.json()
+        except aiohttp.ClientError as exc:
+            print(f"[ARB_TG] Сетевая ошибка getUpdates: {exc}")
+            await asyncio.sleep(5)
+            continue
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ARB_TG] Неожиданная ошибка getUpdates: {exc}")
+            await asyncio.sleep(5)
+            continue
+
+        if not data.get("ok"):
+            print(f"[ARB_TG] Telegram вернул not ok: {data}")
+            await asyncio.sleep(5)
+            continue
+
+        updates = data.get("result") or []
+        for upd in updates:
+            try:
+                offset = int(upd.get("update_id", 0)) + 1
+            except (TypeError, ValueError):
+                pass
+
+            if not _is_authorized(upd):
+                cb = upd.get("callback_query")
+                if cb and cb.get("id"):
+                    try:
+                        await answer_callback(session, cb["id"], "\u0414\u043e\u0441\u0442\u0443\u043f \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d")
+                    except Exception:  # noqa: BLE001
+                        pass
+                continue
+
+            try:
+                if upd.get("callback_query"):
+                    await _process_callback(session, state, upd["callback_query"])
+                elif upd.get("message"):
+                    await _process_message(session, state, upd["message"])
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ARB_TG] Ошибка обработки апдейта: {exc}")
