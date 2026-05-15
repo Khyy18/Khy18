@@ -20,29 +20,38 @@ import aiohttp
 from arbitrage import config, memory
 from arbitrage import telegram_bot
 from arbitrage.ai_allocator import BankrollAllocator
+from arbitrage.ai_batch import AiBatchScorer
 from arbitrage.ai_bk_classifier import classifier_loop
 from arbitrage.ai_correlation import correlation_loop
 from arbitrage.ai_filter import ArbFilter
 from arbitrage.ai_line_predictor import LinePredictor, compute_urgency_factor
 from arbitrage.ai_news_scanner import news_scanner_loop
 from arbitrage.ai_optimizer import optimizer_loop
+from arbitrage.ai_rate_limiter import AiRateLimiter
 from arbitrage.anti_ban import AntiBanEngine
 from arbitrage.betfair_stream import market_maker_loop
+from arbitrage.clv_tracker import CLVTracker
 from arbitrage.dedup import ArbDeduplicator
 from arbitrage.executor import BetExecutor
 from arbitrage.logging_config import setup_logging
+from arbitrage.middles import MiddleScanner
 from arbitrage.odds_api import OddsAPIClient
 from arbitrage.pinnacle_api import PinnacleClient
 from arbitrage.ranker import ArbRanker
 from arbitrage.recheck import RecheckEngine
 from arbitrage.scanner import ArbitrageScanner
 from arbitrage.settlement import SettlementEngine
+from arbitrage.steam_moves import SteamDetector
+from arbitrage.supervisor import TaskSupervisor
 
 logger = logging.getLogger(__name__)
 
 # Модуль-уровневые объекты для дедупликации и синхронизации
 _deduplicator: ArbDeduplicator = ArbDeduplicator()
 _execution_lock: asyncio.Lock = asyncio.Lock()
+_steam_detector: SteamDetector = SteamDetector()
+_rate_limiter: AiRateLimiter = AiRateLimiter()
+_clv_tracker: CLVTracker = CLVTracker()
 
 BANNER = """
 ╔══════════════════════════════════════════╗
@@ -180,6 +189,19 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             surebets_spreads = scanner.find_surebets_spreads(all_events)
             all_opps = surebets + value_bets + surebets_totals + surebets_spreads
 
+            # Middles (коридоры)
+            middle_scanner = MiddleScanner()
+            middles_totals = middle_scanner.find_middles_totals(all_events)
+            middles_spreads = middle_scanner.find_middles_spreads(all_events)
+            middles_all = middles_totals + middles_spreads
+            # Store raw middle opportunities for Telegram display
+            state["middles_opps"] = middles_all[-10:]
+
+            # Steam Moves
+            _steam_detector.update_sharp_snapshot(all_events)
+            steam_opps = _steam_detector.detect_steam(all_events, sharp_probs)
+            state["steam_opps"] = steam_opps[-10:]
+
             if not all_opps:
                 logger.info("Арбитражей не найдено")
                 await asyncio.sleep(sleep_interval)
@@ -187,8 +209,9 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
 
             logger.info("Найдено возможностей: %d", len(all_opps))
 
-            # 4. AI-фильтрация
-            filtered: list[dict[str, Any]] = []
+            # 4. AI Batch Scoring (вместо поштучной оценки)
+            batch_scorer = AiBatchScorer()
+            opp_dicts: list[dict[str, Any]] = []
             for opp in all_opps:
                 opp_dict: dict[str, Any] = {
                     "sport": opp.sport,
@@ -206,26 +229,23 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     "event_id": getattr(opp, "details", {}).get("event_id", getattr(opp, "event_id", "")),
                     "scan_timestamp": scan_ts,
                 }
-                try:
-                    evaluation = await ai_filter.evaluate(opp_dict)
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Ошибка AI-фильтра: %s", exc)
-                    evaluation = {"score": 50, "is_live": False}
+                opp_dicts.append(opp_dict)
 
-                ai_score = evaluation.get("score", 50)
+            scored = await batch_scorer.score_batch(opp_dicts, session)
+            filtered: list[dict[str, Any]] = []
+            for s in scored:
+                ai_score = s.get("ai_score", 0)
                 if ai_score > 60:
-                    opp_dict["ai_score"] = ai_score
+                    s["ai_score"] = ai_score
                     # Fix 1: Для surebets - не используем Kelly, для value bets - sharp_prob
-                    if opp_dict["type"] == "surebet":
-                        # Surebets: размер по profit_pct, не Kelly
-                        opp_dict["sizing_mode"] = "surebet"
+                    if s.get("type") == "surebet":
+                        s["sizing_mode"] = "surebet"
                     else:
-                        # Value bets: используем sharp_prob как win_prob
-                        sharp_prob = opp_dict.get("details", {}).get("sharp_prob", 0.5)
-                        opp_dict["win_prob"] = sharp_prob
-                        opp_dict["sizing_mode"] = "kelly"
-                    opp_dict["best_odds"] = opp.odds[0] if opp.odds else 2.0
-                    filtered.append(opp_dict)
+                        sharp_prob = s.get("details", {}).get("sharp_prob", 0.5)
+                        s["win_prob"] = sharp_prob
+                        s["sizing_mode"] = "kelly"
+                    s["best_odds"] = s["odds"][0] if s.get("odds") else 2.0
+                    filtered.append(s)
 
             if not filtered:
                 logger.info("После AI-фильтра кандидатов нет")
@@ -414,6 +434,13 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                             # Отмечаем как исполненные в дедупликаторе
                             _deduplicator.mark_executed(opp)
 
+                            # CLV Tracking
+                            if opp_event_id:
+                                bet_odds = opp.get("best_odds", opp.get("odds", [2.0])[0] if opp.get("odds") else 2.0)
+                                _clv_tracker.record_bet_placement(
+                                    arb_id, opp_event_id, bet_odds, opp.get("sport", "")
+                                )
+
                             # Записываем в anti-ban
                             bookmakers = opp.get("bookmakers", [])
                             for bm in bookmakers:
@@ -533,6 +560,28 @@ async def state_saver_loop(state: dict[str, Any]) -> None:
             logger.error("Ошибка сохранения состояния: %s", exc)
 
 
+async def clv_check_loop(state: dict[str, Any], session: aiohttp.ClientSession) -> None:
+    """Периодическая проверка CLV (каждые 15 мин)."""
+    logger.info("Цикл CLV-мониторинга запущен")
+    while True:
+        try:
+            await asyncio.sleep(900)  # 15 мин
+            await _clv_tracker.check_closing_lines(session)
+            clv_stats = _clv_tracker.get_clv_stats()
+            state["clv_stats"] = clv_stats
+            if clv_stats.get("total_checked", 0) > 0:
+                logger.info(
+                    "CLV статистика: avg=%.2f%%, positive=%d, negative=%d",
+                    clv_stats.get("avg_clv_pct", 0),
+                    clv_stats.get("positive_count", 0),
+                    clv_stats.get("negative_count", 0),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Ошибка CLV-мониторинга: %s", exc)
+
+
 async def main() -> None:
     """Главная функция: инициализация и запуск всех циклов."""
     setup_logging()
@@ -555,6 +604,9 @@ async def main() -> None:
         "bankroll": 1000.0,
         "exposure": 0.0,
         "start_time": datetime.now(timezone.utc).isoformat(),
+        "middles_opps": [],
+        "steam_opps": [],
+        "clv_stats": {},
     }
 
     # A6: Загрузка состояния бота из БД (auto-recovery)
@@ -619,31 +671,32 @@ async def main() -> None:
             # Windows не поддерживает add_signal_handler
             pass
 
-    # Запуск параллельных задач
-    tasks = [
-        asyncio.create_task(scanner_loop(state, session)),
-        asyncio.create_task(telegram_bot.run_bot(state, session)),
-        asyncio.create_task(stats_loop(state, session)),
-        asyncio.create_task(settlement_loop(state, session)),
-        asyncio.create_task(state_saver_loop(state)),
-        asyncio.create_task(news_scanner_loop(state, session)),
-        asyncio.create_task(optimizer_loop(state, session)),
-        asyncio.create_task(classifier_loop(state, session)),
-        asyncio.create_task(correlation_loop(state, session)),
-        asyncio.create_task(market_maker_loop(state, session)),
+    # Запуск через TaskSupervisor
+    supervisor = TaskSupervisor()
+
+    async def _state_saver_wrapper(state: dict[str, Any], session: aiohttp.ClientSession) -> None:
+        """Обёртка для state_saver_loop (не использует session)."""
+        await state_saver_loop(state)
+
+    task_factories: list[tuple[str, Any]] = [
+        ("scanner", scanner_loop),
+        ("telegram", telegram_bot.run_bot),
+        ("stats", stats_loop),
+        ("settlement", settlement_loop),
+        ("state_saver", _state_saver_wrapper),
+        ("news_scanner", news_scanner_loop),
+        ("optimizer", optimizer_loop),
+        ("classifier", classifier_loop),
+        ("correlation", correlation_loop),
+        ("market_maker", market_maker_loop),
+        ("clv_check", clv_check_loop),
     ]
 
     try:
-        # Ждём сигнал завершения или завершения задач
-        done, pending = await asyncio.wait(
-            tasks + [asyncio.create_task(shutdown_event.wait())],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        await supervisor.run(task_factories, state, session)
+    except asyncio.CancelledError:
+        pass
     finally:
-        # Отмена всех задач
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
         await session.close()
         logger.info("Бот остановлен")
 

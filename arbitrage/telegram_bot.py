@@ -37,6 +37,8 @@ CB_AI_LEARNINGS: str = "arb:learnings"
 CB_API_HEALTH: str = "arb:api_health"
 CB_AI_FORECAST: str = "arb:ai_forecast"
 CB_WITHDRAWAL: str = "arb:withdrawal"
+CB_MIDDLES: str = "arb:middles"
+CB_STEAM: str = "arb:steam"
 
 
 def set_keyboard() -> dict[str, Any]:
@@ -62,6 +64,10 @@ def set_keyboard() -> dict[str, Any]:
             [
                 {"text": "\U0001f52e AI \u041f\u0420\u041e\u0413\u041d\u041e\u0417", "callback_data": CB_AI_FORECAST},
                 {"text": "\U0001f4b8 \u0421\u0422\u0420\u0410\u0422\u0415\u0413\u0418\u042f \u0412\u042b\u0412\u041e\u0414\u0410", "callback_data": CB_WITHDRAWAL},
+            ],
+            [
+                {"text": "\U0001f3af \u041a\u041e\u0420\u0418\u0414\u041e\u0420\u042b", "callback_data": CB_MIDDLES},
+                {"text": "\u26a1 STEAM", "callback_data": CB_STEAM},
             ],
         ]
     }
@@ -199,6 +205,22 @@ async def _handle_stats(
         f"ROI: {pnl_arrow(roi)}",
         f"Суммарный PnL: {pnl_arrow(total_pnl)}",
     ]
+
+    # CLV статистика
+    clv_stats = state.get("clv_stats", {})
+    avg_clv = clv_stats.get("avg_clv_pct", 0.0)
+    clv_positive = clv_stats.get("positive_count", 0)
+    clv_negative = clv_stats.get("negative_count", 0)
+    clv_total = clv_stats.get("total_checked", 0)
+    if clv_total > 0:
+        body.append(f"CLV: <code>{avg_clv:.2f}%</code> (+{clv_positive}/-{clv_negative})")
+
+    # Breakdown по типам
+    middles_count = len(state.get("middles_opps", []))
+    steam_count = len(state.get("steam_opps", []))
+    body.append(
+        f"\u0422\u0438\u043f\u044b: surebets/value | middles: {middles_count} | steam: {steam_count}"
+    )
 
     # Дневная статистика PnL за 7 дней
     daily_pnl = memory.get_daily_pnl(7)
@@ -553,6 +575,61 @@ async def _handle_withdrawal(
     return _card("\u0421\u0442\u0440\u0430\u0442\u0435\u0433\u0438\u044f \u0432\u044b\u0432\u043e\u0434\u0430", "\U0001f4b8", body)
 
 
+async def _handle_middles(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Показать последние найденные коридоры (middles)."""
+    middles = state.get("middles_opps", [])
+    if not middles:
+        return _card("\u041a\u043e\u0440\u0438\u0434\u043e\u0440\u044b", "\U0001f3af", ["\u041d\u0435\u0442 \u043d\u0430\u0439\u0434\u0435\u043d\u043d\u044b\u0445 \u043a\u043e\u0440\u0438\u0434\u043e\u0440\u043e\u0432"])
+
+    body: list[str] = []
+    for m in middles[:10]:
+        event_name = getattr(m, "event_name", str(m))
+        sport = getattr(m, "sport", "?")
+        best_profit = getattr(m, "best_case_profit_pct", 0.0)
+        ev_pct = getattr(m, "expected_value_pct", 0.0)
+        mid_range = getattr(m, "middle_range", [])
+        leg1 = getattr(m, "leg1", {})
+        leg2 = getattr(m, "leg2", {})
+        bk1 = leg1.get("bookmaker", "?") if isinstance(leg1, dict) else "?"
+        bk2 = leg2.get("bookmaker", "?") if isinstance(leg2, dict) else "?"
+        body.append(
+            f"\u2022 <code>{sport}</code> | {event_name}\n"
+            f"  \u0411\u041a: {bk1} / {bk2}\n"
+            f"  \u041a\u043e\u0440\u0438\u0434\u043e\u0440: {mid_range} | "
+            f"\u041f\u0440\u0438\u0431\u044b\u043b\u044c: <code>{best_profit:.2f}%</code> | "
+            f"EV: <code>{ev_pct:.2f}%</code>"
+        )
+    return _card("\u041a\u043e\u0440\u0438\u0434\u043e\u0440\u044b", "\U0001f3af", body)
+
+
+async def _handle_steam(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Показать последние Steam Moves."""
+    steam_opps = state.get("steam_opps", [])
+    if not steam_opps:
+        return _card("Steam Moves", "\u26a1", ["\u041d\u0435\u0442 \u043e\u0431\u043d\u0430\u0440\u0443\u0436\u0435\u043d\u043d\u044b\u0445 steam moves"])
+
+    body: list[str] = []
+    for s in steam_opps[:10]:
+        event_name = getattr(s, "event_name", str(s))
+        sport = getattr(s, "sport", "?")
+        direction = getattr(s, "direction", "?")
+        movement = getattr(s, "sharp_movement", 0.0)
+        confidence = getattr(s, "confidence", 0)
+        stale = getattr(s, "stale_bookmakers", [])
+        stale_names = [b.get("bookmaker", "?") if isinstance(b, dict) else str(b) for b in stale[:3]]
+        bar = progress_bar(confidence / 100.0)
+        body.append(
+            f"\u2022 <code>{sport}</code> | {event_name}\n"
+            f"  {direction} \u0394{movement:.3f} | {bar} {confidence}%\n"
+            f"  Stale: {', '.join(stale_names)}"
+        )
+    return _card("Steam Moves", "\u26a1", body)
+
+
 # --- Маппинг обработчиков ---
 
 _HANDLERS: dict[str, Any] = {
@@ -567,6 +644,8 @@ _HANDLERS: dict[str, Any] = {
     CB_API_HEALTH: _handle_api_health,
     CB_AI_FORECAST: _handle_ai_forecast,
     CB_WITHDRAWAL: _handle_withdrawal,
+    CB_MIDDLES: _handle_middles,
+    CB_STEAM: _handle_steam,
 }
 
 

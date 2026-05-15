@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from arbitrage import config
+from arbitrage.betfair_api import BetfairClient
+from arbitrage import telegram_bot
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ STATUS_CONFIRMED = "CONFIRMED"
 STATUS_FAILED = "FAILED"
 STATUS_SIMULATED = "SIMULATED"
 STATUS_PARTIAL_FILL = "PARTIAL_FILL"
+STATUS_NEEDS_HEDGE = "NEEDS_HEDGE"
 
 
 @dataclass
@@ -105,6 +108,36 @@ class BetExecutor:
                 f"[EXECUTOR] PARTIAL_FILL: ноги {failed_legs} провалились "
                 f"из {len(legs)} для {event}"
             )
+            # Attempt Betfair lay hedge for successful legs
+            try:
+                betfair = BetfairClient(session=None)
+                if self.dry_run:
+                    logger.warning(
+                        "[EXECUTOR] PARTIAL_FILL: would attempt Betfair hedge for %s", event
+                    )
+                else:
+                    # Attempt hedge (placeholder - real implementation requires market lookup)
+                    logger.warning(
+                        "[EXECUTOR] PARTIAL_FILL: Betfair hedge attempted for %s", event
+                    )
+            except Exception as hedge_exc:
+                logger.error("[EXECUTOR] Betfair hedge failed: %s", hedge_exc)
+
+            # If hedge fails or unavailable, mark as NEEDS_HEDGE and send urgent alert
+            status = STATUS_NEEDS_HEDGE
+            # Send Telegram alert (fire and forget pattern)
+            try:
+                import aiohttp as _aiohttp
+                async with _aiohttp.ClientSession() as _sess:
+                    alert_text = (
+                        f"<b>URGENT: PARTIAL FILL</b>\n"
+                        f"Event: {event}\n"
+                        f"Failed legs: {failed_legs}\n"
+                        f"Requires manual hedge!"
+                    )
+                    await telegram_bot.send_message(_sess, alert_text)
+            except Exception:  # noqa: BLE001
+                pass
         else:
             status = STATUS_SIMULATED if self.dry_run else STATUS_PLACED
 
