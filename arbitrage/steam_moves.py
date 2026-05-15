@@ -23,6 +23,9 @@ STEAM_THRESHOLD: float = 0.03
 # Максимальное количество снимков в истории на каждый ключ
 MAX_HISTORY_SNAPSHOTS: int = 10
 
+# Максимальный возраст записи в секундах (24 часа) для пруниинга
+MAX_HISTORY_AGE_SEC: float = 86400.0
+
 
 @dataclass
 class SteamOpportunity:
@@ -55,6 +58,28 @@ class SteamDetector:
         """
         self._sharp_history: dict[str, list[tuple[float, float]]] = {}
 
+    def _prune_stale_keys(self) -> None:
+        """Удаляет ключи с устаревшими записями из _sharp_history.
+
+        Ключ считается устаревшим, если все его записи старше MAX_HISTORY_AGE_SEC.
+        """
+        now = time.time()
+        stale_keys: list[str] = []
+        for key, history in self._sharp_history.items():
+            if not history:
+                stale_keys.append(key)
+                continue
+            # Последняя запись - самая свежая
+            latest_ts = history[-1][0]
+            if now - latest_ts > MAX_HISTORY_AGE_SEC:
+                stale_keys.append(key)
+        for key in stale_keys:
+            del self._sharp_history[key]
+        if stale_keys:
+            logger.debug(
+                "Pruned %d stale keys from sharp history", len(stale_keys)
+            )
+
     def update_sharp_snapshot(self, events: list[dict[str, Any]]) -> None:
         """Обновляет историю коэффициентов sharp-букмекеров.
 
@@ -65,6 +90,9 @@ class SteamDetector:
             events: нормализованные события из OddsAPI
         """
         now = time.time()
+
+        # Удаляем устаревшие ключи для предотвращения утечки памяти
+        self._prune_stale_keys()
 
         for event in events:
             event_id: str = event.get("id", "")

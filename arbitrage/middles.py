@@ -16,8 +16,12 @@ from typing import Any, Optional
 from arbitrage.ai_rate_limiter import AiRateLimiter
 
 _parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _parent)
-import ai_router
+if _parent not in sys.path:
+    sys.path.insert(0, _parent)
+try:
+    import ai_router
+except ImportError:
+    ai_router = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -329,6 +333,9 @@ class MiddleScanner:
         )
 
         try:
+            if ai_router is None:
+                logger.warning("ai_router недоступен, используем наивную вероятность")
+                return opp.middle_probability
             result = await ai_router.call_llm_json(session, prompt)
             probability = float(result.get("probability", opp.middle_probability))
             probability = max(0.0, min(1.0, probability))

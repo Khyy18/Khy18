@@ -142,22 +142,32 @@ class CLVTracker:
 
     @staticmethod
     def _extract_best_odds(event_data: dict[str, Any]) -> Optional[float]:
-        """Извлекает лучший коэффициент из данных события.
+        """Извлекает закрывающий коэффициент из данных события (Pinnacle).
 
-        Берёт максимальный коэффициент среди всех букмекеров
-        (приближение к closing line).
+        Использует Pinnacle как эталон закрывающей линии.
+        Если Pinnacle недоступен, берёт максимальный среди sharp-бк.
+        Возвращает лучший (наибольший) Pinnacle-коэффициент для h2h рынка.
         """
-        best: Optional[float] = None
+        pinnacle_best: Optional[float] = None
+        fallback_best: Optional[float] = None
         bookmakers = event_data.get("bookmakers", [])
 
         for bk in bookmakers:
+            bk_key: str = bk.get("key", "").lower()
+            is_pinnacle = bk_key == "pinnacle"
             markets = bk.get("markets", [])
             for market in markets:
+                if market.get("key") != "h2h":
+                    continue
                 outcomes = market.get("outcomes", [])
                 for outcome in outcomes:
                     price = outcome.get("price")
-                    if price and isinstance(price, (int, float)):
-                        if best is None or price > best:
-                            best = float(price)
+                    if price and isinstance(price, (int, float)) and price > 1.0:
+                        if is_pinnacle:
+                            if pinnacle_best is None or price > pinnacle_best:
+                                pinnacle_best = float(price)
+                        else:
+                            if fallback_best is None or price > fallback_best:
+                                fallback_best = float(price)
 
-        return best
+        return pinnacle_best if pinnacle_best is not None else fallback_best

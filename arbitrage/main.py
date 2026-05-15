@@ -30,6 +30,7 @@ from arbitrage.ai_optimizer import optimizer_loop
 from arbitrage.ai_rate_limiter import AiRateLimiter
 from arbitrage.anti_ban import AntiBanEngine
 from arbitrage.betfair_stream import market_maker_loop
+from arbitrage.cashout import CashoutEngine
 from arbitrage.clv_tracker import CLVTracker
 from arbitrage.dedup import ArbDeduplicator
 from arbitrage.executor import BetExecutor
@@ -52,6 +53,7 @@ _execution_lock: asyncio.Lock = asyncio.Lock()
 _steam_detector: SteamDetector = SteamDetector()
 _rate_limiter: AiRateLimiter = AiRateLimiter()
 _clv_tracker: CLVTracker = CLVTracker()
+_cashout_engine: CashoutEngine = CashoutEngine()
 
 BANNER = """
 ╔══════════════════════════════════════════╗
@@ -202,6 +204,33 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             steam_opps = _steam_detector.detect_steam(all_events, sharp_probs)
             state["steam_opps"] = steam_opps[-10:]
 
+            # Cashout: проверяем PENDING ставки на возможность кэшаута
+            try:
+                pending_bets = memory.get_pending_bets_for_settlement()
+                # Преобразуем в формат, ожидаемый CashoutEngine
+                pre_match_bets: list[dict[str, Any]] = []
+                for bet in pending_bets:
+                    if bet.get("event_id"):
+                        pre_match_bets.append({
+                            "event_id": bet["event_id"],
+                            "event_name": bet.get("event", ""),
+                            "bookmaker": bet.get("bookmaker", ""),
+                            "outcome": bet.get("outcome", ""),
+                            "odds": bet.get("odds", 0.0),
+                            "stake": bet.get("stake", 0.0),
+                            "placed_ts": bet.get("ts", ""),
+                            "sport": bet.get("sport", ""),
+                        })
+                if pre_match_bets:
+                    cashout_opps = _cashout_engine.find_cashout_opportunities(
+                        pre_match_bets, all_events
+                    )
+                    state["cashout_opps"] = cashout_opps[-10:]
+                    if cashout_opps:
+                        logger.info("Cashout возможностей найдено: %d", len(cashout_opps))
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Ошибка поиска cashout: %s", exc)
+
             if not all_opps:
                 logger.info("Арбитражей не найдено")
                 await asyncio.sleep(sleep_interval)
@@ -232,20 +261,26 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 opp_dicts.append(opp_dict)
 
             scored = await batch_scorer.score_batch(opp_dicts, session)
+
+            # Merge AI scores back onto original opp_dicts by index
+            for i, score_item in enumerate(scored):
+                if i < len(opp_dicts):
+                    opp_dicts[i]["ai_score"] = score_item.get("score", 50)
+                    opp_dicts[i]["ai_reasoning"] = score_item.get("reasoning", "")
+
             filtered: list[dict[str, Any]] = []
-            for s in scored:
-                ai_score = s.get("ai_score", 0)
+            for opp_d in opp_dicts:
+                ai_score = opp_d.get("ai_score", 0)
                 if ai_score > 60:
-                    s["ai_score"] = ai_score
                     # Fix 1: Для surebets - не используем Kelly, для value bets - sharp_prob
-                    if s.get("type") == "surebet":
-                        s["sizing_mode"] = "surebet"
+                    if opp_d.get("type") == "surebet":
+                        opp_d["sizing_mode"] = "surebet"
                     else:
-                        sharp_prob = s.get("details", {}).get("sharp_prob", 0.5)
-                        s["win_prob"] = sharp_prob
-                        s["sizing_mode"] = "kelly"
-                    s["best_odds"] = s["odds"][0] if s.get("odds") else 2.0
-                    filtered.append(s)
+                        sharp_prob = opp_d.get("details", {}).get("sharp_prob", 0.5)
+                        opp_d["win_prob"] = sharp_prob
+                        opp_d["sizing_mode"] = "kelly"
+                    opp_d["best_odds"] = opp_d["odds"][0] if opp_d.get("odds") else 2.0
+                    filtered.append(opp_d)
 
             if not filtered:
                 logger.info("После AI-фильтра кандидатов нет")
@@ -606,6 +641,7 @@ async def main() -> None:
         "start_time": datetime.now(timezone.utc).isoformat(),
         "middles_opps": [],
         "steam_opps": [],
+        "cashout_opps": [],
         "clv_stats": {},
     }
 
