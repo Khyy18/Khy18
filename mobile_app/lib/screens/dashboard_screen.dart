@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/notification_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/stat_card.dart';
 
@@ -34,6 +35,8 @@ class DashboardScreen extends ConsumerWidget {
                     ),
               ),
               const SizedBox(height: 28),
+              const _NotificationBanner(),
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
@@ -277,5 +280,60 @@ class _AiCard extends StatelessWidget {
         .animate()
         .fadeIn(delay: 600.ms, duration: 400.ms)
         .slideY(begin: 0.1, end: 0);
+  }
+}
+
+class _NotificationBanner extends StatefulWidget {
+  const _NotificationBanner();
+
+  @override
+  State<_NotificationBanner> createState() => _NotificationBannerState();
+}
+
+class _NotificationBannerState extends State<_NotificationBanner> {
+  bool _dismissed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(
+              Icons.notifications_none_rounded,
+              color: AppColors.primary,
+              size: 24,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                'Включить уведомления',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                try {
+                  await NotificationService.requestPermission();
+                } catch (_) {}
+                setState(() => _dismissed = true);
+              },
+              child: const Text('Включить'),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: () => setState(() => _dismissed = true),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ],
+        ),
+      ),
+    ).animate().fadeIn(duration: 300.ms).slideY(begin: -0.2, end: 0);
   }
 }

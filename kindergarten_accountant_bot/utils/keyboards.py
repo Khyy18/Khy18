@@ -19,6 +19,9 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Плат. поручение", callback_data="menu_payment"),
             InlineKeyboardButton("Журнал", callback_data="menu_journal"),
         ],
+        [
+            InlineKeyboardButton("\U0001f4ca Ведомость", callback_data="menu_payroll"),
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 

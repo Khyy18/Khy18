@@ -5,6 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'providers/auth_provider.dart';
 import 'services/local_storage.dart';
+import 'services/notification_service.dart';
 import 'theme/app_theme.dart';
 
 import 'screens/login_screen.dart';
@@ -24,6 +25,11 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
   await LocalStorage.init();
+  try {
+    await NotificationService.init();
+  } catch (e) {
+    // App works without Firebase - it's optional
+  }
   runApp(const ProviderScope(child: KindergartenApp()));
 }
 

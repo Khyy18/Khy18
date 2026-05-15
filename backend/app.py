@@ -17,6 +17,7 @@ from backend.routers import (
     reminders,
     kbk,
     calendar,
+    notifications,
 )
 from backend.ai.router import router as ai_router
 
@@ -50,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(reminders.router, prefix="/api/v1")
     app.include_router(kbk.router, prefix="/api/v1")
     app.include_router(calendar.router, prefix="/api/v1")
+    app.include_router(notifications.router, prefix="/api/v1")
     app.include_router(ai_router, prefix="/api/v1")
 
     @app.on_event("startup")
