@@ -106,6 +106,23 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 await asyncio.sleep(config.SCAN_INTERVAL_SEC)
                 continue
 
+            # 1a. Проверка здоровья API и алерт при проблемах
+            api_health = odds_client.get_health()
+            state["api_health"] = api_health
+            remaining_q = api_health.get("remaining_quota")
+            used_q = api_health.get("used_quota")
+            latency_ms = api_health.get("last_latency_ms", 0.0)
+            if remaining_q is not None and used_q is not None:
+                total_q = remaining_q + used_q
+                remaining_pct = (remaining_q / total_q * 100.0) if total_q > 0 else 100.0
+            else:
+                remaining_pct = 100.0
+            if remaining_pct < 10.0 or latency_ms > 5000:
+                try:
+                    await telegram_bot.send_quota_alert(session, remaining_pct, latency_ms)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[SCANNER] Ошибка отправки quota-алерта: {exc}")
+
             # 2. Извлечь sharp-линии Pinnacle
             sharp_probs = PinnacleClient.extract_pinnacle_from_odds_api(all_events)
 
@@ -201,19 +218,42 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 print(f"[SCANNER] Ошибка аллокации: {exc}")
                 allocations = []
 
-            # 6. Anti-ban проверки
+            # 6. Anti-ban проверки (расширенные)
             valid_allocations: list[dict[str, Any]] = []
             for alloc in allocations:
                 opp = alloc.get("opportunity", {})
                 bookmakers = opp.get("bookmakers", [])
                 bm = bookmakers[0] if bookmakers else "unknown"
+                event_id = opp.get("event", opp.get("event_name", "unknown"))
+
+                # 6a. Проверка корреляции (букмекер + событие)
+                if not anti_ban.check_correlation(bm, event_id):
+                    print(f"[SCANNER] Корреляция: пропуск {bm}/{event_id}")
+                    continue
 
                 if not anti_ban.check_frequency(bm):
                     print(f"[SCANNER] Лимит ставок превышен для {bm}")
                     continue
 
-                delay = anti_ban.should_delay()
+                # 6b. Адаптивная задержка по типу букмекера
+                delay = anti_ban.get_adaptive_delay(bm)
                 await asyncio.sleep(delay)
+
+                # 6c. Гуманизация суммы ставки
+                stake_amount = alloc.get("stake_amount", 0.0)
+                if stake_amount > 0:
+                    alloc["stake_amount"] = anti_ban.humanize_stake(stake_amount)
+
+                # 6d. Детектирование пре-бана
+                is_pre_ban, pre_ban_detail = anti_ban.detect_pre_ban(bm)
+                if is_pre_ban:
+                    print(f"[SCANNER] Пре-бан детектирован для {bm}")
+                    try:
+                        await telegram_bot.send_pre_ban_alert(session, bm, pre_ban_detail)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[SCANNER] Ошибка отправки pre-ban алерта: {exc}")
+                    continue
+
                 valid_allocations.append(alloc)
 
             # 7. Исполнение

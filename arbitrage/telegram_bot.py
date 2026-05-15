@@ -33,10 +33,12 @@ CB_ACTIVE: str = "arb:active"
 CB_BANK: str = "arb:bank"
 CB_SETTINGS: str = "arb:settings"
 CB_LAST_BETS: str = "arb:bets"
+CB_AI_LEARNINGS: str = "arb:learnings"
+CB_API_HEALTH: str = "arb:api_health"
 
 
 def set_keyboard() -> dict[str, Any]:
-    """Инлайн-клавиатура с кнопками управления (3 строки по 2)."""
+    """Инлайн-клавиатура с кнопками управления (4 строки по 2)."""
     return {
         "inline_keyboard": [
             [
@@ -50,6 +52,10 @@ def set_keyboard() -> dict[str, Any]:
             [
                 {"text": "\ud83d\udcb0 \u0411\u0410\u041d\u041a", "callback_data": CB_BANK},
                 {"text": "\ud83d\udcdd \u041f\u041e\u0421\u041b\u0415\u0414\u041d\u0418\u0415 \u0421\u0422\u0410\u0412\u041a\u0418", "callback_data": CB_LAST_BETS},
+            ],
+            [
+                {"text": "\ud83e\udde0 AI LEARNINGS", "callback_data": CB_AI_LEARNINGS},
+                {"text": "\ud83d\udce1 API HEALTH", "callback_data": CB_API_HEALTH},
             ],
         ]
     }
@@ -187,6 +193,18 @@ async def _handle_stats(
         f"ROI: {pnl_arrow(roi)}",
         f"Суммарный PnL: {pnl_arrow(total_pnl)}",
     ]
+
+    # Дневная статистика PnL за 7 дней
+    daily_pnl = memory.get_daily_pnl(7)
+    if daily_pnl:
+        body.append("")
+        body.append("<b>PnL за 7 дней:</b>")
+        for day in daily_pnl:
+            date_str = day.get("date", "?")
+            day_pnl = day.get("pnl", 0.0)
+            day_roi = day.get("roi_pct", 0.0)
+            body.append(f"  {date_str}: {pnl_arrow(day_pnl)} (ROI {day_roi:.1f}%)")
+
     return _card("\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430", "\ud83d\udcca", body)
 
 
@@ -306,6 +324,123 @@ async def send_arb_alert(
     await send_message(session, text, reply_markup=set_keyboard())
 
 
+# --- Алерты анти-бана и API ---
+
+
+async def send_pre_ban_alert(
+    session: aiohttp.ClientSession,
+    bookmaker: str,
+    detail: str,
+) -> None:
+    """Отправить алерт при детектировании паттерна пре-бана."""
+    body = [
+        f"\ud83d\udd34 <b>Букмекер:</b> <code>{bookmaker}</code>",
+        f"\ud83d\udd34 <b>Детали:</b> {detail}",
+        "",
+        "Рекомендация: приостановить ставки у данного букмекера.",
+    ]
+    text = _card("\u041f\u0440\u0435-\u0431\u0430\u043d \u0434\u0435\u0442\u0435\u043a\u0442\u043e\u0440", "\ud83d\udea8", body)
+    await send_message(session, text, reply_markup=set_keyboard())
+
+
+async def send_quota_alert(
+    session: aiohttp.ClientSession,
+    remaining_pct: float,
+    latency_ms: float,
+) -> None:
+    """Отправить алерт при низкой квоте API или высокой задержке."""
+    body: list[str] = []
+
+    if remaining_pct < 10.0:
+        body.append(f"\ud83d\udd34 Квота API: <code>{remaining_pct:.1f}%</code> осталось")
+    else:
+        body.append(f"\ud83d\udfe1 Квота API: <code>{remaining_pct:.1f}%</code> осталось")
+
+    if latency_ms > 5000:
+        body.append(f"\ud83d\udd34 Задержка: <code>{latency_ms:.0f}ms</code>")
+    elif latency_ms > 2000:
+        body.append(f"\ud83d\udfe1 Задержка: <code>{latency_ms:.0f}ms</code>")
+    else:
+        body.append(f"\ud83d\udfe2 Задержка: <code>{latency_ms:.0f}ms</code>")
+
+    body.append("")
+    body.append("Рекомендация: снизить частоту сканирования.")
+
+    text = _card("API \u041c\u043e\u043d\u0438\u0442\u043e\u0440\u0438\u043d\u0433", "\u26a0\ufe0f", body)
+    await send_message(session, text, reply_markup=set_keyboard())
+
+
+# --- Обработчики новых кнопок ---
+
+
+async def _handle_ai_learnings(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Показать выученные правила AI-фильтра."""
+    learnings = memory.get_ai_learnings(10)
+    if not learnings:
+        return _card("AI Learnings", "\ud83e\udde0", ["\u041d\u0435\u0442 \u0432\u044b\u0443\u0447\u0435\u043d\u043d\u044b\u0445 \u043f\u0440\u0430\u0432\u0438\u043b"])
+
+    body: list[str] = []
+    for rule in learnings:
+        rule_type = rule.get("rule_type", "?")
+        rule_text = rule.get("rule_text", "?")
+        confidence = rule.get("confidence", 0.0)
+        ts = rule.get("ts", "")[:10]  # только дата
+        bar = progress_bar(confidence)
+        body.append(
+            f"\u2022 [{rule_type}] {rule_text}\n"
+            f"  \u0423\u0432\u0435\u0440\u0435\u043d\u043d\u043e\u0441\u0442\u044c: {bar} <code>{confidence:.0%}</code> | {ts}"
+        )
+    return _card("AI Learnings", "\ud83e\udde0", body)
+
+
+async def _handle_api_health(
+    session: aiohttp.ClientSession, state: dict[str, Any]
+) -> str:
+    """Показать здоровье API (квота, задержка, ошибки)."""
+    health = state.get("api_health", {})
+    remaining = health.get("remaining_quota")
+    used = health.get("used_quota")
+    latency = health.get("last_latency_ms", 0.0)
+
+    # Расчёт процента квоты
+    if remaining is not None and used is not None:
+        total = remaining + used
+        remaining_pct = (remaining / total * 100.0) if total > 0 else 100.0
+    else:
+        remaining_pct = 100.0
+        total = 0
+
+    # Индикаторы квоты: зелёный >50%, жёлтый >10%, красный <10%
+    if remaining_pct > 50.0:
+        quota_indicator = "\ud83d\udfe2"
+    elif remaining_pct > 10.0:
+        quota_indicator = "\ud83d\udfe1"
+    else:
+        quota_indicator = "\ud83d\udd34"
+
+    # Индикаторы задержки: зелёный <2с, жёлтый <5с, красный >5с
+    if latency < 2000.0:
+        latency_indicator = "\ud83d\udfe2"
+    elif latency < 5000.0:
+        latency_indicator = "\ud83d\udfe1"
+    else:
+        latency_indicator = "\ud83d\udd34"
+
+    body = [
+        f"{quota_indicator} Квота: <code>{remaining if remaining is not None else '?'}</code> / <code>{total if total > 0 else '?'}</code> ({remaining_pct:.1f}%)",
+        f"{latency_indicator} Задержка: <code>{latency:.0f}ms</code>",
+        f"Использовано: <code>{used if used is not None else '?'}</code>",
+    ]
+
+    # Прогресс-бар квоты
+    bar = progress_bar(remaining_pct / 100.0)
+    body.append(f"Квота: {bar}")
+
+    return _card("API Health", "\ud83d\udce1", body)
+
+
 # --- Маппинг обработчиков ---
 
 _HANDLERS: dict[str, Any] = {
@@ -316,6 +451,8 @@ _HANDLERS: dict[str, Any] = {
     CB_BANK: _handle_bank,
     CB_SETTINGS: _handle_settings,
     CB_LAST_BETS: _handle_last_bets,
+    CB_AI_LEARNINGS: _handle_ai_learnings,
+    CB_API_HEALTH: _handle_api_health,
 }
 
 
