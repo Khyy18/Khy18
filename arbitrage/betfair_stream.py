@@ -119,7 +119,14 @@ class BetfairStreamClient:
         logger.info("Betfair Stream: отключен")
 
     async def _authenticate(self) -> None:
-        """Отправить сообщение аутентификации."""
+        """Отправить сообщение аутентификации.
+
+        WARNING: The session token is sent over TLS (wss://) which provides
+        transit encryption. However, certificate pinning is NOT implemented.
+        In corporate/VPS environments with MITM proxies, the token could
+        potentially be intercepted. Consider implementing certificate pinning
+        for production deployments in untrusted network environments.
+        """
         if not self._ws or self._ws.closed:
             return
 
@@ -288,8 +295,13 @@ class BetfairStreamClient:
                 # Закрываем старые ресурсы
                 if self._ws and not self._ws.closed:
                     await self._ws.close()
-                if self._http_session and not self._http_session.closed:
-                    await self._http_session.close()
+                try:
+                    if self._http_session and not self._http_session.closed:
+                        await self._http_session.close()
+                except Exception as close_exc:
+                    logger.warning(
+                        "Betfair Stream: ошибка при закрытии старой сессии: %s", close_exc
+                    )
 
                 self._http_session = aiohttp.ClientSession()
                 self._ws = await self._http_session.ws_connect(STREAM_URL)

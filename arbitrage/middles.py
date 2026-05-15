@@ -296,9 +296,8 @@ class MiddleScanner:
                                 best_case_profit_pct = (best_case_profit / stake_total) * 100.0
 
                                 corridor_width = corridor_high - corridor_low
-                                middle_probability = (
-                                    corridor_width / corridor_high
-                                    if corridor_high > 0 else 0.0
+                                middle_probability = compute_poisson_probability(
+                                    corridor_low, corridor_high, sport
                                 )
 
                                 expected_value_pct = (

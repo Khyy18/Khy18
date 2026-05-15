@@ -85,7 +85,7 @@ class BetfairClient:
 
         logger.debug("Betfair запрос: %s", endpoint)
         resp = await retry_request(session, "POST", url, json=payload, headers=self._headers)
-        try:
+        async with resp:
             if resp.status != 200:
                 text = await resp.text()
                 logger.error("Betfair ошибка %d: %s", resp.status, text)
@@ -94,7 +94,18 @@ class BetfairClient:
                     status_code=resp.status,
                     detail=text,
                 )
-            data: Any = await resp.json()
+            # Read text first to fully consume the response body
+            text = await resp.text()
+            import json as _json
+            try:
+                data: Any = _json.loads(text)
+            except (ValueError, _json.JSONDecodeError) as exc:
+                logger.error("Betfair невалидный JSON: %s", text[:200])
+                raise BetfairAPIError(
+                    "Betfair returned invalid JSON",
+                    status_code=resp.status,
+                    detail=text[:500],
+                ) from exc
             # Betfair может вернуть словарь с ошибкой вместо списка
             if isinstance(data, dict) and "faultcode" in data:
                 fault = data.get("faultstring", "unknown fault")
@@ -104,8 +115,6 @@ class BetfairClient:
                     detail=str(data),
                 )
             return data
-        finally:
-            resp.release()
 
     async def login(self) -> bool:
         """Проверяет валидность текущего session_token (keep-alive)."""

@@ -287,39 +287,55 @@ class BetExecutor:
             }
 
             max_attempts = 3
-            for attempt in range(max_attempts):
-                try:
-                    client = BetfairClient()
+            client = BetfairClient()
+            try:
+                for attempt in range(max_attempts):
                     try:
                         result = await client.place_orders(market_id, [instruction])
-                    finally:
-                        await client.close()
 
-                    if result.get("status") == "SUCCESS":
-                        reports = result.get("instructionReports", [])
-                        bet_id = ""
-                        if reports:
-                            bet_id = reports[0].get("betId", "")
-                        logger.info(
-                            "[EXECUTOR] Betfair ставка размещена: bet_id=%s %s %.2f @ %.2f",
-                            bet_id, side, stake, odds,
-                        )
-                        return {
-                            "bookmaker": bookmaker,
-                            "event": event,
-                            "outcome": outcome,
-                            "stake": stake,
-                            "odds": odds,
-                            "status": STATUS_PLACED,
-                            "bet_id": bet_id,
-                            "market_id": market_id,
-                            "selection_id": selection_id,
-                        }
-                    else:
-                        error_code = result.get("errorCode", "UNKNOWN")
-                        logger.warning(
-                            "[EXECUTOR] Betfair ставка не принята (попытка %d/%d): %s",
-                            attempt + 1, max_attempts, error_code,
+                        if result.get("status") == "SUCCESS":
+                            reports = result.get("instructionReports", [])
+                            bet_id = ""
+                            if reports:
+                                bet_id = reports[0].get("betId", "")
+                            logger.info(
+                                "[EXECUTOR] Betfair ставка размещена: bet_id=%s %s %.2f @ %.2f",
+                                bet_id, side, stake, odds,
+                            )
+                            return {
+                                "bookmaker": bookmaker,
+                                "event": event,
+                                "outcome": outcome,
+                                "stake": stake,
+                                "odds": odds,
+                                "status": STATUS_PLACED,
+                                "bet_id": bet_id,
+                                "market_id": market_id,
+                                "selection_id": selection_id,
+                            }
+                        else:
+                            error_code = result.get("errorCode", "UNKNOWN")
+                            logger.warning(
+                                "[EXECUTOR] Betfair ставка не принята (попытка %d/%d): %s",
+                                attempt + 1, max_attempts, error_code,
+                            )
+                            if attempt < max_attempts - 1:
+                                await asyncio.sleep(0.5 * (attempt + 1))
+                                continue
+                            return {
+                                "bookmaker": bookmaker,
+                                "event": event,
+                                "outcome": outcome,
+                                "stake": stake,
+                                "odds": odds,
+                                "status": STATUS_FAILED,
+                                "error": f"Betfair отклонил: {error_code}",
+                            }
+
+                    except Exception as exc:
+                        logger.error(
+                            "[EXECUTOR] Betfair ошибка (попытка %d/%d): %s",
+                            attempt + 1, max_attempts, exc,
                         )
                         if attempt < max_attempts - 1:
                             await asyncio.sleep(0.5 * (attempt + 1))
@@ -331,26 +347,10 @@ class BetExecutor:
                             "stake": stake,
                             "odds": odds,
                             "status": STATUS_FAILED,
-                            "error": f"Betfair отклонил: {error_code}",
+                            "error": str(exc),
                         }
-
-                except Exception as exc:
-                    logger.error(
-                        "[EXECUTOR] Betfair ошибка (попытка %d/%d): %s",
-                        attempt + 1, max_attempts, exc,
-                    )
-                    if attempt < max_attempts - 1:
-                        await asyncio.sleep(0.5 * (attempt + 1))
-                        continue
-                    return {
-                        "bookmaker": bookmaker,
-                        "event": event,
-                        "outcome": outcome,
-                        "stake": stake,
-                        "odds": odds,
-                        "status": STATUS_FAILED,
-                        "error": str(exc),
-                    }
+            finally:
+                await client.close()
 
         # Fallback for non-betfair or missing config
         logger.warning(

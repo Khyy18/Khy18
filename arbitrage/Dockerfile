@@ -18,6 +18,4 @@ ENV PYTHONPATH=/app
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import arbitrage" || exit 1
 
-EXPOSE 8080
-
 CMD ["python", "-m", "arbitrage.main"]
