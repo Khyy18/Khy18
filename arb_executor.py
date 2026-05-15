@@ -400,6 +400,18 @@ async def evaluate_and_open(
     # кандидатов до per-candidate check.
     min_net_apr = float(getattr(config, "ARB_OPEN_MIN_NET_APR_TIER_A", 0.12))
     allowed = list(getattr(config, "ARB_ALLOWED_SYMBOLS", []))
+
+    # Override из Telegram toggle символов (runtime_state).
+    try:
+        import runtime_state
+        gs = runtime_state.get_state()
+        if gs:
+            sym_override = gs.get("allowed_symbols_override")
+            if sym_override:
+                allowed = list(sym_override)
+    except Exception:  # noqa: BLE001
+        pass
+
     cands = _select_candidates(
         snapshots, min_net_apr, allowed or None,
         excluded_symbols=used_symbols, limit=8,

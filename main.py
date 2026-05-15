@@ -189,6 +189,72 @@ def _arb_notify(session: aiohttp.ClientSession):
     return _n
 
 
+def _format_batch_open(arb_ids: list[int], state: dict[str, Any]) -> str:
+    """Сводное уведомление об открытии batch'а арб-пар."""
+    active_all = arb_storage.get_all_active()
+    active_map = {int(p["id"]): p for p in active_all}
+    max_pos = int(getattr(config, "ARB_MAX_POSITIONS", 3))
+    lines: list[str] = ["\U0001f4c8 <b>Открытие пар</b>"]
+    total_notional = 0.0
+    total_edge = 0.0
+    count = 0
+
+    for arb_id in arb_ids:
+        pos = active_map.get(arb_id)
+        if not pos:
+            lines.append(f"\n#{arb_id} \u2014 данные недоступны")
+            continue
+        sym = pos.get("symbol", "-")
+        long_ex = pos.get("long_exchange", "-")
+        short_ex = pos.get("short_exchange", "-")
+        notional = float(pos.get("notional_usdt") or 0)
+        edge_apr = float(pos.get("edge_apr_open") or 0)
+        tier = pos.get("tier", "?")
+        total_notional += notional
+        total_edge += edge_apr
+        count += 1
+        lines.append(f"\n<b>#{arb_id} {sym}</b>")
+        lines.append(f"  LONG@{long_ex} | SHORT@{short_ex}")
+        lines.append(f"  Notional: ${notional:.0f} (tier_{tier}) | Edge: {edge_apr*100:.1f}% APR")
+
+    # Портфель после открытия
+    if count > 0:
+        avg_edge = total_edge / count
+        # Ожидаемый PnL за 7д (грубая оценка: notional * avg_edge * 7/365)
+        expected_7d = total_notional * avg_edge * 7 / 365
+        total_active = len(active_all)
+        total_not_all = sum(float(p.get("notional_usdt") or 0) for p in active_all)
+        lines.append(f"\n<b>Портфель:</b>")
+        lines.append(f"  Пар: {total_active}/{max_pos} | Notional: ${total_not_all:.0f}")
+        lines.append(f"  Средний edge: {avg_edge*100:.1f}% APR")
+        lines.append(f"  Ожидаемый PnL (7д): ~${expected_7d:.2f} USDT")
+
+    return "\n".join(lines)
+
+
+def _format_batch_close(closed_records: list[dict], state: dict[str, Any]) -> str:
+    """Сводное уведомление о закрытии batch'а арб-пар."""
+    lines: list[str] = ["\U0001f4c9 <b>Закрытие пар</b>"]
+    total_pnl = 0.0
+    for r in closed_records:
+        arb_id = r.get("id", "?")
+        sym = r.get("symbol", "-")
+        pnl = float(r.get("pnl_total") or 0.0)
+        reason = r.get("close_reason") or "н/д"
+        funding = float(r.get("funding_received") or 0.0)
+        total_pnl += pnl
+        arrow = "\u25b2" if pnl >= 0 else "\u25bc"
+        lines.append(f"\n<b>#{arb_id} {sym}</b> {arrow} {pnl:+.4f} USDT")
+        lines.append(f"  Причина: {reason}")
+        lines.append(f"  Funding получено: {funding:+.4f}")
+    lines.append(f"\n<b>Итого PnL:</b> {total_pnl:+.4f} USDT")
+    # Оставшиеся позиции
+    remaining = arb_storage.get_all_active()
+    max_pos = int(getattr(config, "ARB_MAX_POSITIONS", 3))
+    lines.append(f"Пар осталось: {len(remaining)}/{max_pos}")
+    return "\n".join(lines)
+
+
 async def _apply_arb_kill_switches(
     session: aiohttp.ClientSession,
     state: dict[str, Any],
@@ -409,7 +475,8 @@ async def _arb_executor_tick(
             print(f"[ARB-EXEC] monitor (paused) exception: {exc}")
         return
 
-    # 1. Мониторинг и закрытие.
+    # 1. Мониторинг и закрытие (сводное уведомление).
+    active_before = set(p["id"] for p in arb_storage.get_all_active())
     try:
         closed = await arb_executor.monitor_and_maybe_close(
             session, _FUNDING_ADAPTERS, snapshots, _arb_notify(session)
@@ -417,6 +484,20 @@ async def _arb_executor_tick(
     except Exception as exc:  # noqa: BLE001
         print(f"[ARB-EXEC] monitor exception: {exc}")
         closed = False
+
+    if closed:
+        # Определяем какие пары были закрыты
+        active_after = set(p["id"] for p in arb_storage.get_all_active())
+        closed_ids = active_before - active_after
+        if closed_ids:
+            try:
+                recent = arb_storage.get_recent_closed(limit=len(closed_ids) + 2)
+                closed_records = [r for r in recent if r.get("id") in closed_ids]
+                if closed_records:
+                    text = _format_batch_close(closed_records, state)
+                    await _notify(session, text)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ARB-EXEC] batch_close notify error: {exc}")
 
     # 2. Учёт funding-выплат.
     try:
@@ -438,19 +519,26 @@ async def _arb_executor_tick(
             print(f"[ARB-EXEC] Ресканинг не удался: {exc}")
             return
 
-    # 4. Открытие новых, пока есть свободные слоты.
+    # 4. Открытие новых, пока есть свободные слоты (batch-уведомление).
     max_pos = int(getattr(config, "ARB_MAX_POSITIONS", 3))
     slots = max_pos - len(arb_storage.get_all_active())
+    opened_ids: list[int] = []
     for _ in range(max(0, slots)):
         try:
             opened = await arb_executor.evaluate_and_open(
-                session, active_adapters, snapshots, _arb_notify(session)
+                session, active_adapters, snapshots, notify=None,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[ARB-EXEC] open exception: {exc}")
             break
         if not opened:
             break
+        opened_ids.append(opened)
+
+    # Сводное уведомление по batch'у открытий.
+    if opened_ids:
+        text = _format_batch_open(opened_ids, state)
+        await _notify(session, text)
 
 
 # --- Tick: anomaly detection ------------------------------------------
@@ -687,12 +775,14 @@ async def _heartbeat_tick(
     snap_age_str = f"{int(snap_age)}с назад" if snap_age is not None else "ещё не было"
 
     parts = [
-        "💓 <b>Heartbeat</b> — бот жив",
-        f"Время: {now.strftime('%Y-%m-%d %H:%M UTC')}",
+        "\U0001f493 <b>Heartbeat</b>",
+        telegram_bot._DIVIDER,
+        f"<pre>Время: {now.strftime('%Y-%m-%d %H:%M UTC')}",
         f"Executor: {'ON' if executor_on else 'OFF'}  |  Bot: {bot_running}  |  Kill: {ks}",
         f"Funding-snap: {snap_age_str}",
         f"Открытых пар: {active_count}/{max_pos}",
-        f"Daily PnL: {daily:+.2f}  |  Weekly: {weekly:+.2f}  |  Total: {cumul:+.2f} USDT",
+        f"Daily PnL: {daily:+.2f}  |  Weekly: {weekly:+.2f}",
+        f"Total: {cumul:+.2f} USDT</pre>",
     ]
 
     try:
