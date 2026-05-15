@@ -11,6 +11,11 @@ from pydantic import BaseModel
 from core.config import settings
 from core.db import async_session_factory, engine
 from channels.email.tracker import router as tracking_router
+from dashboard.auth import router as auth_router
+from dashboard.routes.campaigns import router as campaigns_router
+from dashboard.routes.leads import router as leads_router
+from dashboard.routes.sequences import router as sequences_router
+from dashboard.routes.analytics import router as analytics_router
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +167,13 @@ app = FastAPI(
 
 # Include tracking router for open/click tracking
 app.include_router(tracking_router)
+
+# Include dashboard routers
+app.include_router(auth_router)
+app.include_router(campaigns_router)
+app.include_router(leads_router)
+app.include_router(sequences_router)
+app.include_router(analytics_router)
 
 
 class ReplyWebhookPayload(BaseModel):
