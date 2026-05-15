@@ -27,6 +27,9 @@ import pipeline
 import payment_gateway
 import subscriptions
 import scheduler
+import pricing
+import i18n
+import document_generator
 from models import ServiceType, OrderStatus
 from services import SERVICES, get_service
 from utils import _card, format_number, progress_bar, status_indicator
@@ -34,7 +37,7 @@ from utils import _card, format_number, progress_bar, status_indicator
 logger = logging.getLogger(__name__)
 
 # Состояния ConversationHandler
-SELECT_SERVICE, ENTER_TEXT, CONFIRM_ORDER = range(3)
+SELECT_SERVICE, ENTER_TEXT, SELECT_URGENCY, CONFIRM_ORDER = range(4)
 
 
 # --- Команда /start ---
@@ -50,6 +53,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         first_name=user.first_name,
     )
     is_new = existing.get("total_spent", 0) == 0 and existing.get("balance", 0) == 0
+
+    # Получаем язык клиента
+    lang = await database.get_client_language(user.id)
 
     # Обработка реферальной deep link (ref_XXXXXX)
     if context.args and context.args[0].startswith("ref_"):
@@ -67,14 +73,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         except (ValueError, TypeError):
             pass
 
-    # Карточка приветствия
+    # Проверка бесплатного триала
+    trial_available = await billing.check_free_trial(user.id)
+
+    # Карточка приветствия с персоной
+    name = html.escape(user.first_name or "друг")
     body = [
-        f"Привет, <b>{html.escape(user.first_name or 'друг')}</b>!",
+        i18n.get_text(lang, "persona_greeting", greeting=config.BOT_PERSONA_GREETING),
         "",
-        "Я AI-агентство для работы с текстами.",
-        "Выбери услугу из списка ниже:",
+        i18n.get_text(lang, "welcome", name=name),
+        "",
+        i18n.get_text(lang, "service_list"),
     ]
-    welcome = _card("AI-Агентство", "\U0001f916", body)
+    if trial_available:
+        body.insert(2, i18n.get_text(lang, "first_order_free"))
+
+    welcome = _card(config.BOT_PERSONA_NAME, "\U0001f916", body)
 
     # Инлайн-клавиатура с услугами
     keyboard = []
@@ -158,22 +172,80 @@ async def select_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # --- Ввод текста ---
 
 async def enter_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получение текста от пользователя."""
+    """Получение текста от пользователя, предложить выбор срочности."""
     input_text = update.message.text
     context.user_data["input_text"] = input_text
 
+    user = update.effective_user
+    lang = await database.get_client_language(user.id)
     service_type = context.user_data["service_type"]
     service = get_service(service_type)
 
-    # Показ текста для подтверждения
-    preview = input_text[:200] + ("..." if len(input_text) > 200 else "")
+    # Рассчитываем цены для обоих вариантов срочности
+    normal_price = pricing.calculate_price(service_type.value, len(input_text), urgent=False)
+    urgent_price = pricing.calculate_price(service_type.value, len(input_text), urgent=True)
+
     body = [
         f"<b>Услуга:</b> {service.name}",
-        f"<b>Стоимость:</b> {format_number(service.price)} \u20bd",
+        f"<b>Обычный:</b> {format_number(normal_price)} \u20bd",
+        f"<b>Срочный:</b> {format_number(urgent_price)} \u20bd",
+        "",
+        i18n.get_text(lang, "urgency_prompt"),
+    ]
+    text = _card("Срочность", "\u23f0", body)
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                i18n.get_text(lang, "urgency_normal"),
+                callback_data="urgency:normal",
+            ),
+            InlineKeyboardButton(
+                i18n.get_text(lang, "urgency_urgent"),
+                callback_data="urgency:urgent",
+            ),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
+    )
+    return SELECT_URGENCY
+
+
+# --- Выбор срочности ---
+
+async def select_urgency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора срочности, показ подтверждения."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # urgency:normal или urgency:urgent
+    urgent = data == "urgency:urgent"
+    context.user_data["urgent"] = urgent
+
+    user = update.effective_user
+    lang = await database.get_client_language(user.id)
+    service_type = context.user_data["service_type"]
+    input_text = context.user_data["input_text"]
+    service = get_service(service_type)
+
+    # Рассчитываем динамическую цену
+    price = pricing.calculate_price(service_type.value, len(input_text), urgent=urgent)
+    context.user_data["calculated_price"] = price
+
+    # Показ текста для подтверждения
+    preview = input_text[:200] + ("..." if len(input_text) > 200 else "")
+    urgency_label = i18n.get_text(lang, "urgency_urgent") if urgent else i18n.get_text(lang, "urgency_normal")
+    body = [
+        f"<b>Услуга:</b> {service.name}",
+        f"<b>Срочность:</b> {urgency_label}",
+        f"<b>Стоимость:</b> {format_number(price)} \u20bd",
         f"<b>Ваш текст:</b>",
         f"<pre>{html.escape(preview)}</pre>",
         "",
-        "Подтвердите заказ:",
+        i18n.get_text(lang, "confirm_order"),
     ]
     text = _card("Подтверждение", "\u2705", body)
 
@@ -185,7 +257,7 @@ async def enter_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await query.edit_message_text(
         text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
     )
     return CONFIRM_ORDER
@@ -206,68 +278,80 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     user = update.effective_user
+    lang = await database.get_client_language(user.id)
     service_type = context.user_data["service_type"]
     input_text = context.user_data["input_text"]
     service = get_service(service_type)
 
-    # Проверка возможности заказа (подписка или баланс)
-    can_order = await billing.check_can_order(user.id, service.price)
-    if not can_order:
-        balance = await database.get_client_balance(user.id)
-        body = [
-            f"<b>Ваш баланс:</b> {format_number(balance)} \u20bd",
-            f"<b>Стоимость:</b> {format_number(service.price)} \u20bd",
-            f"<b>Не хватает:</b> {format_number(service.price - balance)} \u20bd",
-            "",
-            "Пополните баланс или оформите подписку.",
-        ]
-        text = _card("Недостаточно средств", "\U0001f6ab", body)
-        keyboard = [
-            [InlineKeyboardButton("\U0001f4b3 Пополнить", callback_data="topup")],
-            [InlineKeyboardButton("\U0001f4ab Подписки", callback_data="subscribe")],
-        ]
-        await query.edit_message_text(
-            text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
-        )
-        return ConversationHandler.END
+    # Используем динамическую цену
+    price = context.user_data.get("calculated_price", service.price)
 
-    # Списываем средства (подписка или баланс)
-    charged = await billing.charge_or_use_subscription(user.id, service.price)
-    if not charged:
-        balance = await database.get_client_balance(user.id)
-        body = [
-            f"<b>Ваш баланс:</b> {format_number(balance)} \u20bd",
-            f"<b>Стоимость:</b> {format_number(service.price)} \u20bd",
-            "",
-            "Недостаточно средств. Пополните баланс или оформите подписку.",
-        ]
-        text = _card("Недостаточно средств", "\U0001f6ab", body)
-        keyboard = [
-            [InlineKeyboardButton("\U0001f4b3 Пополнить", callback_data="topup")],
-            [InlineKeyboardButton("\U0001f4ab Подписки", callback_data="subscribe")],
-        ]
-        await query.edit_message_text(
-            text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
-        )
-        return ConversationHandler.END
+    # Проверка бесплатного триала
+    is_free_trial = await billing.check_free_trial(user.id)
+
+    if not is_free_trial:
+        # Проверка возможности заказа (подписка или баланс)
+        can_order = await billing.check_can_order(user.id, price)
+        if not can_order:
+            balance = await database.get_client_balance(user.id)
+            body = [
+                f"<b>Ваш баланс:</b> {format_number(balance)} \u20bd",
+                f"<b>Стоимость:</b> {format_number(price)} \u20bd",
+                f"<b>Не хватает:</b> {format_number(price - balance)} \u20bd",
+                "",
+                i18n.get_text(lang, "insufficient_funds"),
+            ]
+            text = _card("Недостаточно средств", "\U0001f6ab", body)
+            keyboard = [
+                [InlineKeyboardButton("\U0001f4b3 Пополнить", callback_data="topup")],
+                [InlineKeyboardButton("\U0001f4ab Подписки", callback_data="subscribe")],
+            ]
+            await query.edit_message_text(
+                text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+            )
+            return ConversationHandler.END
+
+        # Списываем средства (подписка или баланс)
+        charged = await billing.charge_or_use_subscription(user.id, price)
+        if not charged:
+            balance = await database.get_client_balance(user.id)
+            body = [
+                f"<b>Ваш баланс:</b> {format_number(balance)} \u20bd",
+                f"<b>Стоимость:</b> {format_number(price)} \u20bd",
+                "",
+                i18n.get_text(lang, "insufficient_funds"),
+            ]
+            text = _card("Недостаточно средств", "\U0001f6ab", body)
+            keyboard = [
+                [InlineKeyboardButton("\U0001f4b3 Пополнить", callback_data="topup")],
+                [InlineKeyboardButton("\U0001f4ab Подписки", callback_data="subscribe")],
+            ]
+            await query.edit_message_text(
+                text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML
+            )
+            return ConversationHandler.END
 
     # Создаём заказ
     order_id = await database.create_order(
         client_id=user.id,
         service_type=service_type.value,
         input_text=input_text,
-        price=service.price,
+        price=0.0 if is_free_trial else price,
     )
 
+    # Если это бесплатный триал - отмечаем использованным
+    if is_free_trial:
+        await billing.mark_free_trial_used(user.id)
+
     # Начисляем реферальный бонус при первом заказе
-    await _credit_referral_bonus(user.id, service.price)
+    await _credit_referral_bonus(user.id, price)
 
     # Уведомляем о начале обработки
     processing_body = [
         f"<b>Заказ #{order_id}</b>",
         f"<b>Услуга:</b> {service.name}",
         "",
-        f"{progress_bar(3, 10)} Обработка...",
+        f"{progress_bar(3, 10)} {i18n.get_text(lang, 'order_processing')}",
     ]
     processing_text = _card("Обработка заказа", "\u23f3", processing_body)
     await query.edit_message_text(processing_text, parse_mode=ParseMode.HTML)
@@ -288,7 +372,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             f"<b>Услуга:</b> {service.name}",
             "",
         ]
-        result_card = _card("Заказ выполнен", "\U0001f389", result_body)
+        result_card = _card(i18n.get_text(lang, "order_completed"), "\U0001f389", result_body)
         await query.edit_message_text(result_card, parse_mode=ParseMode.HTML)
 
         # Отправляем результат отдельным сообщением
@@ -301,6 +385,26 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
                 parse_mode=ParseMode.HTML,
             )
 
+        # Кнопки скачивания документов
+        download_keyboard = [
+            [
+                InlineKeyboardButton(
+                    i18n.get_text(lang, "download_docx"),
+                    callback_data=f"download:{order_id}:docx",
+                ),
+                InlineKeyboardButton(
+                    i18n.get_text(lang, "download_pdf"),
+                    callback_data=f"download:{order_id}:pdf",
+                ),
+            ]
+        ]
+        await context.bot.send_message(
+            chat_id=user.id,
+            text="\U0001f4e5 Скачать результат:",
+            reply_markup=InlineKeyboardMarkup(download_keyboard),
+            parse_mode=ParseMode.HTML,
+        )
+
         # Отправляем кнопки оценки
         rating_keyboard = [
             [
@@ -310,20 +414,20 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         ]
         await context.bot.send_message(
             chat_id=user.id,
-            text="\U0001f4dd Оцените результат:",
+            text=i18n.get_text(lang, "rate_prompt"),
             reply_markup=InlineKeyboardMarkup(rating_keyboard),
             parse_mode=ParseMode.HTML,
         )
     else:
         await database.update_order_status(order_id, OrderStatus.FAILED.value)
-        # Возврат средств
-        await billing.top_up_balance(user.id, service.price, method="refund")
+        # Возврат средств (только если не бесплатный триал)
+        if not is_free_trial:
+            await billing.top_up_balance(user.id, price, method="refund")
 
         error_body = [
             f"<b>Заказ #{order_id}</b> {status_indicator('failed')}",
             "",
-            "Произошла ошибка при обработке.",
-            "Средства возвращены на баланс.",
+            i18n.get_text(lang, "order_failed"),
         ]
         error_text = _card("Ошибка", "\u274c", error_body)
         await query.edit_message_text(error_text, parse_mode=ParseMode.HTML)
@@ -663,12 +767,95 @@ async def show_my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END
 
 
+# --- Скачивание документов ---
+
+async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка скачивания документа (.docx или .pdf)."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # download:{order_id}:{format}
+    parts = data.split(":")
+    if len(parts) != 3:
+        return
+
+    try:
+        order_id = int(parts[1])
+        fmt = parts[2]
+    except (ValueError, IndexError):
+        return
+
+    if fmt not in ("docx", "pdf"):
+        return
+
+    # Получаем заказ
+    order = await database.get_order_by_id(order_id)
+    if not order or not order.get("output_text"):
+        await query.edit_message_text(
+            "\u274c Результат заказа не найден.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    user = update.effective_user
+    service_type_value = order["service_type"]
+    try:
+        service_type = ServiceType(service_type_value)
+        service = get_service(service_type)
+        service_name = service.name
+    except (ValueError, KeyError):
+        service_name = service_type_value
+
+    result_text = order["output_text"]
+    date = order.get("completed_at") or order.get("created_at", "")
+
+    try:
+        if fmt == "docx":
+            filepath = await document_generator.generate_docx(
+                order_id, service_name, result_text, date
+            )
+        else:
+            filepath = await document_generator.generate_pdf(
+                order_id, service_name, result_text, date
+            )
+
+        await context.bot.send_document(
+            chat_id=user.id,
+            document=open(filepath, "rb"),
+            filename=f"order_{order_id}.{fmt}",
+        )
+    except Exception as e:
+        logger.error("Ошибка генерации документа: %s", e)
+        await context.bot.send_message(
+            chat_id=user.id,
+            text="\u274c Ошибка генерации документа. Попробуйте позже.",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+# --- Команда /lang ---
+
+async def lang_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Переключение языка интерфейса."""
+    user = update.effective_user
+    current_lang = await database.get_client_language(user.id)
+
+    # Переключаем
+    new_lang = "en" if current_lang == "ru" else "ru"
+    await database.set_client_language(user.id, new_lang)
+
+    text = i18n.get_text(new_lang, "lang_set")
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
 # --- Отмена ---
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отмена текущей операции."""
+    user = update.effective_user
+    lang = await database.get_client_language(user.id)
     await update.message.reply_text(
-        "\u274c Операция отменена. Нажмите /start для начала.",
+        f"\u274c {i18n.get_text(lang, 'cancel')}",
         parse_mode=ParseMode.HTML,
     )
     return ConversationHandler.END
@@ -700,6 +887,9 @@ def create_application() -> Application:
             ENTER_TEXT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, enter_text),
             ],
+            SELECT_URGENCY: [
+                CallbackQueryHandler(select_urgency),
+            ],
             CONFIRM_ORDER: [
                 CallbackQueryHandler(confirm_order),
             ],
@@ -713,6 +903,14 @@ def create_application() -> Application:
     application.add_handler(
         CallbackQueryHandler(handle_rating, pattern=r"^rate:\d+:\d+$")
     )
+
+    # Обработчик скачивания документов
+    application.add_handler(
+        CallbackQueryHandler(handle_download, pattern=r"^download:\d+:(docx|pdf)$")
+    )
+
+    # Команда /lang
+    application.add_handler(CommandHandler("lang", lang_command))
 
     return application
 

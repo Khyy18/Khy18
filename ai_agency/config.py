@@ -40,6 +40,21 @@ BOT_USERNAME: str = os.getenv("BOT_USERNAME", "")
 # Реферальная система
 REFERRAL_BONUS_PERCENT: int = int(os.getenv("REFERRAL_BONUS_PERCENT", "10"))
 
+# White-label персона
+BOT_PERSONA_NAME: str = os.getenv("BOT_PERSONA_NAME", "Алиса")
+BOT_PERSONA_GREETING: str = os.getenv(
+    "BOT_PERSONA_GREETING", "Привет! Я Алиса, ваш персональный менеджер."
+)
+
+# Канал для публикации кейсов
+CHANNEL_ID: str = os.getenv("CHANNEL_ID", "")
+
+# Kwork парсер
+KWORK_KEYWORDS: str = os.getenv("KWORK_KEYWORDS", "копирайтинг,рерайт,SEO,перевод")
+
+# Мульти-бот архитектура (JSON-строка)
+NICHE_BOTS: str = os.getenv("NICHE_BOTS", "[]")
+
 # Подписки
 SUBSCRIPTION_BASIC_PRICE: int = int(os.getenv("SUBSCRIPTION_BASIC_PRICE", "990"))
 SUBSCRIPTION_BASIC_ORDERS: int = int(os.getenv("SUBSCRIPTION_BASIC_ORDERS", "20"))

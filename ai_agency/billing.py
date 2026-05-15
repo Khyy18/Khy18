@@ -82,3 +82,17 @@ async def charge_or_use_subscription(telegram_id: int, price: float) -> bool:
         return True
     # Списываем с баланса
     return await charge_client(telegram_id, price)
+
+
+async def check_free_trial(telegram_id: int) -> bool:
+    """
+    Проверить, доступен ли бесплатный пробный заказ.
+
+    Возвращает True если free_trial_used == 0 (триал не использован).
+    """
+    return not await database.get_client_trial_used(telegram_id)
+
+
+async def mark_free_trial_used(telegram_id: int) -> None:
+    """Отметить бесплатный пробный заказ как использованный."""
+    await database.mark_trial_used(telegram_id)

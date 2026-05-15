@@ -100,6 +100,20 @@ async def init_db() -> None:
             )
         except Exception:
             pass  # Колонка уже существует
+        # Миграция: добавляем free_trial_used если отсутствует
+        try:
+            await db.execute(
+                "ALTER TABLE clients ADD COLUMN free_trial_used INTEGER NOT NULL DEFAULT 0"
+            )
+        except Exception:
+            pass  # Колонка уже существует
+        # Миграция: добавляем language если отсутствует
+        try:
+            await db.execute(
+                "ALTER TABLE clients ADD COLUMN language TEXT NOT NULL DEFAULT 'ru'"
+            )
+        except Exception:
+            pass  # Колонка уже существует
         await db.commit()
 
 
@@ -654,3 +668,49 @@ async def atomic_increment_subscription_usage_unlimited(client_id: int) -> bool:
         success = cursor.rowcount > 0
         await db.commit()
     return success
+
+
+# --- Free Trial ---
+
+async def get_client_trial_used(telegram_id: int) -> bool:
+    """Проверить, использовал ли клиент бесплатный пробный заказ."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "SELECT free_trial_used FROM clients WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        return bool(row[0]) if row else False
+
+
+async def mark_trial_used(telegram_id: int) -> None:
+    """Отметить бесплатный пробный заказ как использованный."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE clients SET free_trial_used = 1 WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        await db.commit()
+
+
+# --- Language ---
+
+async def get_client_language(telegram_id: int) -> str:
+    """Получить язык клиента."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            "SELECT language FROM clients WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else "ru"
+
+
+async def set_client_language(telegram_id: int, lang: str) -> None:
+    """Установить язык клиента."""
+    async with aiosqlite.connect(config.DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE clients SET language = ? WHERE telegram_id = ?",
+            (lang, telegram_id),
+        )
+        await db.commit()
