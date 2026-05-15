@@ -237,6 +237,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
             # 4a. LinePredictor: predict line movement for urgency
             line_predictor = LinePredictor()
             predictions_list: list[dict[str, Any]] = []
+            _lp_degraded = False
             for opp in filtered:
                 details = opp.get("details", {})
                 velocity = details.get("line_velocity", 0.0)
@@ -264,8 +265,14 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                         opp["urgency_factor"] = urgency_factor
                         prediction["event_id"] = event_id
                         predictions_list.append(prediction)
+                        # Detect silent degradation: default values mean AI is unavailable
+                        if prediction.get("direction") == "stable" and prediction.get("confidence", 0) == 0:
+                            _lp_degraded = True
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("LinePredictor ошибка: %s", exc)
+
+            if _lp_degraded:
+                logger.debug("[SCANNER] LinePredictor: AI недоступен, urgency_factor = 1.0")
 
             # Store last 20 predictions in state
             state["line_predictions"] = predictions_list[-20:]
@@ -516,6 +523,9 @@ async def state_saver_loop(state: dict[str, Any]) -> None:
                 memory.save_bot_state("scan_interval_override", str(override))
             else:
                 memory.save_bot_state("scan_interval_override", "")
+            # Persist bankroll so it survives crashes between settlement cycles
+            bankroll = state.get("bankroll", 1000.0)
+            memory.save_bot_state("bankroll", str(bankroll))
             logger.debug("Состояние сохранено в БД")
         except asyncio.CancelledError:
             raise

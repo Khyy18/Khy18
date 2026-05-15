@@ -50,10 +50,10 @@ class NewsScanner:
             logger.debug("NEWS_API_KEY не задан, пропускаем сканирование новостей")
             return []
 
-        url = f"{_NEWS_URL}&apiKey={api_key}"
-
         try:
-            async with session.get(url, timeout=15) as resp:
+            async with session.get(
+                _NEWS_URL, params={"apiKey": api_key}, timeout=15
+            ) as resp:
                 if resp.status != 200:
                     logger.warning("NewsAPI вернул статус %d", resp.status)
                     return []

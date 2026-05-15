@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 import aiohttp
 
-from arbitrage import config, memory
+from arbitrage import config, memory, telegram_bot
 
 # Импорт ai_router из корневого проекта
 _parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -174,9 +174,34 @@ async def optimizer_loop(state: dict[str, Any], session: aiohttp.ClientSession) 
             now = time.time()
 
             if now - last_run >= _OPTIMIZE_INTERVAL_SEC:
+                # Save old values for the notification
+                old_profit = config.MIN_ARB_PROFIT
+                old_edge = config.MIN_VALUE_EDGE
+                old_interval = config.SCAN_INTERVAL_SEC
+
                 result = await optimizer.optimize(session)
                 state["optimizer_last_run_ts"] = now
                 state["optimizer_last_result"] = result
+
+                # Notify operator via Telegram about threshold changes
+                new_profit = result.get("min_arb_profit", old_profit)
+                new_edge = result.get("min_value_edge", old_edge)
+                new_interval = result.get("scan_interval", old_interval)
+                reasoning = result.get("reasoning", "")
+
+                if (new_profit != old_profit or new_edge != old_edge or new_interval != old_interval):
+                    card = (
+                        "<b>AI Optimizer: пороги обновлены</b>\n\n"
+                        f"<code>min_arb_profit: {old_profit:.2f}% -> {new_profit:.2f}%</code>\n"
+                        f"<code>min_value_edge: {old_edge:.2f}% -> {new_edge:.2f}%</code>\n"
+                        f"<code>scan_interval:  {old_interval}s -> {new_interval}s</code>\n\n"
+                        f"<i>{reasoning}</i>"
+                    )
+                    try:
+                        await telegram_bot.send_message(session, card)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("Ошибка отправки уведомления optimizer: %s", exc)
+
                 logger.info("optimizer_loop: оптимизация выполнена")
         except Exception as exc:
             logger.error("optimizer_loop ошибка: %s", exc)
