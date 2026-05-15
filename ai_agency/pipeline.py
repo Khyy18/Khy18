@@ -1,15 +1,19 @@
-"""Пайплайн обработки заказов: вызов OpenAI API с проверками качества."""
+"""Пайплайн обработки заказов: мульти-агентная цепочка Writer->Editor->QA с Groq-фолбэком."""
 
 import logging
-from typing import Optional
+from typing import Optional, List, Dict
 
 from openai import AsyncOpenAI
+from groq import AsyncGroq
 
 import config
 from models import ServiceType
 from services import get_service
 
 logger = logging.getLogger(__name__)
+
+# Услуги, которые обрабатываются в простом режиме (без Editor/QA)
+SIMPLE_SERVICES = {ServiceType.REWRITE, ServiceType.SUMMARY}
 
 
 def _check_quality(text: str, min_words: int, required_keywords: list) -> bool:
@@ -25,75 +29,169 @@ def _check_quality(text: str, min_words: int, required_keywords: list) -> bool:
     return True
 
 
+async def _call_llm(
+    messages: List[Dict[str, str]],
+    temperature: float = 0.7,
+    max_tokens: int = 4000,
+) -> Optional[str]:
+    """
+    Вызвать LLM с фолбэком на Groq.
+
+    Сначала пытается OpenAI, при ошибке переключается на Groq.
+    """
+    # Попытка через OpenAI
+    try:
+        client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+        response = await client.chat.completions.create(
+            model=config.DEFAULT_MODEL,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.warning("OpenAI API ошибка, переключение на Groq: %s", str(e))
+
+    # Фолбэк на Groq
+    if not config.GROQ_API_KEY:
+        logger.error("Groq API ключ не задан, фолбэк невозможен")
+        return None
+
+    try:
+        groq_client = AsyncGroq(api_key=config.GROQ_API_KEY)
+        response = await groq_client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error("Groq API ошибка: %s", str(e))
+        return None
+
+
+async def _writer_agent(system_prompt: str, user_prompt: str) -> Optional[str]:
+    """Агент-писатель: генерирует первоначальный текст."""
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    return await _call_llm(messages)
+
+
+async def _editor_agent(text: str) -> Optional[str]:
+    """Агент-редактор: улучшает стиль и структуру."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a professional editor. Improve the text's style, structure, "
+                "and readability. Fix any grammatical errors. Keep the same language "
+                "as the input text. Do not change the meaning or key information. "
+                "Return only the improved text without explanations."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Отредактируй и улучши следующий текст:\n\n{text}",
+        },
+    ]
+    return await _call_llm(messages, temperature=0.4)
+
+
+async def _qa_agent(original_task: str, text: str) -> Optional[str]:
+    """Агент QA: проверяет на ошибки и соответствие заданию."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a QA reviewer. Check the text for errors, factual accuracy, "
+                "and compliance with the original task. If the text is good, return it "
+                "as-is. If there are issues, fix them and return the corrected version. "
+                "Keep the same language. Return only the final text without explanations."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Задание:\n{original_task}\n\n"
+                f"Текст для проверки:\n{text}\n\n"
+                "Проверь текст на ошибки и соответствие заданию. "
+                "Верни исправленную версию."
+            ),
+        },
+    ]
+    return await _call_llm(messages, temperature=0.3)
+
+
 async def process_order(service_type: ServiceType, input_text: str) -> Optional[str]:
     """
-    Обработать заказ через OpenAI API.
+    Обработать заказ через мульти-агентную цепочку.
 
-    1. Получает определение услуги (промпты, проверки)
-    2. Вызывает OpenAI API
-    3. Проверяет качество результата
-    4. При неудаче повторяет один раз
-    5. Возвращает текст результата или None при ошибке
+    Полный режим (Writer -> Editor -> QA):
+    - Используется для большинства услуг
+
+    Простой режим (только Writer):
+    - Для rewrite и summary (дешевле, быстрее)
+
+    При неудаче проверки качества повторяет Writer один раз.
     """
     service = get_service(service_type)
     quality = service.quality_checks
-
-    client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+    simple_mode = service_type in SIMPLE_SERVICES
 
     user_prompt = service.user_prompt_template.format(input_text=input_text)
-
-    messages = [
-        {"role": "system", "content": service.system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-
     max_attempts = quality.max_retry + 1
 
     for attempt in range(max_attempts):
-        try:
-            response = await client.chat.completions.create(
-                model=config.DEFAULT_MODEL,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=4000,
-            )
-
-            result_text = response.choices[0].message.content.strip()
-
-            # Проверка качества
-            if _check_quality(
-                result_text,
-                quality.min_words,
-                quality.required_keywords,
-            ):
-                return result_text
-
-            # Если качество не прошло и есть повторные попытки
-            if attempt < max_attempts - 1:
-                logger.warning(
-                    "Проверка качества не пройдена для %s, попытка %d/%d",
-                    service_type.value,
-                    attempt + 1,
-                    max_attempts,
-                )
-                # Добавляем инструкцию для улучшения
-                messages.append({"role": "assistant", "content": result_text})
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Текст недостаточно подробный. Пожалуйста, расширь ответ, "
-                        "добавь больше деталей и убедись, что он содержит минимум "
-                        f"{quality.min_words} слов."
-                    ),
-                })
-            else:
-                # Последняя попытка - возвращаем что есть
-                return result_text
-
-        except Exception as e:
-            logger.error("Ошибка вызова OpenAI API: %s", str(e))
+        # 1. Writer agent
+        result_text = await _writer_agent(service.system_prompt, user_prompt)
+        if not result_text:
             if attempt < max_attempts - 1:
                 continue
             return None
+
+        # Простой режим - пропускаем Editor и QA
+        if simple_mode:
+            if _check_quality(result_text, quality.min_words, quality.required_keywords):
+                return result_text
+            if attempt < max_attempts - 1:
+                logger.warning(
+                    "Проверка качества не пройдена для %s (простой режим), попытка %d/%d",
+                    service_type.value, attempt + 1, max_attempts,
+                )
+                user_prompt = (
+                    f"{user_prompt}\n\nПредыдущий результат был недостаточно подробным. "
+                    f"Расширь ответ, минимум {quality.min_words} слов."
+                )
+                continue
+            return result_text
+
+        # 2. Editor agent
+        edited_text = await _editor_agent(result_text)
+        if not edited_text:
+            edited_text = result_text  # используем текст писателя если редактор упал
+
+        # 3. QA agent
+        final_text = await _qa_agent(input_text, edited_text)
+        if not final_text:
+            final_text = edited_text  # используем текст редактора если QA упал
+
+        # Проверка качества
+        if _check_quality(final_text, quality.min_words, quality.required_keywords):
+            return final_text
+
+        if attempt < max_attempts - 1:
+            logger.warning(
+                "Проверка качества не пройдена для %s, попытка %d/%d",
+                service_type.value, attempt + 1, max_attempts,
+            )
+            user_prompt = (
+                f"{user_prompt}\n\nПредыдущий результат был недостаточно подробным. "
+                f"Расширь ответ, минимум {quality.min_words} слов."
+            )
+        else:
+            return final_text
 
     return None

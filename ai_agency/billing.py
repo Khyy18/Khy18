@@ -1,9 +1,10 @@
-"""Модуль биллинга AI-агентства: проверка баланса, списание, пополнение."""
+"""Модуль биллинга AI-агентства: проверка баланса, списание, пополнение, подписки."""
 
 import aiosqlite
 
 import config
 import database
+import subscriptions
 
 
 async def check_balance(telegram_id: int, amount: float) -> bool:
@@ -49,3 +50,34 @@ async def top_up_balance(telegram_id: int, amount: float, method: str = "manual"
     await database.add_payment(telegram_id, amount, method)
     new_balance = await database.get_client_balance(telegram_id)
     return new_balance
+
+
+async def check_can_order(telegram_id: int, price: float) -> bool:
+    """
+    Проверить, может ли клиент оформить заказ.
+
+    Сначала проверяет подписку (если активна и лимит не исчерпан - True).
+    Если нет подписки - проверяет баланс.
+    """
+    # Проверяем подписку
+    if await subscriptions.can_place_order(telegram_id):
+        return True
+    # Нет подписки или лимит исчерпан - проверяем баланс
+    balance = await database.get_client_balance(telegram_id)
+    return balance >= price
+
+
+async def charge_or_use_subscription(telegram_id: int, price: float) -> bool:
+    """
+    Списать средства: подписка или баланс.
+
+    Если есть активная подписка с доступным лимитом - инкрементирует usage.
+    Иначе списывает с баланса.
+    Возвращает True если успешно, False если недостаточно средств.
+    """
+    # Пробуем использовать подписку
+    if await subscriptions.can_place_order(telegram_id):
+        await subscriptions.increment_subscription_usage(telegram_id)
+        return True
+    # Списываем с баланса
+    return await charge_client(telegram_id, price)
