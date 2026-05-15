@@ -117,6 +117,49 @@ async def register(
     )
     session.add(user)
     await session.flush()
+
+    # Create Stripe customer and subscription (graceful - log warning if fails)
+    stripe_customer_id = None
+    try:
+        from integrations.billing import StripeClient
+
+        stripe_client = StripeClient(secret_key=settings.stripe_secret_key)
+        customer = await stripe_client.create_customer(
+            email=data.email,
+            name=data.tenant_name,
+            metadata={"tenant_id": str(tenant.id)},
+        )
+        if "error" not in customer:
+            stripe_customer_id = customer.get("id")
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Failed to create Stripe customer for %s: %s", data.email, exc
+        )
+
+    # Create default subscription with starter plan
+    try:
+        from core.models import Plan, PlanName, Subscription, SubscriptionStatus
+
+        plan_result = await session.execute(
+            select(Plan).where(Plan.name == PlanName.starter)
+        )
+        starter_plan = plan_result.scalar_one_or_none()
+        if starter_plan:
+            subscription = Subscription(
+                tenant_id=tenant.id,
+                plan_id=starter_plan.id,
+                stripe_customer_id=stripe_customer_id,
+                status=SubscriptionStatus.trialing,
+            )
+            session.add(subscription)
+            await session.flush()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Failed to create default subscription for %s: %s", data.email, exc
+        )
+
     await session.refresh(user)
     return user
 

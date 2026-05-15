@@ -191,6 +191,25 @@ class SequenceRunner:
         step_config: dict[str, Any],
     ) -> None:
         """Generate and send the message for a step, then record in DB."""
+        # Check email usage limit before sending
+        from compliance.usage_limiter import UsageLimiter
+        from core.config import settings
+
+        usage_limiter = UsageLimiter(redis_url=settings.redis_url)
+        try:
+            allowed = await usage_limiter.check_and_increment(
+                str(campaign.tenant_id), "emails"
+            )
+            if not allowed:
+                logger.warning(
+                    "Email usage limit reached for tenant %s, skipping send to %s",
+                    campaign.tenant_id,
+                    lead.email,
+                )
+                return
+        finally:
+            await usage_limiter.close()
+
         step_type = step_config.get("step_type", "initial")
 
         # Build lead dict for copywriter

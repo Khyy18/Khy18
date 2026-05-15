@@ -25,11 +25,15 @@ class LinkedInActions:
         anti_detection: AntiDetection,
         session_pool: SessionPool,
         rate_limiter: RateLimiter,
+        usage_limiter: Any | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         self._browser = browser
         self._anti = anti_detection
         self._pool = session_pool
         self._rate_limiter = rate_limiter
+        self._usage_limiter = usage_limiter
+        self._tenant_id = tenant_id
 
     async def _check_and_handle_challenge(self) -> bool:
         """Check for challenges and pause if detected. Returns True if challenge found."""
@@ -98,6 +102,14 @@ class LinkedInActions:
         """View a LinkedIn profile with human-like scrolling and random pauses."""
         account_id = self._browser._account_id
 
+        # Check tenant usage limit
+        if self._usage_limiter and self._tenant_id:
+            allowed = await self._usage_limiter.check_and_increment(
+                self._tenant_id, "linkedin"
+            )
+            if not allowed:
+                return {"success": False, "reason": "usage_limit_exceeded"}
+
         # Check rate limit
         allowed = await self._rate_limiter.check_rate_limit(
             f"linkedin:rate:{account_id}:profile_view", 50, 86400
@@ -125,6 +137,14 @@ class LinkedInActions:
     ) -> dict[str, Any]:
         """Visit a profile and send a connection request with optional note."""
         account_id = self._browser._account_id
+
+        # Check tenant usage limit
+        if self._usage_limiter and self._tenant_id:
+            allowed = await self._usage_limiter.check_and_increment(
+                self._tenant_id, "linkedin"
+            )
+            if not allowed:
+                return {"success": False, "reason": "usage_limit_exceeded"}
 
         # Check rate limit
         allowed = await self._rate_limiter.check_rate_limit(
@@ -177,6 +197,14 @@ class LinkedInActions:
     async def send_message(self, url: str, text: str) -> dict[str, Any]:
         """Send a message to a 1st-degree connection."""
         account_id = self._browser._account_id
+
+        # Check tenant usage limit
+        if self._usage_limiter and self._tenant_id:
+            allowed = await self._usage_limiter.check_and_increment(
+                self._tenant_id, "linkedin"
+            )
+            if not allowed:
+                return {"success": False, "reason": "usage_limit_exceeded"}
 
         # Check rate limit
         allowed = await self._rate_limiter.check_rate_limit(

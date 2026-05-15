@@ -92,3 +92,9 @@ async def analytics_page(request: Request):
 async def optimizer_page(request: Request):
     """Render the optimizer page."""
     return templates.TemplateResponse("optimizer.html", {"request": request})
+
+
+@router.get("/billing", response_class=HTMLResponse)
+async def billing_page(request: Request):
+    """Render the billing page."""
+    return templates.TemplateResponse("billing.html", {"request": request})

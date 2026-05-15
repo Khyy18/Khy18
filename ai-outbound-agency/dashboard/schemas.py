@@ -234,3 +234,65 @@ class SuggestionResponse(BaseModel):
 
 class SendTimeResponse(BaseModel):
     optimal_times: list[dict[str, Any]]
+
+
+# ---------- Billing Schemas ----------
+
+
+class PlanResponse(BaseModel):
+    id: UUID
+    name: str
+    leads_limit: int
+    emails_limit: int
+    linkedin_limit: int
+    campaigns_limit: int
+    price_cents: int
+    stripe_price_id: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubscriptionResponse(BaseModel):
+    id: UUID
+    plan: PlanResponse
+    status: str
+    stripe_subscription_id: Optional[str] = None
+    current_period_start: Optional[datetime] = None
+    current_period_end: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsageResponse(BaseModel):
+    leads_used: int
+    leads_limit: int
+    emails_used: int
+    emails_limit: int
+    linkedin_used: int
+    linkedin_limit: int
+    campaigns_active: int
+    campaigns_limit: int
+    period_start: Optional[str] = None
+
+
+class CheckoutSessionResponse(BaseModel):
+    checkout_url: str
+
+
+class ChangePlanRequest(BaseModel):
+    plan_id: UUID
+
+
+class SubscribeRequest(BaseModel):
+    plan_id: UUID
+    success_url: str
+    cancel_url: str
+
+
+class InvoiceResponse(BaseModel):
+    id: str
+    amount_due: int
+    status: str
+    created: datetime
+    hosted_invoice_url: Optional[str] = None

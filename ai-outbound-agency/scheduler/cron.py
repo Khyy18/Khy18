@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
 
 from scheduler.sequence_runner import SequenceRunner
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 _SEQUENCE_INTERVAL = 300   # 5 minutes
 _WARMUP_INTERVAL = 900     # 15 minutes
 _OPTIMIZER_INTERVAL = 3600  # 1 hour
+_USAGE_RESET_INTERVAL = 86400  # 24 hours (checks daily if 1st of month)
 
 
 class Scheduler:
@@ -29,10 +31,12 @@ class Scheduler:
         sequence_runner: SequenceRunner,
         warmup_scheduler: WarmupScheduler,
         optimizer: OptimizerAgent | None = None,
+        redis_url: str = "",
     ) -> None:
         self._sequence_runner = sequence_runner
         self._warmup_scheduler = warmup_scheduler
         self._optimizer = optimizer
+        self._redis_url = redis_url
         self._tasks: list[asyncio.Task[None]] = []
 
     async def start(self) -> None:
@@ -67,6 +71,18 @@ class Scheduler:
             )
             self._tasks.append(optimizer_task)
 
+        # Monthly usage reset task (checks daily, resets on 1st of month)
+        if self._redis_url:
+            usage_reset_task = asyncio.create_task(
+                self._run_loop(
+                    self._monthly_usage_reset_tick,
+                    _USAGE_RESET_INTERVAL,
+                    "usage_reset",
+                ),
+                name="scheduler:usage_reset",
+            )
+            self._tasks.append(usage_reset_task)
+
         logger.info("Scheduler started with %d background tasks", len(self._tasks))
 
     async def stop(self) -> None:
@@ -99,6 +115,16 @@ class Scheduler:
             return
         await self._optimizer.auto_check_and_promote()
 
+    async def _monthly_usage_reset_tick(self) -> None:
+        """Check if today is the 1st of the month; if so, reset all tenant usage."""
+        now = datetime.now(timezone.utc)
+        if now.day != 1:
+            logger.debug("Not the 1st of the month (day=%d), skipping usage reset", now.day)
+            return
+
+        logger.info("Monthly usage reset: resetting all tenant usage counters")
+        await monthly_usage_reset(self._redis_url)
+
     async def _run_loop(
         self,
         coro_factory: Callable[[], Awaitable[None]],
@@ -126,3 +152,28 @@ class Scheduler:
             except asyncio.CancelledError:
                 logger.info("Loop '%s' cancelled during sleep", name)
                 raise
+
+
+async def monthly_usage_reset(redis_url: str) -> None:
+    """Reset usage counters for all tenants. Called on the 1st of each month.
+
+    Scans Redis for all usage keys and deletes them to start a fresh period.
+    """
+    from compliance.usage_limiter import UsageLimiter
+
+    limiter = UsageLimiter(redis_url=redis_url)
+    try:
+        # Scan for all usage keys and delete them
+        pattern = "usage:*"
+        cursor = 0
+        deleted_count = 0
+        while True:
+            cursor, keys = await limiter._redis.scan(cursor=cursor, match=pattern, count=100)
+            if keys:
+                await limiter._redis.delete(*keys)
+                deleted_count += len(keys)
+            if cursor == 0:
+                break
+        logger.info("Monthly usage reset complete: deleted %d usage keys", deleted_count)
+    finally:
+        await limiter.close()

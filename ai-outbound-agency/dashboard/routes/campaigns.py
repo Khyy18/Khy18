@@ -30,6 +30,32 @@ async def create_campaign(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(_get_session),
 ) -> Campaign:
+    # Check campaign limit for the tenant
+    from compliance.usage_limiter import UsageLimiter
+    from core.config import settings
+
+    usage_limiter = UsageLimiter(redis_url=settings.redis_url)
+    try:
+        # Count existing active campaigns
+        active_count_result = await session.execute(
+            select(func.count()).select_from(Campaign).where(
+                Campaign.tenant_id == current_user.tenant_id,
+                Campaign.status == CampaignStatus.active,
+            )
+        )
+        active_count = active_count_result.scalar() or 0
+
+        usage = await usage_limiter.get_usage(str(current_user.tenant_id))
+        campaigns_limit = usage["campaigns"]["limit"]
+
+        if campaigns_limit != -1 and active_count >= campaigns_limit:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Campaign limit exceeded for your plan",
+            )
+    finally:
+        await usage_limiter.close()
+
     campaign = Campaign(
         tenant_id=current_user.tenant_id,
         name=data.name,
