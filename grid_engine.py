@@ -450,7 +450,7 @@ async def _check_fills_and_counter(
 
             # PnL: разница между buy и sell fill минус комиссии с обеих сторон
             # Один grid-цикл завершён = buy + sell. Считаем profit за цикл.
-            notional = lv.qty * lv.price
+            notional = lv.qty * lv.fill_price
             fees_one_side = notional * fee_rate
             profit = notional * cfg.GRID_STEP_PCT - fees_one_side * 2
             capital_allocator.record_pnl(state, "grid", profit)

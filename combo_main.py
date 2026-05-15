@@ -436,10 +436,14 @@ async def main() -> None:
         )
 
         # Запускаем параллельно: main loop + Telegram polling
-        await asyncio.gather(
+        results = await asyncio.gather(
             _main_loop(session, state),
             combo_telegram.polling_loop(session, state),
+            return_exceptions=True,
         )
+        for r in results:
+            if isinstance(r, Exception):
+                print(f"[COMBO] Task failed: {r}")
 
 
 if __name__ == "__main__":

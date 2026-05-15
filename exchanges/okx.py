@@ -142,7 +142,7 @@ class OKXAdapter(ExchangeAdapter):
 
     def _sign(self, ts: str, method: str, path_with_query: str, body: str) -> str:
         prehash = ts + method.upper() + path_with_query + (body or "")
-        digest = hmac.new(
+        digest = hmac.HMAC(
             self.api_secret.encode("utf-8"),
             prehash.encode("utf-8"),
             hashlib.sha256,
