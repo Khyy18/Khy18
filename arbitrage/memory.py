@@ -282,6 +282,24 @@ def get_active_arbs() -> list[dict[str, Any]]:
         return []
 
 
+def get_active_exposure() -> float:
+    """Получить текущую экспозицию: сумма stakes по ставкам с result='PENDING'."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(stake), 0.0) AS total_staked
+                FROM bets
+                WHERE result = 'PENDING'
+                """
+            ).fetchone()
+            if row:
+                return float(row["total_staked"])
+    except sqlite3.Error as exc:
+        print(f"[ARB_MEMORY] Ошибка чтения экспозиции: {exc}")
+    return 0.0
+
+
 def get_recent_bets(limit: int = 20) -> list[dict[str, Any]]:
     """Получить последние N ставок."""
     try:

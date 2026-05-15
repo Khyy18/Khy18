@@ -13,10 +13,15 @@ from typing import Any, Optional
 import aiohttp
 
 # Импорт ai_router из корневого проекта
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import ai_router  # noqa: E402
+_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _parent not in sys.path:
+    sys.path.insert(0, _parent)
+try:
+    import ai_router
+except ImportError:
+    ai_router = None  # type: ignore
 
-from arbitrage import config  # noqa: E402
+from arbitrage import config
 
 
 # Максимальная доля банкролла на одну ставку (%)
@@ -70,13 +75,23 @@ class BankrollAllocator:
         max_stake = bankroll * (MAX_BET_PCT / 100.0)
 
         for opp in opportunities:
-            odds = float(opp.get("best_odds", opp.get("odds", 2.0)))
-            win_prob = float(opp.get("win_prob", opp.get("implied_prob", 0.5)))
+            sizing_mode = opp.get("sizing_mode", "kelly")
 
-            kf = kelly_fraction(odds, win_prob)
-            # Half-Kelly для консервативности
-            half_kelly = kf / 2.0
-            stake = bankroll * half_kelly
+            if sizing_mode == "surebet":
+                # Fix 1: Surebets - размер по profit_pct, не Kelly
+                profit_pct = float(opp.get("profit_pct", 0.0))
+                stake = bankroll * (MAX_BET_PCT / 100.0) * min(profit_pct / 10.0, 1.0)
+                kf = 0.0  # Kelly не применяется
+            else:
+                # Value bets - стандартный Kelly
+                odds = float(opp.get("best_odds", opp.get("odds", 2.0)))
+                win_prob = float(opp.get("win_prob", opp.get("implied_prob", 0.5)))
+
+                kf = kelly_fraction(odds, win_prob)
+                # Half-Kelly для консервативности
+                half_kelly = kf / 2.0
+                stake = bankroll * half_kelly
+
             # Ограничение максимальной ставки
             stake = min(stake, max_stake)
 
@@ -142,6 +157,8 @@ class BankrollAllocator:
         )
 
         try:
+            if ai_router is None:
+                return None
             resp = await ai_router.call_llm_json(
                 self._session,
                 prompt,

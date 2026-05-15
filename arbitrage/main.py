@@ -69,6 +69,24 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 await asyncio.sleep(config.SCAN_INTERVAL_SEC)
                 continue
 
+            # Fix 2: Сброс экспозиции на основе активных ставок в БД
+            state["exposure"] = memory.get_active_exposure()
+
+            # Fix 4: Проверка лимита экспозиции
+            max_exposure = state.get("bankroll", 1000.0) * config.MAX_BANKROLL_EXPOSURE / 100.0
+            if state.get("exposure", 0.0) >= max_exposure:
+                print("[SCANNER] Достигнут лимит экспозиции, пропуск цикла")
+                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                continue
+
+            # Fix 5: Проверка окна ставок
+            start_h, end_h = anti_ban.get_betting_window()
+            current_hour = datetime.now(timezone.utc).hour
+            if not (start_h <= current_hour < end_h):
+                print(f"[SCANNER] Вне окна ставок ({start_h}:00-{end_h}:00 UTC), пропуск")
+                await asyncio.sleep(config.SCAN_INTERVAL_SEC)
+                continue
+
             print(f"[SCANNER] Сканирование начато: {datetime.now(timezone.utc).isoformat()}")
 
             # 1. Получить коэффициенты для всех спортов
@@ -114,6 +132,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                     "home": opp.home,
                     "away": opp.away,
                     "event_name": opp.event_name,
+                    "details": getattr(opp, "details", {}),
                 }
                 try:
                     evaluation = await ai_filter.evaluate(opp_dict)
@@ -124,7 +143,15 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 ai_score = evaluation.get("score", 50)
                 if ai_score > 60:
                     opp_dict["ai_score"] = ai_score
-                    opp_dict["win_prob"] = ai_score / 100.0
+                    # Fix 1: Для surebets - не используем Kelly, для value bets - sharp_prob
+                    if opp_dict["type"] == "surebet":
+                        # Surebets: размер по profit_pct, не Kelly
+                        opp_dict["sizing_mode"] = "surebet"
+                    else:
+                        # Value bets: используем sharp_prob как win_prob
+                        sharp_prob = opp_dict.get("details", {}).get("sharp_prob", 0.5)
+                        opp_dict["win_prob"] = sharp_prob
+                        opp_dict["sizing_mode"] = "kelly"
                     opp_dict["best_odds"] = opp.odds[0] if opp.odds else 2.0
                     filtered.append(opp_dict)
 
@@ -170,6 +197,8 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                 for i, alloc in enumerate(valid_allocations):
                     opp = alloc.get("opportunity", {})
                     ai_score = opp.get("ai_score", 0)
+                    # Fix 3: Корректный статус
+                    status = "SIMULATED" if config.DRY_RUN else "PENDING"
                     arb_id = memory.record_arb(
                         sport=opp.get("sport", ""),
                         event=opp.get("event", ""),
@@ -179,7 +208,7 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                         profit_pct=opp.get("profit_pct", 0.0),
                         edge_pct=opp.get("edge_pct", 0.0),
                         ai_score=ai_score,
-                        status="EXECUTED" if config.DRY_RUN else "EXECUTED",
+                        status=status,
                     )
 
                     if i < len(results):
@@ -207,12 +236,6 @@ async def scanner_loop(state: dict[str, Any], session: aiohttp.ClientSession) ->
                             )
                         except Exception as exc:  # noqa: BLE001
                             print(f"[SCANNER] Ошибка отправки алерта: {exc}")
-
-                # Обновить экспозицию
-                total_staked = sum(
-                    a.get("stake_amount", 0.0) for a in valid_allocations
-                )
-                state["exposure"] = state.get("exposure", 0.0) + total_staked
 
             print(f"[SCANNER] Цикл завершён. Исполнено: {len(valid_allocations)}")
 

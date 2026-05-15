@@ -6,11 +6,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Any
 
 from arbitrage import config
+
+logger = logging.getLogger(__name__)
 
 
 # Статусы ставок
@@ -64,7 +67,10 @@ class BetExecutor:
                     "ts": ts,
                 }
             else:
-                # Реальное исполнение (placeholder)
+                logger.warning(
+                    "[EXECUTOR] Попытка реального исполнения - "
+                    "live режим не реализован полностью"
+                )
                 bet_result = await self._place_bet(
                     bookmaker, event, outcome, stake, odds
                 )
@@ -87,9 +93,10 @@ class BetExecutor:
 
         TODO: Интеграция с API каждого букмекера.
         """
-        print(
-            f"[EXECUTOR] REAL BET: ставка {stake} @ {odds} "
-            f"на {outcome} ({bookmaker}) - НЕ РЕАЛИЗОВАНО"
+        logger.warning(
+            "[EXECUTOR] Реальное исполнение не реализовано: "
+            "ставка %.2f @ %.2f на %s (%s)",
+            stake, odds, outcome, bookmaker,
         )
         return {
             "bookmaker": bookmaker,
@@ -97,7 +104,7 @@ class BetExecutor:
             "outcome": outcome,
             "stake": stake,
             "odds": odds,
-            "status": STATUS_FAILED,
+            "status": "NOT_IMPLEMENTED",
             "error": "Реальное исполнение не реализовано",
         }
 

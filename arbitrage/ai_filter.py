@@ -14,8 +14,13 @@ from typing import Any, Optional
 import aiohttp
 
 # Импорт ai_router из корневого проекта
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import ai_router  # noqa: E402
+_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _parent not in sys.path:
+    sys.path.insert(0, _parent)
+try:
+    import ai_router
+except ImportError:
+    ai_router = None  # type: ignore
 
 
 # TTL кэша результатов (секунды)
@@ -68,6 +73,15 @@ class ArbFilter:
             return cached
 
         prompt = self._build_prompt(opportunity)
+
+        if ai_router is None:
+            result = {
+                "score": 50,
+                "reasoning": "ai_router недоступен (не установлен)",
+                "is_live": False,
+            }
+            self._set_cached(cache_key, result)
+            return result
 
         try:
             resp = await ai_router.call_llm_json(
