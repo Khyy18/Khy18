@@ -6,11 +6,16 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from typing import Any, Optional
 
 import aiohttp
+
+from arbitrage.dynamic_kelly import DynamicKelly
+
+logger = logging.getLogger(__name__)
 
 # Импорт ai_router из корневого проекта
 _parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,6 +56,7 @@ class BankrollAllocator:
     def __init__(self, session: aiohttp.ClientSession, bankroll: float = 1000.0) -> None:
         self._session = session
         self._bankroll = bankroll
+        self._dynamic_kelly = DynamicKelly()
 
     async def allocate(
         self,
@@ -130,6 +136,14 @@ class BankrollAllocator:
 
             allocations.append(alloc_entry)
 
+        # Dynamic Kelly reduction
+        kelly_state = self._build_kelly_state(bankroll)
+        reduction_factor = self._dynamic_kelly.get_reduction_factor(kelly_state)
+        if reduction_factor < 1.0:
+            for alloc in allocations:
+                alloc["stake_amount"] = round(alloc["stake_amount"] * reduction_factor, 2)
+            logger.info("[AI_ALLOCATOR] Kelly reduction factor: %.3f", reduction_factor)
+
         # AI-коррекция портфеля
         ai_adjustments = await self._get_ai_adjustments(allocations, bankroll)
         if ai_adjustments:
@@ -198,3 +212,32 @@ class BankrollAllocator:
         except Exception as exc:
             print(f"[AI_ALLOCATOR] Ошибка AI-коррекции: {exc}")
             return None
+
+    def _build_kelly_state(self, bankroll: float) -> dict[str, Any]:
+        """Build state dict for DynamicKelly from recent bets."""
+        from arbitrage import memory
+
+        recent = memory.get_recent_bets(50)
+        pnls = [float(b.get("pnl") or 0.0) for b in recent if b.get("pnl") is not None]
+
+        # Calculate HWM (high water mark)
+        hwm = bankroll
+        running = bankroll
+        for p in pnls:
+            running += p
+            hwm = max(hwm, running)
+
+        # Count losing streak (from most recent)
+        losing_streak = 0
+        for p in pnls:
+            if p < 0:
+                losing_streak += 1
+            else:
+                break
+
+        return {
+            "hwm": hwm,
+            "current_bankroll": bankroll,
+            "recent_pnls": pnls,
+            "losing_streak": losing_streak,
+        }
