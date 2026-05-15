@@ -212,14 +212,14 @@ GRID_REINVEST_PCT = float(os.getenv("GRID_REINVEST_PCT", "0.5") or 0.5)
 
 # --- Momentum: Regime-adaptive parameters ---
 
-# Mean-Reversion RSI thresholds (used when ADX < 20)
+# Mean-Reversion RSI thresholds (used when ADX < ADX_RANGE_THRESHOLD)
 MOMENTUM_MR_RSI_OVERSOLD = float(os.getenv("MOMENTUM_MR_RSI_OVERSOLD", "25") or 25)
 MOMENTUM_MR_RSI_OVERBOUGHT = float(os.getenv("MOMENTUM_MR_RSI_OVERBOUGHT", "75") or 75)
 MOMENTUM_MR_SL_PCT = float(os.getenv("MOMENTUM_MR_SL_PCT", "0.015") or 0.015)
 MOMENTUM_MR_TP_RSI_EXIT = float(os.getenv("MOMENTUM_MR_TP_RSI_EXIT", "55") or 55)
 MOMENTUM_MR_MAX_HOLD_BARS = int(os.getenv("MOMENTUM_MR_MAX_HOLD_BARS", "20") or 20)
 
-# Breakout parameters (used when ADX >= 25)
+# Breakout parameters (used when ADX >= ADX_TREND_THRESHOLD)
 MOMENTUM_BO_LOOKBACK = int(os.getenv("MOMENTUM_BO_LOOKBACK", "20") or 20)
 MOMENTUM_BO_MIN_VOL_RATIO = float(os.getenv("MOMENTUM_BO_MIN_VOL_RATIO", "1.5") or 1.5)
 MOMENTUM_BO_SL_PCT = float(os.getenv("MOMENTUM_BO_SL_PCT", "0.02") or 0.02)
@@ -228,8 +228,10 @@ MOMENTUM_BO_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_BO_TRAIL_DISTANCE_PCT
 MOMENTUM_BO_MAX_HOLD_BARS = int(os.getenv("MOMENTUM_BO_MAX_HOLD_BARS", "96") or 96)
 
 # ADX thresholds for regime routing
-MOMENTUM_ADX_RANGE_THRESHOLD = float(os.getenv("MOMENTUM_ADX_RANGE_THRESHOLD", "20") or 20)
-MOMENTUM_ADX_TREND_THRESHOLD = float(os.getenv("MOMENTUM_ADX_TREND_THRESHOLD", "25") or 25)
+# ADX < 25: mean-reversion (бэктест: +3.7% за 60д, 65% WR)
+MOMENTUM_ADX_RANGE_THRESHOLD = float(os.getenv("MOMENTUM_ADX_RANGE_THRESHOLD", "25") or 25)
+# ADX >= 50: breakout (отключён по умолчанию — ложные пробои убыточны на choppy рынке)
+MOMENTUM_ADX_TREND_THRESHOLD = float(os.getenv("MOMENTUM_ADX_TREND_THRESHOLD", "50") or 50)
 
 
 # ─── Валидация ────────────────────────────────────────────────────────

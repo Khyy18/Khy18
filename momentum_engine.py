@@ -365,7 +365,7 @@ async def _process_symbol(
                 signal = "SHORT"
                 strategy_type = "BO"
     else:
-        # Dead zone: 20 <= ADX < 25
+        # Dead zone: ADX_RANGE_THRESHOLD <= ADX < ADX_TREND_THRESHOLD
         return f"ADX dead zone ({adx:.1f}), skip"
 
     if signal is None:

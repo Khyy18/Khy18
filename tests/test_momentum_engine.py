@@ -220,7 +220,7 @@ def test_calc_rsi_insufficient_data():
 
 @pytest.mark.asyncio
 async def test_regime_routing_ranging():
-    """Mean-Reversion: ADX < 20 and RSI < oversold -> LONG MR."""
+    """Mean-Reversion: ADX < 25 and RSI < oversold -> LONG MR."""
     import unittest.mock as mock
 
     state = _make_state()
@@ -258,7 +258,7 @@ async def test_regime_routing_ranging():
 
 @pytest.mark.asyncio
 async def test_regime_routing_trending():
-    """Breakout: ADX >= 25, price breaks 20-bar high with volume."""
+    """Breakout: ADX >= 50, price breaks 20-bar high with volume."""
     import unittest.mock as mock
 
     state = _make_state()
@@ -293,7 +293,7 @@ async def test_regime_routing_trending():
 
     session = mock.AsyncMock()
 
-    with mock.patch("momentum_engine.calc_adx", return_value=30.0), \
+    with mock.patch("momentum_engine.calc_adx", return_value=55.0), \
          mock.patch("momentum_engine.calc_rsi", return_value=55.0):
         result = await momentum_engine._process_symbol(session, state, adapter, "BTCUSDT")
 
@@ -304,7 +304,7 @@ async def test_regime_routing_trending():
 
 @pytest.mark.asyncio
 async def test_regime_routing_deadzone():
-    """ADX between 20 and 25 -> dead zone, skip."""
+    """ADX between 25 and 50 -> dead zone, skip."""
     import unittest.mock as mock
 
     state = _make_state()
@@ -324,7 +324,7 @@ async def test_regime_routing_deadzone():
 
     session = mock.AsyncMock()
 
-    with mock.patch("momentum_engine.calc_adx", return_value=22.0), \
+    with mock.patch("momentum_engine.calc_adx", return_value=35.0), \
          mock.patch("momentum_engine.calc_rsi", return_value=50.0):
         result = await momentum_engine._process_symbol(session, state, adapter, "BTCUSDT")
 
