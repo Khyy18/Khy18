@@ -1,0 +1,46 @@
+"""FastAPI приложение для Mini App."""
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from ai_office.core.database import init_db
+from ai_office.api.routes.agents import router as agents_router
+from ai_office.api.routes.tasks import router as tasks_router
+from ai_office.api.routes.activity import router as activity_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Контекст жизненного цикла приложения - создание таблиц при старте."""
+    await init_db()
+    yield
+
+
+app = FastAPI(
+    title="AI Office API",
+    description="API для Telegram Mini App - управление агентами и задачами",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# CORS для Mini App (разрешаем все origins)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Подключение роутеров
+app.include_router(agents_router)
+app.include_router(tasks_router)
+app.include_router(activity_router)
+
+
+@app.get("/api/health")
+async def health_check():
+    """Проверка здоровья сервиса."""
+    return {"status": "ok", "service": "ai_office"}

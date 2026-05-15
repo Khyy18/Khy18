@@ -1,1 +1,5 @@
-# Telegram-интеграция (будет реализовано в FEAT-002)
+"""Telegram-интеграция: клиент, обработчики, утилиты."""
+
+from ai_office.telegram.client import TelegramClient
+
+__all__ = ["TelegramClient"]
