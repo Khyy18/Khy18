@@ -26,6 +26,7 @@ from dashboard.routes.analytics import router as analytics_router
 from dashboard.routes.optimizer import router as optimizer_router
 from dashboard.routes.billing import router as billing_router
 from dashboard.views import router as views_router
+from agents.approval_queue import router as approvals_router
 
 # Initialize structured logging
 setup_logging()
@@ -203,6 +204,7 @@ app.include_router(sequences_router)
 app.include_router(analytics_router)
 app.include_router(optimizer_router)
 app.include_router(billing_router)
+app.include_router(approvals_router)
 app.include_router(views_router)
 
 # Mount static files

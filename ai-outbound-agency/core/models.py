@@ -78,6 +78,13 @@ class ABTestStatus(str, enum.Enum):
     paused = "paused"
 
 
+class ApprovalStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    expired = "expired"
+
+
 class SubscriptionStatus(str, enum.Enum):
     active = "active"
     past_due = "past_due"
@@ -153,6 +160,7 @@ class Lead(Base):
 
     tenant = relationship("Tenant", back_populates="leads")
     messages = relationship("Message", back_populates="lead")
+    pending_approvals = relationship("PendingApproval", back_populates="lead")
 
 
 class Sequence(Base):
@@ -295,3 +303,19 @@ class UsageRecord(Base):
     updated_at = Column(DateTime(timezone=True), default=_utcnow)
 
     tenant = relationship("Tenant", back_populates="usage_records")
+
+
+class PendingApproval(Base):
+    __tablename__ = "pending_approvals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False)
+    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.id"), nullable=True)
+    proposed_response = Column(JSONB, nullable=False)
+    status = Column(Enum(ApprovalStatus), default=ApprovalStatus.pending, nullable=False)
+    reviewer_notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
+    lead = relationship("Lead", back_populates="pending_approvals")
+    message = relationship("Message")

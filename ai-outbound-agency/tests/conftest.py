@@ -209,6 +209,10 @@ def mock_settings() -> MagicMock:
     s.tracking_secret = "test-tracking-secret"
     s.stripe_secret_key = "sk_test_123"
     s.stripe_webhook_secret = "whsec_test_123"
+    s.slack_webhook_url = ""
+    s.telegram_bot_token = ""
+    s.telegram_chat_id = ""
+    s.approval_required_company_size = 500
     return s
 
 

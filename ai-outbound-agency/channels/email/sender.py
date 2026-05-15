@@ -98,6 +98,16 @@ class AsyncEmailSender:
             }
 
         domain = account["domain"]
+
+        # Check if domain is paused by bounce monitor
+        if await self._is_domain_paused(domain):
+            logger.warning("Domain %s is paused due to high bounce rate, skipping", domain)
+            return {
+                "domain_used": domain,
+                "message_id_header": None,
+                "success": False,
+            }
+
         from_addr = f"{account['user']}@{domain}" if "@" not in account["user"] else account["user"]
         message_id_header = f"<{message_id}@{domain}>"
 
@@ -138,7 +148,18 @@ class AsyncEmailSender:
                     "success": True,
                 }
             except aiosmtplib.SMTPResponseException as exc:
-                if exc.code >= 500:
+                if 550 <= exc.code <= 559:
+                    # Hard bounce - record it
+                    await self._record_bounce(domain, "hard")
+                    logger.error(
+                        "Permanent SMTP failure (%d) sending to %s via %s: %s",
+                        exc.code,
+                        to,
+                        domain,
+                        str(exc),
+                    )
+                    break
+                elif exc.code >= 500:
                     logger.error(
                         "Permanent SMTP failure (%d) sending to %s via %s: %s",
                         exc.code,
@@ -207,6 +228,15 @@ class AsyncEmailSender:
                 "success": False,
             }
 
+        # Check if domain is paused by bounce monitor
+        if await self._is_domain_paused(domain):
+            logger.warning("Domain %s is paused due to high bounce rate, skipping", domain)
+            return {
+                "domain_used": domain,
+                "message_id_header": None,
+                "success": False,
+            }
+
         # Check daily limit
         daily_limit = account.get("daily_limit", 50)
         current_count = await self._get_daily_send_count(domain)
@@ -258,7 +288,18 @@ class AsyncEmailSender:
                     "success": True,
                 }
             except aiosmtplib.SMTPResponseException as exc:
-                if exc.code >= 500:
+                if 550 <= exc.code <= 559:
+                    # Hard bounce - record it
+                    await self._record_bounce(domain, "hard")
+                    logger.error(
+                        "Permanent SMTP failure (%d) sending to %s via %s: %s",
+                        exc.code,
+                        to,
+                        domain,
+                        str(exc),
+                    )
+                    break
+                elif exc.code >= 500:
                     logger.error(
                         "Permanent SMTP failure (%d) sending to %s via %s: %s",
                         exc.code,
@@ -298,6 +339,30 @@ class AsyncEmailSender:
             "message_id_header": message_id_header,
             "success": False,
         }
+
+    async def _is_domain_paused(self, domain: str) -> bool:
+        """Check if a domain is paused by the bounce monitor."""
+        pause_key = f"paused:{domain}"
+        result = await self._redis.get(pause_key)
+        return result == "1"
+
+    async def _record_bounce(self, domain: str, bounce_type: str = "hard") -> None:
+        """Record a bounce event via Redis (mirrors BounceMonitor logic)."""
+        from datetime import date as _date
+
+        today = _date.today().isoformat()
+        bounce_key = f"bounces:{domain}:{today}"
+        consecutive_key = f"consecutive_hard:{domain}"
+
+        pipe = self._redis.pipeline()
+        pipe.incr(bounce_key)
+        pipe.expire(bounce_key, 86400 * 7)
+
+        if bounce_type == "hard":
+            pipe.incr(consecutive_key)
+            pipe.expire(consecutive_key, 86400 * 7)
+
+        await pipe.execute()
 
     async def close(self) -> None:
         """Close the Redis connection."""

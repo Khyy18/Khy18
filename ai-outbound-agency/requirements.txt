@@ -27,6 +27,7 @@ arq
 structlog
 prometheus-client
 sentry-sdk[fastapi]
+dnspython
 
 # Test dependencies
 pytest

@@ -21,6 +21,8 @@ from core.models import (
     MessageStatus,
 )
 from integrations.calendar import CalendarIntegration
+from integrations.notifications import notify_human
+from agents.approval_queue import ApprovalQueue
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +323,46 @@ class ConversationAgent:
 
             await session.commit()
 
+            # Determine if this reply requires human approval
+            requires_approval = self._requires_human_approval(
+                classification=intent,
+                lead=lead,
+            )
+
+            if requires_approval:
+                # Route to approval queue instead of auto-sending
+                async with self._session_factory() as approval_session:
+                    await ApprovalQueue.create_approval(
+                        session=approval_session,
+                        lead_id=lead.id,
+                        message_id=inbound_message.id,
+                        proposed_response=response,
+                    )
+                    await approval_session.commit()
+
+                # Notify human reviewers
+                await notify_human(
+                    lead_data=lead_data,
+                    classification=intent,
+                    proposed_response=response,
+                    settings=self._settings,
+                )
+
+                logger.info(
+                    "Routed reply %s to approval queue (classification=%s)",
+                    message_id,
+                    intent,
+                )
+
+                return {
+                    "message_id": message_id,
+                    "classification": classification,
+                    "response": response,
+                    "lead_status": lead.status.value if lead.status else None,
+                    "routed_to_approval": True,
+                    "response_sent": False,
+                }
+
             # Send the generated response if action warrants it
             action = response.get("action", "")
             response_sent = False
@@ -374,3 +416,42 @@ class ConversationAgent:
                 "lead_status": lead.status.value if lead.status else None,
                 "response_sent": response_sent,
             }
+
+    def _requires_human_approval(
+        self,
+        classification: str,
+        lead: Lead,
+    ) -> bool:
+        """Determine if a reply requires human approval before responding.
+
+        Approval is required if:
+        - Classification is 'positive'
+        - Lead's company has more employees than approval_required_company_size
+        - Lead's title contains C-level keywords
+
+        Args:
+            classification: The reply classification string.
+            lead: The Lead ORM instance.
+
+        Returns:
+            True if human approval is required.
+        """
+        # Positive replies always require approval
+        if classification == "positive":
+            return True
+
+        # Check company size from enrichment data
+        enrichment = lead.enrichment_data or {}
+        company_data = enrichment.get("company_data", {})
+        employee_count = company_data.get("employee_count", 0)
+        if isinstance(employee_count, (int, float)) and employee_count > self._settings.approval_required_company_size:
+            return True
+
+        # Check for C-level titles
+        c_level_keywords = ("ceo", "cto", "cfo", "coo", "cmo", "vp", "director")
+        title = (lead.title or "").lower()
+        for keyword in c_level_keywords:
+            if keyword in title:
+                return True
+
+        return False
