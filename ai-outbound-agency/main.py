@@ -213,6 +213,37 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.error("Failed to initialize conversation agent singletons: %s", exc)
         app.state.conversation_agent = None
 
+    # Health Monitor and Revenue Autopilot
+    # These integrate with the scheduler for periodic execution.
+    # Health monitor runs every health_check_interval_minutes.
+    # Revenue autopilot runs daily to check lead pools, inactive clients, etc.
+    if settings.health_telegram_alerts:
+        try:
+            from core.health_monitor import HealthMonitor
+
+            health_monitor = HealthMonitor(
+                settings=settings,
+                session_factory=async_session_factory,
+            )
+            app.state.health_monitor = health_monitor
+            logger.info("Health monitor initialized")
+        except Exception as exc:
+            logger.error("Failed to initialize health monitor: %s", exc)
+
+    # Initialize dogfood agent if enabled
+    if settings.dogfood_enabled:
+        try:
+            from agents.dogfood import DogfoodAgent
+
+            dogfood_agent = DogfoodAgent(
+                settings=settings,
+                session_factory=async_session_factory,
+            )
+            app.state.dogfood_agent = dogfood_agent
+            logger.info("Dogfood agent initialized")
+        except Exception as exc:
+            logger.error("Failed to initialize dogfood agent: %s", exc)
+
     # Start InboxListener if IMAP settings are configured
     if settings.imap_host and settings.imap_user and settings.imap_password:
         try:

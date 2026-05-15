@@ -89,5 +89,13 @@ class Settings(BaseSettings):
     protected_companies_list: str = "[]"
     auto_approve_max_retries: int = 3
 
+    # Dogfooding settings
+    dogfood_enabled: bool = False
+    dogfood_sending_domain: str = ""
+
+    # Health monitor settings
+    health_check_interval_minutes: int = 5
+    health_telegram_alerts: bool = True
+
 
 settings = Settings()  # type: ignore[call-arg]

@@ -19,6 +19,12 @@ _templates_dir = os.path.join(os.path.dirname(__file__), "templates")
 templates = Jinja2Templates(directory=_templates_dir)
 
 
+@router.get("/", response_class=HTMLResponse)
+async def landing_page(request: Request):
+    """Render the public landing page."""
+    return templates.TemplateResponse("landing.html", {"request": request})
+
+
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     """Render the login page."""
