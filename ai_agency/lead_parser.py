@@ -1,9 +1,10 @@
-"""Парсер лидов с Kwork RSS: поиск заказов по ключевым словам и уведомление админа."""
+"""Парсер лидов с Kwork: поиск заказов по ключевым словам и уведомление админа."""
 
 import logging
 from typing import List, Optional
 from urllib.parse import quote
 
+import aiohttp
 import aiosqlite
 import feedparser
 
@@ -50,27 +51,75 @@ async def _mark_lead_seen(external_id: str, title: str, url: str) -> None:
 
 async def parse_kwork_orders(keywords: List[str]) -> List[dict]:
     """
-    Парсить RSS Kwork по списку ключевых слов.
+    Парсить заказы Kwork по списку ключевых слов.
+
+    Пытается использовать RSS-формат (с параметром rss=1).
+    Если RSS не вернул записей, делает HTTP-запрос к странице проектов
+    и пытается извлечь данные.
 
     Возвращает список словарей с полями: id, title, description, link, budget.
     """
     all_entries = []
     for keyword in keywords:
-        url = f"https://kwork.ru/projects?c=all&keyword={quote(keyword)}"
+        # Используем RSS URL формат Kwork
+        rss_url = f"https://kwork.ru/projects?c=all&attr=s&keyword={quote(keyword)}&rss=1"
         try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries:
-                entry_id = entry.get("id") or entry.get("link") or entry.get("title", "")
-                all_entries.append({
-                    "id": entry_id,
-                    "title": entry.get("title", ""),
-                    "description": entry.get("summary", entry.get("description", "")),
-                    "link": entry.get("link", ""),
-                    "budget": entry.get("budget", ""),
-                })
+            feed = feedparser.parse(rss_url)
+            if feed.entries:
+                for entry in feed.entries:
+                    entry_id = entry.get("id") or entry.get("link") or entry.get("title", "")
+                    all_entries.append({
+                        "id": entry_id,
+                        "title": entry.get("title", ""),
+                        "description": entry.get("summary", entry.get("description", "")),
+                        "link": entry.get("link", ""),
+                        "budget": entry.get("budget", ""),
+                    })
+            else:
+                # RSS не вернул записей - пробуем HTML страницу
+                page_url = f"https://kwork.ru/projects?c=all&attr=s&keyword={quote(keyword)}"
+                await _parse_kwork_html(page_url, all_entries)
         except Exception as e:
-            logger.warning("Ошибка парсинга Kwork RSS для '%s': %s", keyword, e)
+            logger.warning("Ошибка парсинга Kwork для '%s': %s", keyword, e)
     return all_entries
+
+
+async def _parse_kwork_html(url: str, entries: List[dict]) -> None:
+    """
+    Fallback: загрузить HTML страницу проектов Kwork и извлечь базовые данные.
+    Используется если RSS не вернул записей.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status != 200:
+                    logger.warning("Kwork HTML fetch failed with status %d", resp.status)
+                    return
+                html_text = await resp.text()
+
+        # Извлекаем ссылки на проекты из HTML (простой regex-подход)
+        import re
+        # Ищем ссылки на проекты вида /projects/XXXXX/...
+        project_links = re.findall(
+            r'href="(https://kwork\.ru/projects/\d+/[^"]+)"', html_text
+        )
+        # Ищем заголовки проектов
+        titles = re.findall(
+            r'class="[^"]*wants-card__header-title[^"]*"[^>]*>([^<]+)<', html_text
+        )
+
+        for i, link in enumerate(project_links[:20]):  # ограничиваем 20 записями
+            title = titles[i] if i < len(titles) else ""
+            entry_id = link
+            entries.append({
+                "id": entry_id,
+                "title": title.strip(),
+                "description": "",
+                "link": link,
+                "budget": "",
+            })
+    except Exception as e:
+        logger.warning("Ошибка парсинга Kwork HTML: %s", e)
 
 
 async def generate_response(order_info: dict, service_type: str) -> str:

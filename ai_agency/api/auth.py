@@ -102,9 +102,34 @@ async def get_current_client(x_api_key: str = Header()) -> dict:
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required")
 
-    # Проверяем ключ
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         db.row_factory = aiosqlite.Row
+
+        # Сбрасываем счетчик если новый день (атомарно)
+        today_str = date.today().isoformat()
+        await db.execute(
+            "UPDATE api_keys SET requests_today = 0, last_reset = ? WHERE key = ? AND last_reset != ?",
+            (today_str, x_api_key, today_str),
+        )
+
+        # Атомарный инкремент с проверкой rate limit (устраняет TOCTOU)
+        cursor = await db.execute(
+            "UPDATE api_keys SET requests_today = requests_today + 1 WHERE key = ? AND requests_today < rate_limit",
+            (x_api_key,),
+        )
+        if cursor.rowcount == 0:
+            # Либо ключ не существует, либо лимит превышен
+            check_cursor = await db.execute(
+                "SELECT * FROM api_keys WHERE key = ?", (x_api_key,)
+            )
+            row = await check_cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=401, detail="Invalid API key")
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+        await db.commit()
+
+        # Получаем данные ключа для возврата
         cursor = await db.execute(
             "SELECT * FROM api_keys WHERE key = ?", (x_api_key,)
         )
@@ -112,27 +137,4 @@ async def get_current_client(x_api_key: str = Header()) -> dict:
         if not row:
             raise HTTPException(status_code=401, detail="Invalid API key")
 
-        api_key = dict(row)
-        today_str = date.today().isoformat()
-
-        # Сбрасываем счетчик если новый день
-        if api_key.get("last_reset") != today_str:
-            await db.execute(
-                "UPDATE api_keys SET requests_today = 0, last_reset = ? WHERE id = ?",
-                (today_str, api_key["id"]),
-            )
-            await db.commit()
-            api_key["requests_today"] = 0
-
-        # Проверяем rate limit
-        if api_key["requests_today"] >= api_key["rate_limit"]:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-        # Инкрементируем счетчик
-        await db.execute(
-            "UPDATE api_keys SET requests_today = requests_today + 1 WHERE id = ?",
-            (api_key["id"],),
-        )
-        await db.commit()
-
-    return api_key
+    return dict(row)

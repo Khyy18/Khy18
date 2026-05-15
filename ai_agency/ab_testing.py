@@ -34,6 +34,8 @@ async def select_variant(service_type: str) -> Optional[Tuple[int, str]]:
     UCB1: если у варианта < 5 использований - выбрать его (exploration).
     Иначе: argmax(avg_score + sqrt(2 * ln(total_uses_all) / uses_i)).
 
+    Инкрементирует total_uses при выборе варианта (а не при оценке).
+
     Возвращает (variant_id, system_prompt) или None если вариантов нет.
     """
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
@@ -47,46 +49,61 @@ async def select_variant(service_type: str) -> Optional[Tuple[int, str]]:
         if not variants:
             return None
 
+        selected = None
+
         # Exploration: если есть вариант с < 5 использований, выбираем его
         for v in variants:
             if v["total_uses"] < 5:
-                return (v["id"], v["system_prompt"])
+                selected = v
+                break
 
-        # UCB1: вычисляем суммарное количество использований
-        total_uses_all = sum(v["total_uses"] for v in variants)
-        if total_uses_all == 0:
-            # Все варианты с 0 использований - берем первый
-            v = variants[0]
-            return (v["id"], v["system_prompt"])
+        if selected is None:
+            # UCB1: вычисляем суммарное количество использований
+            total_uses_all = sum(v["total_uses"] for v in variants)
+            if total_uses_all == 0:
+                # Все варианты с 0 использований - берем первый
+                selected = variants[0]
+            else:
+                best_variant = None
+                best_ucb = -1.0
 
-        best_variant = None
-        best_ucb = -1.0
+                for v in variants:
+                    uses = v["total_uses"]
+                    if uses == 0:
+                        # Неиспользованный вариант - приоритет
+                        selected = v
+                        break
+                    avg_score = v["total_score"] / uses
+                    ucb_value = avg_score + math.sqrt(2 * math.log(total_uses_all) / uses)
+                    if ucb_value > best_ucb:
+                        best_ucb = ucb_value
+                        best_variant = v
 
-        for v in variants:
-            uses = v["total_uses"]
-            if uses == 0:
-                # Неиспользованный вариант - приоритет
-                return (v["id"], v["system_prompt"])
-            avg_score = v["total_score"] / uses
-            ucb_value = avg_score + math.sqrt(2 * math.log(total_uses_all) / uses)
-            if ucb_value > best_ucb:
-                best_ucb = ucb_value
-                best_variant = v
+                if selected is None:
+                    selected = best_variant
 
-        if best_variant:
-            return (best_variant["id"], best_variant["system_prompt"])
-        return None
+        if selected is None:
+            return None
+
+        # Инкрементируем total_uses сразу при выборе варианта
+        await db.execute(
+            "UPDATE ab_variants SET total_uses = total_uses + 1 WHERE id = ?",
+            (selected["id"],),
+        )
+        await db.commit()
+
+        return (selected["id"], selected["system_prompt"])
 
 
 async def record_result(variant_id: int, rating: int) -> None:
     """
-    Записать результат A/B теста: атомарно инкрементировать
-    total_uses и добавить rating к total_score.
+    Записать результат A/B теста: атомарно добавить rating к total_score.
+    (total_uses инкрементируется в select_variant при выборе варианта.)
     """
     async with aiosqlite.connect(config.DATABASE_PATH) as db:
         await db.execute(
             """UPDATE ab_variants
-               SET total_uses = total_uses + 1, total_score = total_score + ?
+               SET total_score = total_score + ?
                WHERE id = ?""",
             (float(rating), variant_id),
         )

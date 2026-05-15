@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 import config
 import database
+import billing
 import pipeline
 import pricing
 from api.auth import get_current_client
@@ -93,6 +94,21 @@ async def create_order(
     price = pricing.calculate_price(
         request.service_type, len(request.input_text), urgent=request.urgent
     )
+
+    # Проверка баланса и списание средств
+    can_order = await billing.check_can_order(client["client_id"], price)
+    if not can_order:
+        raise HTTPException(
+            status_code=402,
+            detail="Insufficient funds or subscription limit exceeded",
+        )
+
+    charged = await billing.charge_or_use_subscription(client["client_id"], price)
+    if not charged:
+        raise HTTPException(
+            status_code=402,
+            detail="Insufficient funds",
+        )
 
     # Создаем заказ в БД
     order_id = await database.create_order(

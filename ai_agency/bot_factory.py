@@ -257,35 +257,43 @@ def create_bot_application(
 
         price = context.user_data.get("calculated_price", service.price)
 
-        # Проверка баланса
-        can_order = await billing.check_can_order(user.id, price)
-        if not can_order:
-            balance = await database.get_client_balance(user.id)
-            body = [
-                f"<b>Ваш баланс:</b> {format_number(balance)} \u20bd",
-                f"<b>Стоимость:</b> {format_number(price)} \u20bd",
-                "",
-                i18n.get_text(lang, "insufficient_funds"),
-            ]
-            text = _card("Недостаточно средств", "\U0001f6ab", body)
-            await query.edit_message_text(text, parse_mode=ParseMode.HTML)
-            return ConversationHandler.END
+        # Проверка бесплатного триала
+        is_free_trial = await billing.check_free_trial(user.id)
 
-        charged = await billing.charge_or_use_subscription(user.id, price)
-        if not charged:
-            await query.edit_message_text(
-                "\u274c Ошибка списания. Попробуйте позже.",
-                parse_mode=ParseMode.HTML,
-            )
-            return ConversationHandler.END
+        if not is_free_trial:
+            # Проверка баланса
+            can_order = await billing.check_can_order(user.id, price)
+            if not can_order:
+                balance = await database.get_client_balance(user.id)
+                body = [
+                    f"<b>Ваш баланс:</b> {format_number(balance)} \u20bd",
+                    f"<b>Стоимость:</b> {format_number(price)} \u20bd",
+                    "",
+                    i18n.get_text(lang, "insufficient_funds"),
+                ]
+                text = _card("Недостаточно средств", "\U0001f6ab", body)
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML)
+                return ConversationHandler.END
+
+            charged = await billing.charge_or_use_subscription(user.id, price)
+            if not charged:
+                await query.edit_message_text(
+                    "\u274c Ошибка списания. Попробуйте позже.",
+                    parse_mode=ParseMode.HTML,
+                )
+                return ConversationHandler.END
 
         # Создаем заказ
         order_id = await database.create_order(
             client_id=user.id,
             service_type=service_type.value,
             input_text=input_text,
-            price=price,
+            price=0.0 if is_free_trial else price,
         )
+
+        # Если это бесплатный триал - отмечаем использованным
+        if is_free_trial:
+            await billing.mark_free_trial_used(user.id)
 
         # Уведомляем о начале обработки
         processing_body = [
@@ -326,6 +334,26 @@ def create_bot_application(
                     parse_mode=ParseMode.HTML,
                 )
 
+            # Кнопки скачивания документов
+            download_keyboard = [
+                [
+                    InlineKeyboardButton(
+                        i18n.get_text(lang, "download_docx"),
+                        callback_data=f"download:{order_id}:docx",
+                    ),
+                    InlineKeyboardButton(
+                        i18n.get_text(lang, "download_pdf"),
+                        callback_data=f"download:{order_id}:pdf",
+                    ),
+                ]
+            ]
+            await context.bot.send_message(
+                chat_id=user.id,
+                text="\U0001f4e5 Скачать результат:",
+                reply_markup=InlineKeyboardMarkup(download_keyboard),
+                parse_mode=ParseMode.HTML,
+            )
+
             # Кнопки оценки
             rating_keyboard = [
                 [
@@ -341,7 +369,9 @@ def create_bot_application(
             )
         else:
             await database.update_order_status(order_id, OrderStatus.FAILED.value)
-            await billing.top_up_balance(user.id, price, method="refund")
+            # Возврат средств (только если не бесплатный триал)
+            if not is_free_trial:
+                await billing.top_up_balance(user.id, price, method="refund")
             error_body = [
                 f"<b>Заказ #{order_id}</b> {status_indicator('failed')}",
                 "",
@@ -368,10 +398,19 @@ def create_bot_application(
         if rating < 1 or rating > 5:
             return
 
+        # Проверка владельца заказа
+        order = await database.get_order_by_id(order_id)
+        user = update.effective_user
+        if not order or order.get("client_id") != user.id:
+            await query.edit_message_text(
+                "\u274c Это не ваш заказ.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
         await database.update_order_rating(order_id, rating)
 
-        order = await database.get_order_by_id(order_id)
-        if order and order.get("ab_variant_id"):
+        if order.get("ab_variant_id"):
             try:
                 await ab_testing.record_result(order["ab_variant_id"], rating)
             except Exception as e:
@@ -396,6 +435,82 @@ def create_bot_application(
         )
         return ConversationHandler.END
 
+    async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обработка скачивания документа (.docx или .pdf)."""
+        query = update.callback_query
+        await query.answer()
+
+        parts = query.data.split(":")
+        if len(parts) != 3:
+            return
+        try:
+            order_id = int(parts[1])
+            fmt = parts[2]
+        except (ValueError, IndexError):
+            return
+        if fmt not in ("docx", "pdf"):
+            return
+
+        order = await database.get_order_by_id(order_id)
+        if not order or not order.get("output_text"):
+            await query.edit_message_text(
+                "\u274c Результат заказа не найден.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        user = update.effective_user
+
+        # Проверка владельца заказа
+        if order.get("client_id") != user.id:
+            await query.edit_message_text(
+                "\u274c Это не ваш заказ.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        service_type_value = order["service_type"]
+        try:
+            stype = ServiceType(service_type_value)
+            svc = get_service(stype)
+            service_name = svc.name
+        except (ValueError, KeyError):
+            service_name = service_type_value
+
+        result_text = order["output_text"]
+        order_date = order.get("completed_at") or order.get("created_at", "")
+
+        import os as _os
+        try:
+            if fmt == "docx":
+                filepath = await document_generator.generate_docx(
+                    order_id, service_name, result_text, order_date
+                )
+            else:
+                filepath = await document_generator.generate_pdf(
+                    order_id, service_name, result_text, order_date
+                )
+
+            with open(filepath, "rb") as f:
+                await context.bot.send_document(
+                    chat_id=user.id,
+                    document=f,
+                    filename=f"order_{order_id}.{fmt}",
+                )
+
+            # Удаляем временный файл после отправки
+            try:
+                _os.unlink(filepath)
+            except OSError:
+                pass
+        except Exception as e:
+            logger.error("Ошибка генерации документа: %s", e)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text="\u274c Ошибка генерации документа. Попробуйте позже.",
+                parse_mode=ParseMode.HTML,
+            )
+
     # Строим Application
     application = (
         Application.builder()
@@ -418,6 +533,9 @@ def create_bot_application(
     application.add_handler(conv_handler)
     application.add_handler(
         CallbackQueryHandler(handle_rating, pattern=r"^rate:\d+:\d+$")
+    )
+    application.add_handler(
+        CallbackQueryHandler(handle_download, pattern=r"^download:\d+:(docx|pdf)$")
     )
 
     return application

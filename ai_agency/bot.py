@@ -476,18 +476,25 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if rating < 1 or rating > 5:
         return
 
+    # Проверка владельца заказа
+    order = await database.get_order_by_id(order_id)
+    user = update.effective_user
+    if not order or order.get("client_id") != user.id:
+        await query.edit_message_text(
+            "\u274c Это не ваш заказ.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     # Сохраняем оценку
     await database.update_order_rating(order_id, rating)
 
     # Записываем результат A/B теста если был использован вариант
-    order = await database.get_order_by_id(order_id)
-    if order and order.get("ab_variant_id"):
+    if order.get("ab_variant_id"):
         try:
             await ab_testing.record_result(order["ab_variant_id"], rating)
         except Exception as e:
             logger.warning("Ошибка записи результата A/B теста: %s", e)
-
-    user = update.effective_user
 
     if rating >= 3:
         await query.edit_message_text(
@@ -810,6 +817,14 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     user = update.effective_user
+
+    # Проверка владельца заказа
+    if order.get("client_id") != user.id:
+        await query.edit_message_text(
+            "\u274c Это не ваш заказ.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
     service_type_value = order["service_type"]
     try:
         service_type = ServiceType(service_type_value)
@@ -831,11 +846,19 @@ async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 order_id, service_name, result_text, date
             )
 
-        await context.bot.send_document(
-            chat_id=user.id,
-            document=open(filepath, "rb"),
-            filename=f"order_{order_id}.{fmt}",
-        )
+        with open(filepath, "rb") as f:
+            await context.bot.send_document(
+                chat_id=user.id,
+                document=f,
+                filename=f"order_{order_id}.{fmt}",
+            )
+
+        # Удаляем временный файл после отправки
+        import os as _os
+        try:
+            _os.unlink(filepath)
+        except OSError:
+            pass
     except Exception as e:
         logger.error("Ошибка генерации документа: %s", e)
         await context.bot.send_message(

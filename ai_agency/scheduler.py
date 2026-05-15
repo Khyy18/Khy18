@@ -145,11 +145,20 @@ def start_scheduler(bot: Bot) -> None:
     Запустить все фоновые задачи в текущем event loop.
 
     Вызывается из post_init хука Application.
+    Задачи запускаются с разнесением по времени (stagger),
+    чтобы избежать одновременного всплеска запросов к БД и сети.
     """
     loop = asyncio.get_event_loop()
-    loop.create_task(retention_check(bot))
-    loop.create_task(upsell_check(bot))
-    loop.create_task(subscription_expiry_check())
-    loop.create_task(lead_parser_check(bot))
-    loop.create_task(auto_posting_check(bot))
+
+    async def _staggered_start(coro, delay: float):
+        """Запустить корутину после начальной задержки."""
+        if delay > 0:
+            await asyncio.sleep(delay)
+        await coro
+
+    loop.create_task(_staggered_start(retention_check(bot), 0))
+    loop.create_task(_staggered_start(upsell_check(bot), 10))
+    loop.create_task(_staggered_start(subscription_expiry_check(), 20))
+    loop.create_task(_staggered_start(lead_parser_check(bot), 30))
+    loop.create_task(_staggered_start(auto_posting_check(bot), 60))
     logger.info("Планировщик задач запущен (retention, upsell, subscription_expiry, lead_parser, auto_posting)")
