@@ -603,3 +603,362 @@ async def test_e2e_multi_step_sequence(async_session: AsyncSession):
         )
     )
     assert inbound_result.scalar() == 0
+
+
+# ---------- Scenario 6: Multi-Channel Escalation ----------
+
+
+async def test_e2e_multi_channel_escalation(async_session: AsyncSession):
+    """Lead gets email, no reply after 5 days, LinkedIn message queued.
+
+    Verifies: 2 outbound messages (1 email + 1 LinkedIn), correct channel types,
+    lead remains at contacted status, and sequence_step metadata is correct.
+    """
+    # Setup
+    tenant, user = _create_tenant_and_user()
+    async_session.add(tenant)
+    async_session.add(user)
+    await async_session.commit()
+
+    steps = [
+        {"step_type": "initial_email", "delay_days": 0, "channel": "email"},
+        {"step_type": "linkedin_follow_up", "delay_days": 5, "channel": "linkedin"},
+    ]
+    campaign, sequence = _create_campaign_with_sequence(tenant.id, steps=steps)
+    async_session.add(sequence)
+    async_session.add(campaign)
+    await async_session.commit()
+
+    lead = make_lead(
+        tenant_id=tenant.id,
+        first_name="Hannah",
+        last_name="Park",
+        email="hannah@multichannel.com",
+        company="MultiChannel Corp",
+        title="VP Growth",
+        status=LeadStatus.new,
+    )
+    async_session.add(lead)
+    await async_session.commit()
+
+    # Step 1: Send initial email (day 0)
+    email_msg = make_message(
+        lead_id=lead.id,
+        campaign_id=campaign.id,
+        channel=ChannelType.email,
+        direction=MessageDirection.outbound,
+        status=MessageStatus.sent,
+        content="<p>Hi Hannah, reaching out about growth strategies...</p>",
+        subject="Growth partnership",
+        sent_at=datetime.now(timezone.utc),
+    )
+    email_msg.meta = {"sequence_step": 0, "step_type": "initial_email", "channel": "email"}
+    async_session.add(email_msg)
+    lead.status = LeadStatus.contacted
+    await async_session.commit()
+
+    # No reply received. 5 days pass (simulated by just proceeding to step 2).
+
+    # Step 2: LinkedIn message queued (day 5, no reply to email)
+    linkedin_msg = make_message(
+        lead_id=lead.id,
+        campaign_id=campaign.id,
+        channel=ChannelType.linkedin,
+        direction=MessageDirection.outbound,
+        status=MessageStatus.sent,
+        content="Hi Hannah, I sent you an email last week about growth strategies. Would love to connect!",
+        subject=None,
+        sent_at=datetime.now(timezone.utc),
+    )
+    linkedin_msg.meta = {"sequence_step": 1, "step_type": "linkedin_follow_up", "channel": "linkedin"}
+    async_session.add(linkedin_msg)
+    await async_session.commit()
+
+    # ---------- VERIFY ----------
+    await async_session.refresh(lead)
+
+    # Lead still at contacted (no reply received)
+    assert lead.status == LeadStatus.contacted
+
+    # Verify 2 outbound messages total
+    msg_result = await async_session.execute(
+        select(Message).where(
+            Message.lead_id == lead.id,
+            Message.direction == MessageDirection.outbound,
+        )
+    )
+    messages = msg_result.scalars().all()
+    assert len(messages) == 2
+
+    # Verify channel types: 1 email + 1 linkedin
+    channels = [m.channel for m in messages]
+    assert ChannelType.email in channels
+    assert ChannelType.linkedin in channels
+
+    # Verify correct sequence_step metadata
+    email_msgs = [m for m in messages if m.channel == ChannelType.email]
+    linkedin_msgs = [m for m in messages if m.channel == ChannelType.linkedin]
+
+    assert len(email_msgs) == 1
+    assert email_msgs[0].meta["sequence_step"] == 0
+    assert email_msgs[0].meta["step_type"] == "initial_email"
+
+    assert len(linkedin_msgs) == 1
+    assert linkedin_msgs[0].meta["sequence_step"] == 1
+    assert linkedin_msgs[0].meta["step_type"] == "linkedin_follow_up"
+    assert linkedin_msgs[0].meta["channel"] == "linkedin"
+
+    # Verify no inbound messages
+    inbound_result = await async_session.execute(
+        select(func.count(Message.id)).where(
+            Message.lead_id == lead.id,
+            Message.direction == MessageDirection.inbound,
+        )
+    )
+    assert inbound_result.scalar() == 0
+
+
+# ---------- Scenario 7: Deduplication Across Campaigns ----------
+
+
+async def test_e2e_deduplication_across_campaigns(async_session: AsyncSession):
+    """Same lead enrolled in two campaigns. Messages tracked per campaign_id independently.
+
+    Verifies: lead has messages from both campaigns, each campaign tracks
+    its own messages independently, and no message deduplication occurs at the
+    data layer (both campaigns can message the same lead).
+    """
+    # Setup
+    tenant, user = _create_tenant_and_user()
+    async_session.add(tenant)
+    async_session.add(user)
+    await async_session.commit()
+
+    # Create two campaigns
+    sequence1 = make_sequence(tenant_id=tenant.id, name="Sequence A")
+    sequence2 = make_sequence(tenant_id=tenant.id, name="Sequence B")
+    async_session.add(sequence1)
+    async_session.add(sequence2)
+    await async_session.commit()
+
+    campaign1 = make_campaign(
+        tenant_id=tenant.id,
+        name="Campaign Alpha",
+        status=CampaignStatus.active,
+        sequence_id=sequence1.id,
+    )
+    campaign2 = make_campaign(
+        tenant_id=tenant.id,
+        name="Campaign Beta",
+        status=CampaignStatus.active,
+        sequence_id=sequence2.id,
+    )
+    async_session.add(campaign1)
+    async_session.add(campaign2)
+    await async_session.commit()
+
+    # Same lead added to both campaigns (same email address)
+    lead = make_lead(
+        tenant_id=tenant.id,
+        first_name="Ivan",
+        last_name="Chen",
+        email="ivan@shared-lead.com",
+        company="Shared Lead Inc",
+        title="CTO",
+        status=LeadStatus.new,
+    )
+    async_session.add(lead)
+    await async_session.commit()
+
+    # Campaign 1 sends initial email
+    msg_c1 = make_message(
+        lead_id=lead.id,
+        campaign_id=campaign1.id,
+        channel=ChannelType.email,
+        direction=MessageDirection.outbound,
+        status=MessageStatus.sent,
+        content="<p>Hi Ivan, Campaign Alpha here...</p>",
+        subject="From Campaign Alpha",
+        sent_at=datetime.now(timezone.utc),
+    )
+    msg_c1.meta = {"sequence_step": 0, "campaign_name": "Campaign Alpha"}
+    async_session.add(msg_c1)
+    await async_session.commit()
+
+    # Campaign 2 sends its own initial email
+    msg_c2 = make_message(
+        lead_id=lead.id,
+        campaign_id=campaign2.id,
+        channel=ChannelType.email,
+        direction=MessageDirection.outbound,
+        status=MessageStatus.sent,
+        content="<p>Hi Ivan, Campaign Beta reaching out...</p>",
+        subject="From Campaign Beta",
+        sent_at=datetime.now(timezone.utc),
+    )
+    msg_c2.meta = {"sequence_step": 0, "campaign_name": "Campaign Beta"}
+    async_session.add(msg_c2)
+    await async_session.commit()
+
+    # Update lead status
+    lead.status = LeadStatus.contacted
+    await async_session.commit()
+
+    # Campaign 1 sends follow-up
+    msg_c1_followup = make_message(
+        lead_id=lead.id,
+        campaign_id=campaign1.id,
+        channel=ChannelType.email,
+        direction=MessageDirection.outbound,
+        status=MessageStatus.sent,
+        content="<p>Hi Ivan, following up from Campaign Alpha...</p>",
+        subject="Re: From Campaign Alpha",
+        sent_at=datetime.now(timezone.utc),
+    )
+    msg_c1_followup.meta = {"sequence_step": 1, "campaign_name": "Campaign Alpha"}
+    async_session.add(msg_c1_followup)
+    await async_session.commit()
+
+    # ---------- VERIFY ----------
+    await async_session.refresh(lead)
+    assert lead.status == LeadStatus.contacted
+
+    # Verify total messages for this lead: 3 (2 from campaign1, 1 from campaign2)
+    total_msg_result = await async_session.execute(
+        select(func.count(Message.id)).where(Message.lead_id == lead.id)
+    )
+    assert total_msg_result.scalar() == 3
+
+    # Verify messages tracked per campaign_id independently
+    c1_msg_result = await async_session.execute(
+        select(Message).where(
+            Message.lead_id == lead.id,
+            Message.campaign_id == campaign1.id,
+        )
+    )
+    c1_messages = c1_msg_result.scalars().all()
+    assert len(c1_messages) == 2  # Initial + follow-up
+
+    c2_msg_result = await async_session.execute(
+        select(Message).where(
+            Message.lead_id == lead.id,
+            Message.campaign_id == campaign2.id,
+        )
+    )
+    c2_messages = c2_msg_result.scalars().all()
+    assert len(c2_messages) == 1  # Only initial
+
+    # Verify campaign metadata is correct
+    c1_campaign_names = [m.meta.get("campaign_name") for m in c1_messages]
+    assert all(name == "Campaign Alpha" for name in c1_campaign_names)
+
+    c2_campaign_names = [m.meta.get("campaign_name") for m in c2_messages]
+    assert all(name == "Campaign Beta" for name in c2_campaign_names)
+
+    # Verify both campaigns reference the same lead
+    all_msg_result = await async_session.execute(
+        select(Message).where(Message.lead_id == lead.id)
+    )
+    all_messages = all_msg_result.scalars().all()
+    campaign_ids = set(m.campaign_id for m in all_messages)
+    assert len(campaign_ids) == 2
+    assert campaign1.id in campaign_ids
+    assert campaign2.id in campaign_ids
+
+
+# ---------- Scenario 8: Inbox Placement Monitoring Integration ----------
+
+
+async def test_e2e_inbox_placement_monitoring(async_session: AsyncSession):
+    """After batch send, verify InboxPlacementMonitor seed test and alert logic.
+
+    Verifies: send_seed_test records results, update_placement works,
+    get_domain_stats returns correct stats, and alert_if_degraded fires
+    when inbox rate drops below 80%.
+    """
+    from channels.email.inbox_placement import InboxPlacementMonitor
+
+    # Setup tenant and campaign context
+    tenant, user = _create_tenant_and_user()
+    async_session.add(tenant)
+    async_session.add(user)
+    await async_session.commit()
+
+    campaign, sequence = _create_campaign_with_sequence(tenant.id)
+    async_session.add(sequence)
+    async_session.add(campaign)
+    await async_session.commit()
+
+    # Create leads and simulate batch send
+    leads = []
+    for i in range(5):
+        lead = make_lead(
+            tenant_id=tenant.id,
+            first_name=f"Lead{i}",
+            last_name="Test",
+            email=f"lead{i}@batchtest.com",
+            company="Batch Corp",
+            title="Manager",
+            status=LeadStatus.new,
+        )
+        leads.append(lead)
+        async_session.add(lead)
+    await async_session.commit()
+
+    # Send outbound messages for all leads
+    for lead in leads:
+        msg = make_message(
+            lead_id=lead.id,
+            campaign_id=campaign.id,
+            channel=ChannelType.email,
+            direction=MessageDirection.outbound,
+            status=MessageStatus.sent,
+            content=f"<p>Hi {lead.first_name}, reaching out...</p>",
+            subject="Batch outreach",
+            sent_at=datetime.now(timezone.utc),
+        )
+        async_session.add(msg)
+        lead.status = LeadStatus.contacted
+    await async_session.commit()
+
+    # Now test inbox placement monitoring
+    monitor = InboxPlacementMonitor()
+
+    # Send seed test
+    seed_addresses = [
+        "seed1@placement-test.com",
+        "seed2@placement-test.com",
+        "seed3@placement-test.com",
+        "seed4@placement-test.com",
+        "seed5@placement-test.com",
+    ]
+    seed_result = await monitor.send_seed_test("batchtest.com", seed_addresses)
+
+    assert seed_result["domain"] == "batchtest.com"
+    assert seed_result["seed_count"] == 5
+    assert seed_result["status"] == "sent"
+    assert len(seed_result["message_ids"]) == 5
+
+    # Simulate checking placements: 3 inbox, 1 spam, 1 promotions = 60% inbox
+    message_ids = seed_result["message_ids"]
+    await monitor.update_placement(message_ids[0], "inbox")
+    await monitor.update_placement(message_ids[1], "inbox")
+    await monitor.update_placement(message_ids[2], "inbox")
+    await monitor.update_placement(message_ids[3], "spam")
+    await monitor.update_placement(message_ids[4], "promotions")
+
+    # Get domain stats
+    stats = await monitor.get_domain_stats("batchtest.com")
+    assert stats["domain"] == "batchtest.com"
+    assert stats["total_tests"] == 5
+    assert stats["inbox_rate"] == 60.0
+    assert stats["spam_rate"] == 20.0
+    assert stats["promotions_rate"] == 20.0
+
+    # Alert should fire since inbox_rate (60%) < threshold (80%)
+    alert_fired = await monitor.alert_if_degraded("batchtest.com", threshold=80.0)
+    assert alert_fired is True
+
+    # Verify no alert when threshold is lower
+    no_alert = await monitor.alert_if_degraded("batchtest.com", threshold=50.0)
+    assert no_alert is False
