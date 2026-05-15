@@ -216,7 +216,7 @@ GRID_REINVEST_PCT = float(os.getenv("GRID_REINVEST_PCT", "0.5") or 0.5)
 MOMENTUM_MR_RSI_OVERSOLD = float(os.getenv("MOMENTUM_MR_RSI_OVERSOLD", "25") or 25)
 MOMENTUM_MR_RSI_OVERBOUGHT = float(os.getenv("MOMENTUM_MR_RSI_OVERBOUGHT", "75") or 75)
 MOMENTUM_MR_SL_PCT = float(os.getenv("MOMENTUM_MR_SL_PCT", "0.015") or 0.015)
-MOMENTUM_MR_TP_RSI_EXIT = float(os.getenv("MOMENTUM_MR_TP_RSI_EXIT", "50") or 50)
+MOMENTUM_MR_TP_RSI_EXIT = float(os.getenv("MOMENTUM_MR_TP_RSI_EXIT", "55") or 55)
 MOMENTUM_MR_MAX_HOLD_BARS = int(os.getenv("MOMENTUM_MR_MAX_HOLD_BARS", "20") or 20)
 
 # Breakout parameters (used when ADX >= 25)
@@ -225,6 +225,7 @@ MOMENTUM_BO_MIN_VOL_RATIO = float(os.getenv("MOMENTUM_BO_MIN_VOL_RATIO", "1.5") 
 MOMENTUM_BO_SL_PCT = float(os.getenv("MOMENTUM_BO_SL_PCT", "0.02") or 0.02)
 MOMENTUM_BO_TRAIL_ACTIVATE_PCT = float(os.getenv("MOMENTUM_BO_TRAIL_ACTIVATE_PCT", "0.015") or 0.015)
 MOMENTUM_BO_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_BO_TRAIL_DISTANCE_PCT", "0.01") or 0.01)
+MOMENTUM_BO_MAX_HOLD_BARS = int(os.getenv("MOMENTUM_BO_MAX_HOLD_BARS", "96") or 96)
 
 # ADX thresholds for regime routing
 MOMENTUM_ADX_RANGE_THRESHOLD = float(os.getenv("MOMENTUM_ADX_RANGE_THRESHOLD", "20") or 20)

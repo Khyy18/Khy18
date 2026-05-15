@@ -509,7 +509,6 @@ async def _open_position(
         "notional_usdt": qty * fill_price,
         "slippage_pct": slippage_pct,
         "strategy_type": strategy_type,
-        "opened_bar": len(klines) if klines else 0,
     }
     mom_state.setdefault("positions", []).append(position)
 
@@ -565,17 +564,20 @@ async def _manage_position(
 
     if not should_close and strategy_type == "MR":
         # RSI reversion exit
-        if pos_side == "LONG" and rsi > 55:
+        rsi_exit_long = cfg.MOMENTUM_MR_TP_RSI_EXIT
+        rsi_exit_short = 100 - cfg.MOMENTUM_MR_TP_RSI_EXIT
+        if pos_side == "LONG" and rsi > rsi_exit_long:
             should_close = True
-            close_reason = f"RSI reversion ({rsi:.1f} > 55)"
-        elif pos_side == "SHORT" and rsi < 45:
+            close_reason = f"RSI reversion ({rsi:.1f} > {rsi_exit_long:.0f})"
+        elif pos_side == "SHORT" and rsi < rsi_exit_short:
             should_close = True
-            close_reason = f"RSI reversion ({rsi:.1f} < 45)"
+            close_reason = f"RSI reversion ({rsi:.1f} < {rsi_exit_short:.0f})"
 
         # Time stop
         if not should_close:
             opened_epoch = float(position.get("opened_epoch", 0))
-            bars_held = int((time.time() - opened_epoch) / (15 * 60))
+            bar_seconds = int(cfg.MOMENTUM_TIMEFRAME) * 60
+            bars_held = int((time.time() - opened_epoch) / bar_seconds)
             if bars_held > cfg.MOMENTUM_MR_MAX_HOLD_BARS:
                 should_close = True
                 close_reason = f"time stop ({bars_held} bars > {cfg.MOMENTUM_MR_MAX_HOLD_BARS})"
@@ -604,6 +606,15 @@ async def _manage_position(
                     )
                     if result is not None:
                         position["stop_loss"] = new_sl
+
+        # BO max hold time stop
+        if not should_close:
+            opened_epoch = float(position.get("opened_epoch", 0))
+            bar_seconds = int(cfg.MOMENTUM_TIMEFRAME) * 60
+            bars_held = int((time.time() - opened_epoch) / bar_seconds)
+            if bars_held > cfg.MOMENTUM_BO_MAX_HOLD_BARS:
+                should_close = True
+                close_reason = f"BO time stop ({bars_held} bars > {cfg.MOMENTUM_BO_MAX_HOLD_BARS})"
 
     if not should_close:
         held_h = (time.time() - float(position.get("opened_epoch", 0))) / 3600

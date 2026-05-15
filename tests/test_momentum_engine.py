@@ -409,3 +409,53 @@ async def test_mr_time_stop():
 
     assert "time stop" in result or "ЗАКРЫТО" in result
     assert position["status"] == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_bo_trailing_stop_activates():
+    """BO position updates trailing stop when PnL >= trail activate threshold."""
+    import unittest.mock as mock
+
+    state = _make_state()
+    # BO LONG position with entry at 50000, current price gives >= 1.5% PnL
+    entry_price = 50000.0
+    # 1.5% gain means price = 50000 * 1.015 = 50750
+    current_price = 50800.0  # > 1.5% gain
+
+    state["momentum"]["positions"] = [{
+        "symbol": "BTCUSDT",
+        "side": "LONG",
+        "entry_price": entry_price,
+        "qty": 0.01,
+        "stop_loss": 49000.0,
+        "take_profit": None,
+        "opened_epoch": time.time() - 300,  # recent, well within max hold
+        "status": "OPEN",
+        "notional_usdt": 500.0,
+        "strategy_type": "BO",
+    }]
+
+    adapter = mock.AsyncMock()
+    # set_trading_stop returns success
+    adapter.set_trading_stop = mock.AsyncMock(return_value={"success": True})
+
+    session = mock.AsyncMock()
+    closes = [50000.0] * 50
+    position = state["momentum"]["positions"][0]
+
+    result = await momentum_engine._manage_position(
+        session, state, adapter, "BTCUSDT", position,
+        closes, current_price, klines=None, rsi=55.0
+    )
+
+    # Should still be holding (trailing stop updated, not closed)
+    assert position["status"] == "OPEN"
+    assert "держим" in result or "LONG" in result
+
+    # Trailing stop should have been updated
+    # new_sl = current_price * (1 - 0.01) = 50800 * 0.99 = 50292.0
+    expected_sl = current_price * (1 - 0.01)
+    assert abs(position["stop_loss"] - expected_sl) < 1.0
+
+    # Verify set_trading_stop was called
+    adapter.set_trading_stop.assert_called()
