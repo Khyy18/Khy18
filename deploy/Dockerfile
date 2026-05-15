@@ -24,4 +24,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=8)" \
     || exit 1
 
-CMD ["python", "main.py"]
+# combo_main.py — единая точка входа (funding + grid + momentum)
+CMD ["python", "combo_main.py"]

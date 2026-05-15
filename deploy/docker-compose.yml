@@ -1,5 +1,5 @@
 services:
-  zenith:
+  combo-bot:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -8,9 +8,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - zenith_data:/app/data
+      - combo_data:/app/data
     environment:
       - TRADES_DB_PATH=/app/data/trades.db
+      - STATE_DB_PATH=/app/data/state.json
       - DASHBOARD_PORT=8080
       - DASHBOARD_ENABLED=true
     init: true
@@ -24,5 +25,5 @@ services:
       start_period: 20s
 
 volumes:
-  zenith_data:
+  combo_data:
     driver: local

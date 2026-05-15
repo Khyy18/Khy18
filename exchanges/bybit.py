@@ -148,6 +148,37 @@ class BybitAdapter(ExchangeAdapter):
     ) -> float:
         return api_engine.validate_and_round_qty(qty, info, price)
 
+    async def place_limit_order(
+        self,
+        session: Any,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float,
+        post_only: bool = True,
+        reduce_only: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        """Чистый лимитный PostOnly ордер через Bybit V5 API.
+
+        Возвращает {"order_id": str, "status": str} или None при ошибке.
+        Не делает fallback в market — если PostOnly отклонён, возвращает None.
+        """
+        resp = await api_engine.place_post_only_limit(
+            session,
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            limit_price=price,
+            reduce_only=reduce_only,
+        )
+        if not resp or resp.get("retCode") != 0:
+            return None
+        result = resp.get("result") or {}
+        order_id = result.get("orderId") or ""
+        if not order_id:
+            return None
+        return {"order_id": order_id, "status": "NEW", "price": price, "qty": qty}
+
     async def get_funding_info(
         self, session: Any, symbol: str
     ) -> Optional[dict[str, Any]]:
