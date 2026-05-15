@@ -1,7 +1,8 @@
 """FastAPI router for AI chat endpoint."""
 
 import logging
-from typing import Dict, Optional
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -14,11 +15,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
+# Conversation history storage (in-memory, per chat_id)
+_conversation_history: dict = {}
+HISTORY_MAX_MESSAGES = 5
+HISTORY_TIMEOUT_MINUTES = 30
+
 
 class ChatRequest(BaseModel):
     """Request body for the AI chat endpoint."""
     message: str = Field(..., min_length=1, max_length=2000)
     chat_id: int = Field(default=0)
+    history: Optional[List[dict]] = Field(default=None, description="Previous conversation messages")
 
 
 class ChatResponse(BaseModel):
@@ -33,23 +40,30 @@ async def ai_chat(request: ChatRequest) -> ChatResponse:
     """Process a natural language message through the AI pipeline.
 
     Flow:
-    1. Classify user message into intent + extract params via Groq LLM
-    2. Call the appropriate function based on intent
-    3. Format and return the result
-    4. If classification fails, return a clarification request
+    1. Retrieve conversation history for chat_id
+    2. Classify user message into intent + extract params via Groq LLM
+    3. Call the appropriate function based on intent
+    4. Format and return the result
+    5. Store conversation history
     """
+    # Retrieve conversation history
+    history = _get_history(request.chat_id)
+
     intent, params, confidence = await classify_intent(request.message)
 
     if intent is None or confidence < 0.3:
-        return ChatResponse(
+        response = ChatResponse(
             response="Не удалось определить ваш запрос. Пожалуйста, уточните, что вы хотите сделать. "
                      "Я могу рассчитать зарплату, отпускные, больничный, найти КБК или ответить на вопрос по бухгалтерии.",
             intent="unknown",
             params=params,
         )
+        _update_history(request.chat_id, request.message, response.response)
+        return response
 
     # Execute the intent
     result = await _execute_intent(intent, params, request.message)
+    _update_history(request.chat_id, request.message, result.response)
     return result
 
 
@@ -282,3 +296,29 @@ async def _handle_generate_text(params: Dict, original_message: str) -> ChatResp
         intent=Intent.generate_text.value,
         params=params,
     )
+
+
+def _get_history(chat_id: int) -> list:
+    """Retrieve conversation history for a chat_id, clearing if expired."""
+    if chat_id not in _conversation_history:
+        return []
+    entry = _conversation_history[chat_id]
+    if datetime.now() - entry["last_activity"] > timedelta(minutes=HISTORY_TIMEOUT_MINUTES):
+        del _conversation_history[chat_id]
+        return []
+    return entry["messages"]
+
+
+def _update_history(chat_id: int, user_msg: str, ai_response: str):
+    """Store user message and AI response in conversation history."""
+    if chat_id == 0:
+        return
+    if chat_id not in _conversation_history:
+        _conversation_history[chat_id] = {"messages": [], "last_activity": datetime.now()}
+    entry = _conversation_history[chat_id]
+    entry["messages"].append({"role": "user", "content": user_msg})
+    entry["messages"].append({"role": "assistant", "content": ai_response})
+    # Keep only last N message pairs (N*2 items)
+    if len(entry["messages"]) > HISTORY_MAX_MESSAGES * 2:
+        entry["messages"] = entry["messages"][-(HISTORY_MAX_MESSAGES * 2):]
+    entry["last_activity"] = datetime.now()
