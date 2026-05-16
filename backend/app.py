@@ -31,6 +31,7 @@ from backend.routers import (
 from backend.routers import admin as admin_router
 from backend.routers import audit as audit_router
 from backend.routers import downloads as downloads_router
+from backend.routers import ocr as ocr_router
 from backend.ai.router import router as ai_router
 
 # Configure structlog
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router.router, prefix="/api/v1")
     app.include_router(audit_router.router, prefix="/api/v1")
     app.include_router(downloads_router.router, prefix="/api/v1")
+    app.include_router(ocr_router.router, prefix="/api/v1")
 
     # Mount SQLAdmin panel
     from backend.admin import setup_admin

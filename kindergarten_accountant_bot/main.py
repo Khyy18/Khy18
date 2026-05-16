@@ -28,6 +28,7 @@ from kindergarten_accountant_bot.handlers.ai_handler import ai_command, ai_messa
 from kindergarten_accountant_bot.handlers.payroll import payroll_handler
 from kindergarten_accountant_bot.handlers.audit import audit_handler
 from kindergarten_accountant_bot.handlers.voice_handler import voice_message_handler
+from kindergarten_accountant_bot.handlers.ocr_handler import photo_handler, ocr_excel_callback
 from kindergarten_accountant_bot.handlers.backup_handler import backup_command, setup_backup_jobs
 
 # Initialize Sentry if DSN is configured
@@ -65,6 +66,9 @@ def _build_application() -> Application:
     app.add_handler(CommandHandler("backup", backup_command))
     # Voice handler - before text fallback
     app.add_handler(MessageHandler(filters.VOICE, voice_message_handler))
+    # Photo handler for OCR - before text fallback
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(CallbackQueryHandler(ocr_excel_callback, pattern="^ocr_excel$"))
     # AI free-text handler - placed last as fallback for unhandled text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_message_handler))
     setup_reminder_jobs(app)

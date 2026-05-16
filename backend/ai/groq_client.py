@@ -80,3 +80,72 @@ async def chat_completion(
             return None
 
     return None
+
+
+async def vision_completion(
+    image_base64: str,
+    prompt: str,
+    model: str = "llama-3.2-90b-vision-preview",
+    temperature: float = 0.1,
+    max_tokens: int = 2048,
+) -> Optional[str]:
+    """Send vision completion request to Groq API with retry logic.
+
+    Args:
+        image_base64: Base64-encoded image data.
+        prompt: Text prompt to accompany the image.
+        model: Vision model name to use.
+        temperature: Sampling temperature.
+        max_tokens: Maximum tokens in response.
+
+    Returns:
+        Response content string or None on failure.
+    """
+    client = _get_client()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+                },
+            ],
+        }
+    ]
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await asyncio.to_thread(
+                client.chat.completions.create,
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            if response.choices:
+                return response.choices[0].message.content
+            return None
+
+        except RateLimitError as e:
+            logger.warning(f"Rate limit hit (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+            else:
+                logger.error("Max retries exceeded for rate limit")
+                return None
+
+        except APIError as e:
+            logger.error(f"Groq API error (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+            if attempt < MAX_RETRIES - 1:
+                await asyncio.sleep(RETRY_DELAY)
+            else:
+                return None
+
+        except Exception as e:
+            logger.error(f"Unexpected error calling Groq vision: {e}")
+            return None
+
+    return None
