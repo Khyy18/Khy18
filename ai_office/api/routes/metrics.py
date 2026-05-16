@@ -15,7 +15,13 @@ router = APIRouter(tags=["metrics"])
     summary="Prometheus metrics",
 )
 async def get_metrics():
-    """Получить метрики в формате Prometheus text exposition."""
+    """Получить метрики в формате Prometheus text exposition.
+
+    NOTE: This endpoint is intentionally excluded from authentication
+    (listed in middleware SKIP_PATHS) to allow Prometheus scraping without
+    credentials. In production, restrict access via Nginx allow/deny
+    directives or network-level controls.
+    """
     # Update memory stats gauges before formatting
     stats = agent_memory.get_stats()
     for agent_name, count in stats["entries_per_agent"].items():

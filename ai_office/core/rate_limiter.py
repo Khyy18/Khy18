@@ -1,12 +1,15 @@
 """Rate limiter и бюджетный контроль для LLM вызовов."""
 
 import asyncio
+import logging
 import time
 from datetime import date, datetime, timezone
 from enum import IntEnum
 from typing import Optional
 
 from ai_office.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Priority(IntEnum):
@@ -101,7 +104,11 @@ class TokenBucketRateLimiter:
 
 
 class DailyBudgetTracker:
-    """Отслеживание дневного бюджета на LLM вызовы."""
+    """Отслеживание дневного бюджета на LLM вызовы.
+
+    On initialization (or first access each day), hydrates _today_spend
+    from the token_usage table to survive process restarts.
+    """
 
     def __init__(self, daily_budget_usd: float = 10.0, time_func=None):
         self.daily_budget_usd = daily_budget_usd
@@ -109,6 +116,7 @@ class DailyBudgetTracker:
         self._today_spend: float = 0.0
         self._current_date: Optional[date] = None
         self._lock = asyncio.Lock()
+        self._hydrated: bool = False
 
     def _get_today(self) -> date:
         """Get current UTC date."""
@@ -116,12 +124,41 @@ class DailyBudgetTracker:
             return datetime.fromtimestamp(self._time_func(), tz=timezone.utc).date()
         return datetime.now(timezone.utc).date()
 
+    async def _hydrate_from_db(self) -> None:
+        """Load today's spend from token_usage table to survive restarts."""
+        try:
+            from ai_office.core.database import async_session
+            from ai_office.core.models import TokenUsage
+            from sqlalchemy import select, func
+
+            today = self._get_today()
+            today_start = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+
+            async with async_session() as session:
+                result = await session.execute(
+                    select(func.coalesce(func.sum(TokenUsage.estimated_cost_usd), 0.0))
+                    .where(TokenUsage.timestamp >= today_start)
+                )
+                self._today_spend = float(result.scalar())
+                self._current_date = today
+                self._hydrated = True
+                logger.info(
+                    "Budget tracker hydrated from DB: $%.4f spent today",
+                    self._today_spend,
+                )
+        except Exception as e:
+            # If DB is unavailable (e.g. in tests), reset to zero for the new day
+            logger.warning("Could not hydrate budget from DB: %s", str(e))
+            self._today_spend = 0.0
+            self._current_date = self._get_today()
+            self._hydrated = True
+
     async def _reset_if_new_day(self):
-        """Reset spend counter at midnight UTC."""
+        """Reset spend counter at midnight UTC, hydrating from DB."""
         today = self._get_today()
         if self._current_date != today:
-            self._today_spend = 0.0
-            self._current_date = today
+            # New day (or first access) - try to hydrate from DB
+            await self._hydrate_from_db()
 
     async def check_budget(self) -> bool:
         """Проверить, не исчерпан ли бюджет.

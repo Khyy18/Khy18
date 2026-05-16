@@ -3,6 +3,7 @@
 import asyncio
 import time
 import uuid
+from collections import deque
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -10,6 +11,9 @@ from starlette.requests import Request
 from ai_office.core.logging import correlation_id_var, get_logger
 
 logger = get_logger(__name__)
+
+# Maximum number of observations to keep per histogram label set
+_MAX_HISTOGRAM_OBSERVATIONS = 10000
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -54,14 +58,18 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 class MetricsCollector:
-    """In-memory metrics collector с Prometheus-совместимым выводом."""
+    """In-memory metrics collector с Prometheus-совместимым выводом.
+
+    Histograms use a bounded deque (max 10000 observations per label set)
+    to prevent unbounded memory growth under sustained load.
+    """
 
     def __init__(self):
         self._lock = asyncio.Lock()
         # Counters: key -> value
         self._counters: dict[str, float] = {}
-        # Histogram observations: key -> list of values
-        self._histograms: dict[str, list[float]] = {}
+        # Histogram observations: key -> bounded deque of values
+        self._histograms: dict[str, deque] = {}
         # Gauges: key -> value
         self._gauges: dict[str, float] = {}
 
@@ -76,7 +84,7 @@ class MetricsCollector:
         key = self._make_key(name, labels)
         async with self._lock:
             if key not in self._histograms:
-                self._histograms[key] = []
+                self._histograms[key] = deque(maxlen=_MAX_HISTOGRAM_OBSERVATIONS)
             self._histograms[key].append(value)
 
     async def set_gauge(self, name: str, value: float, labels: dict[str, str] | None = None):

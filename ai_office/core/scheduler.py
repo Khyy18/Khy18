@@ -165,13 +165,16 @@ class Scheduler:
                 # Sleep with shutdown check
                 try:
                     if self._shutdown_event:
-                        done, _ = await asyncio.wait(
+                        done, pending = await asyncio.wait(
                             [
                                 asyncio.create_task(asyncio.sleep(delay)),
                                 asyncio.create_task(self._shutdown_event.wait()),
                             ],
                             return_when=asyncio.FIRST_COMPLETED,
                         )
+                        # Cancel the pending task to avoid leaks
+                        for t in pending:
+                            t.cancel()
                         if self._shutdown_event.is_set():
                             break
                     else:

@@ -277,20 +277,22 @@ async def handle_message(client: Client, message: Message) -> None:
     username = message.from_user.username
     chat_id = message.chat.id
 
-    # Регистрация пользователя
-    await get_or_create_user(telegram_id, username)
+    # Shared session for user registration + permission check (reduces connection churn)
+    async with async_session() as session:
+        # Регистрация пользователя
+        await get_or_create_user(telegram_id, username, session=session)
 
-    # Авто-создание агентов
-    await _auto_seed_agents()
+        # Авто-создание агентов
+        await _auto_seed_agents()
 
-    # Проверка прав: viewer не может общаться с агентами
-    if not await check_permission(telegram_id, UserRole.ADMIN):
-        await message.reply(
-            "\U0001f512 У вас нет прав для взаимодействия с агентами.\n"
-            "Доступные команды: /status, /agents\n"
-            "Обратитесь к владельцу для повышения прав."
-        )
-        return
+        # Проверка прав: viewer не может общаться с агентами
+        if not await check_permission(telegram_id, UserRole.ADMIN, session=session):
+            await message.reply(
+                "\U0001f512 У вас нет прав для взаимодействия с агентами.\n"
+                "Доступные команды: /status, /agents\n"
+                "Обратитесь к владельцу для повышения прав."
+            )
+            return
 
     # Сохраняем сообщение пользователя в историю
     add_message(chat_id, "human", text)
@@ -341,9 +343,15 @@ async def handle_message(client: Client, message: Message) -> None:
             )
 
     except Exception as e:
+        logger.error(
+            "Error processing message from user %d: %s",
+            telegram_id,
+            str(e),
+            exc_info=True,
+        )
         response_text = format_agent_message(
             "Alice", "Персональный ассистент",
-            f"Произошла ошибка при обработке: {str(e)}"
+            "Произошла внутренняя ошибка при обработке запроса. Попробуйте позже."
         )
 
     await message.reply(response_text)
