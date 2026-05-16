@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - feature/kindergarten-accountant-bot
+      - main
   pull_request:
     branches:
       - feature/kindergarten-accountant-bot
+      - main
 
 jobs:
   lint:

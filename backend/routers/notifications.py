@@ -30,7 +30,6 @@ class NotificationSendRequest(BaseModel):
 
 class TokenRegisterResponse(BaseModel):
     status: str
-    token_count: int
 
 
 class NotificationSendResponse(BaseModel):
@@ -48,7 +47,6 @@ async def register_token(data: TokenRegisterRequest):
     }
     return TokenRegisterResponse(
         status="registered",
-        token_count=len(_registered_tokens),
     )
 
 

@@ -77,11 +77,15 @@ def _build_system_prompt() -> str:
     return SYSTEM_PROMPT.format(intent_list=intent_list, knowledge=knowledge)
 
 
-async def classify_intent(user_message: str) -> Tuple[Optional[Intent], Dict, float]:
+async def classify_intent(
+    user_message: str,
+    history: Optional[list] = None,
+) -> Tuple[Optional[Intent], Dict, float]:
     """Classify user message into an intent with extracted parameters.
 
     Args:
         user_message: The user's natural language message in Russian.
+        history: Optional list of previous conversation messages for context.
 
     Returns:
         Tuple of (Intent or None, params dict, confidence float).
@@ -89,8 +93,11 @@ async def classify_intent(user_message: str) -> Tuple[Optional[Intent], Dict, fl
     system_prompt = _build_system_prompt()
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message},
     ]
+    # Include conversation history for context
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
 
     response = await chat_completion(messages)
     if not response:

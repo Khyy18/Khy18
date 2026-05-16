@@ -64,7 +64,7 @@ async def test_register_token(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "registered"
-    assert data["token_count"] == 1
+    assert "token_count" not in data
 
 
 @pytest.mark.asyncio
@@ -79,7 +79,8 @@ async def test_register_multiple_tokens(client):
         json={"fcm_token": "token-2", "chat_id": 2},
     )
     assert response.status_code == 200
-    assert response.json()["token_count"] == 2
+    assert response.json()["status"] == "registered"
+    assert "token_count" not in response.json()
 
 
 @pytest.mark.asyncio

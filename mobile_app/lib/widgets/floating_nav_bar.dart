@@ -18,7 +18,7 @@ class FloatingNavBar extends StatelessWidget {
       _NavItem(Icons.home_outlined, Icons.home_rounded, 'Главная'),
       _NavItem(Icons.calculate_outlined, Icons.calculate_rounded, 'Расчёты'),
       _NavItem(Icons.folder_outlined, Icons.folder_rounded, 'Данные'),
-      _NavItem(Icons.settings_outlined, Icons.settings_rounded, 'Настройки'),
+      _NavItem(Icons.more_horiz_outlined, Icons.more_horiz_rounded, 'Ещё'),
     ];
 
     return Container(

@@ -19,6 +19,7 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 _conversation_history: dict = {}
 HISTORY_MAX_MESSAGES = 5
 HISTORY_TIMEOUT_MINUTES = 30
+MAX_CONVERSATIONS = 1000
 
 
 class ChatRequest(BaseModel):
@@ -49,7 +50,7 @@ async def ai_chat(request: ChatRequest) -> ChatResponse:
     # Retrieve conversation history
     history = _get_history(request.chat_id)
 
-    intent, params, confidence = await classify_intent(request.message)
+    intent, params, confidence = await classify_intent(request.message, history=history)
 
     if intent is None or confidence < 0.3:
         response = ChatResponse(
@@ -62,12 +63,14 @@ async def ai_chat(request: ChatRequest) -> ChatResponse:
         return response
 
     # Execute the intent
-    result = await _execute_intent(intent, params, request.message)
+    result = await _execute_intent(intent, params, request.message, history=history)
     _update_history(request.chat_id, request.message, result.response)
     return result
 
 
-async def _execute_intent(intent: Intent, params: Dict, original_message: str) -> ChatResponse:
+async def _execute_intent(
+    intent: Intent, params: Dict, original_message: str, history: Optional[List[dict]] = None
+) -> ChatResponse:
     """Execute the classified intent and return formatted result."""
     try:
         if intent == Intent.calculate_salary:
@@ -79,9 +82,9 @@ async def _execute_intent(intent: Intent, params: Dict, original_message: str) -
         elif intent == Intent.search_kbk:
             return await _handle_kbk_search(params)
         elif intent == Intent.ask_question:
-            return await _handle_question(params, original_message)
+            return await _handle_question(params, original_message, history=history)
         elif intent == Intent.generate_text:
-            return await _handle_generate_text(params, original_message)
+            return await _handle_generate_text(params, original_message, history=history)
         elif intent in (Intent.add_employee, Intent.mark_timesheet, Intent.add_journal_entry):
             return ChatResponse(
                 response=f"Операция '{intent.value}' принята. Параметры: {params}. "
@@ -90,7 +93,7 @@ async def _execute_intent(intent: Intent, params: Dict, original_message: str) -
                 params=params,
             )
         else:
-            return await _handle_question(params, original_message)
+            return await _handle_question(params, original_message, history=history)
     except Exception as e:
         logger.error(f"Error executing intent {intent}: {e}")
         return ChatResponse(
@@ -243,7 +246,9 @@ async def _handle_kbk_search(params: Dict) -> ChatResponse:
     )
 
 
-async def _handle_question(params: Dict, original_message: str) -> ChatResponse:
+async def _handle_question(
+    params: Dict, original_message: str, history: Optional[List[dict]] = None
+) -> ChatResponse:
     """Answer accounting questions using Groq LLM with knowledge context."""
     knowledge = get_knowledge_context()
     question = params.get("question", original_message)
@@ -256,8 +261,11 @@ async def _handle_question(params: Dict, original_message: str) -> ChatResponse:
                 "Используй следующую справочную информацию:\n\n" + knowledge
             ),
         },
-        {"role": "user", "content": question},
     ]
+    # Include conversation history for multi-turn context
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": question})
 
     answer = await chat_completion(messages, temperature=0.3)
     if not answer:
@@ -270,7 +278,9 @@ async def _handle_question(params: Dict, original_message: str) -> ChatResponse:
     )
 
 
-async def _handle_generate_text(params: Dict, original_message: str) -> ChatResponse:
+async def _handle_generate_text(
+    params: Dict, original_message: str, history: Optional[List[dict]] = None
+) -> ChatResponse:
     """Generate text documents using Groq LLM."""
     text_type = params.get("text_type", "документ")
     context_info = params.get("context", original_message)
@@ -284,8 +294,11 @@ async def _handle_generate_text(params: Dict, original_message: str) -> ChatResp
                 "Используй деловой стиль русского языка."
             ),
         },
-        {"role": "user", "content": f"Составь {text_type}: {context_info}"},
     ]
+    # Include conversation history for multi-turn context
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": f"Составь {text_type}: {context_info}"})
 
     answer = await chat_completion(messages, temperature=0.4, max_tokens=2048)
     if not answer:
@@ -322,3 +335,10 @@ def _update_history(chat_id: int, user_msg: str, ai_response: str):
     if len(entry["messages"]) > HISTORY_MAX_MESSAGES * 2:
         entry["messages"] = entry["messages"][-(HISTORY_MAX_MESSAGES * 2):]
     entry["last_activity"] = datetime.now()
+    # Evict oldest conversations if exceeding max cap
+    if len(_conversation_history) > MAX_CONVERSATIONS:
+        oldest_key = min(
+            _conversation_history,
+            key=lambda k: _conversation_history[k]["last_activity"],
+        )
+        del _conversation_history[oldest_key]
