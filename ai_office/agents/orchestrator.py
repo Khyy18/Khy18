@@ -1,5 +1,6 @@
 """Оркестратор агентов на базе LangGraph StateGraph."""
 
+import logging
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -10,6 +11,10 @@ from pydantic import BaseModel, Field
 
 from ai_office.agents.registry import registry
 from ai_office.core.config import settings
+from ai_office.core.memory import agent_memory
+from ai_office.tools.memory_tools import set_current_agent
+
+logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict):
@@ -105,7 +110,37 @@ def make_agent_node(config):
         # Формируем сообщения с системным промптом
         messages = [SystemMessage(content=config.system_prompt)] + state["messages"]
 
+        # Автоматический recall из памяти перед вызовом LLM
+        try:
+            last_user_text = ""
+            for msg in reversed(state["messages"]):
+                if isinstance(msg, HumanMessage):
+                    last_user_text = msg.content
+                    break
+
+            if last_user_text:
+                memories = agent_memory.recall(config.name, last_user_text, k=3)
+                if memories:
+                    memory_lines = [f"- {m['text']}" for m in memories]
+                    memory_context = "Контекст из твоей памяти:\n" + "\n".join(memory_lines)
+                    messages.insert(1, SystemMessage(content=memory_context))
+        except Exception as e:
+            logger.debug(f"Ошибка при recall памяти для {config.name}: {e}")
+
         response = await llm_with_tools.ainvoke(messages)
+
+        # Автоматическое сохранение ответа в память (только финальные ответы без tool_calls)
+        try:
+            if isinstance(response, AIMessage) and not response.tool_calls and response.content:
+                summary = response.content[:200]
+                agent_memory.store(
+                    config.name,
+                    summary,
+                    metadata={"type": "response", "agent": config.name},
+                )
+        except Exception as e:
+            logger.debug(f"Ошибка при store памяти для {config.name}: {e}")
+
         return {**state, "messages": [response], "current_agent": config.name}
 
     agent_node.__name__ = f"{config.name}_node"
@@ -120,6 +155,10 @@ async def tool_node(state: AgentState) -> AgentState:
 
     if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
         return state
+
+    # Устанавливаем текущего агента для контекста инструментов памяти
+    current_agent = state.get("current_agent", "alice")
+    set_current_agent(current_agent)
 
     # Собираем все доступные инструменты из реестра
     all_tools = {}

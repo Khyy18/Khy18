@@ -29,3 +29,6 @@ dist/
 backtester/data/*.csv
 backtester/data/*.zip
 backtester/data/*.json
+
+# Персистентная память ChromaDB
+ai_office_memory/
