@@ -6,6 +6,7 @@ ruff
 playwright
 playwright-stealth
 fpdf2
+numpy
 scipy
 pyyaml
 alembic

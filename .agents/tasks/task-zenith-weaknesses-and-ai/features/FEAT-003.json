@@ -1,0 +1,33 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Block B items 7-8: AI-generated freelance responses + Thompson Sampling for A/B testing. Add freelance_automation/ai_responder.py that generates unique responses via LLM. Replace chi-squared with Thompson Sampling in ad_testing/.",
+  "status": "in_progress",
+  "steps": [
+    "Create freelance_automation/ai_responder.py: AIResponder class. Method: generate_response(session, order: Order, platform: str, portfolio_items: list[str]) -> str. Builds prompt: 'Analyze this job posting: {order.title}\\n{order.description}\\nBudget: {order.budget}\\nPlatform: {platform}\\nRelevant portfolio: {portfolio_items}\\nGenerate a unique, professional response in Russian. Adapt tone for {platform} (kwork=concise/professional, fl.ru=detailed/friendly). Include relevant portfolio mention. Max 500 chars.' Uses ai_router.call_llm_text(session, prompt, max_output_tokens=300, temperature=0.7). Falls back to generic template if LLM fails.",
+    "Create freelance_automation/portfolio.py: Simple portfolio storage. PORTFOLIO_ITEMS list of dicts with {title, description, tags, url}. Function select_relevant(order: Order, top_k=3) -> list[str] that does keyword matching between order.title+description and portfolio tags to select most relevant items.",
+    "Integrate AI responder into freelance_automation/kwork.py: In respond_to_order, before filling textarea, check if ai_responder is available. If yes, generate AI response and use it instead of passed text parameter. Add optional parameter use_ai=True.",
+    "Integrate AI responder into freelance_automation/flru.py: Same pattern as kwork.py integration.",
+    "Modify freelance_automation/scheduler.py: Pass use_ai=True when calling respond_to_order on platforms.",
+    "Create ad_testing/thompson.py: ThompsonSamplingEngine class. Uses Beta distribution (scipy.stats.beta). Methods: sample_arm(alpha, beta) -> float (draw from Beta(alpha, beta)). select_best_arm(channels: list[dict]) -> str (sample each channel, return highest). update_arm(source_tag, is_conversion: bool) - increment alpha (success) or beta (failure). allocate_budget_thompson(total_budget, channels) -> dict[str, float] - sample, allocate proportionally to samples.",
+    "Add BetaParams to ad_testing/models.py: Add columns alpha_param REAL DEFAULT 1.0, beta_param REAL DEFAULT 1.0 to ad_channels table. Add functions: get_beta_params(source_tag) -> (alpha, beta), update_beta_params(source_tag, alpha, beta).",
+    "Modify ad_testing/engine.py: Add method allocate_budget_thompson(total_budget) that uses ThompsonSamplingEngine. Keep existing allocate_budget() as legacy. Add method record_event_thompson(source_tag, event_type) that also updates beta params on click/conversion.",
+    "Create tests/test_ai_responder.py: Mock ai_router.call_llm_text to return generated response. Test generate_response produces non-empty string. Test fallback when LLM returns empty. Test portfolio selection picks relevant items.",
+    "Create tests/test_thompson.py: Test sample_arm returns value in [0,1]. Test select_best_arm selects arm with highest alpha/beta ratio given enough samples. Test allocate_budget_thompson distributes budget proportionally. Test update_arm increments correct parameter.",
+    "Update requirements.txt: add 'numpy' (needed by scipy already, but make explicit for Thompson Sampling)."
+  ],
+  "acceptance_criteria": [
+    "freelance_automation/ai_responder.py generates responses via ai_router",
+    "ad_testing/thompson.py implements Thompson Sampling with Beta distribution",
+    "ad_testing/engine.py has allocate_budget_thompson method",
+    "pytest tests/test_ai_responder.py tests/test_thompson.py pass",
+    "ruff check passes on all modified and new files"
+  ],
+  "verification": [
+    "ruff check freelance_automation/ai_responder.py freelance_automation/portfolio.py ad_testing/thompson.py ad_testing/engine.py ad_testing/models.py --select=E,F,I --ignore=F401,E501",
+    "pytest tests/test_ai_responder.py tests/test_thompson.py -v --tb=short",
+    "python -c \"from freelance_automation.ai_responder import AIResponder; from ad_testing.thompson import ThompsonSamplingEngine\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

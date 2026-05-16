@@ -12,7 +12,6 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
-
 DB_PATH = os.getenv("AD_TESTING_DB_PATH", "ad_testing.db")
 
 
@@ -40,6 +39,8 @@ def init_db() -> None:
                 conversions INTEGER NOT NULL DEFAULT 0,
                 spend REAL NOT NULL DEFAULT 0,
                 revenue REAL NOT NULL DEFAULT 0,
+                alpha_param REAL NOT NULL DEFAULT 1.0,
+                beta_param REAL NOT NULL DEFAULT 1.0,
                 created_at TEXT NOT NULL
             )
             """
@@ -58,6 +59,8 @@ def init_db() -> None:
             """
         )
         conn.commit()
+        # Миграция: добавить alpha_param и beta_param если таблица уже существует
+        _migrate_beta_params(conn)
 
 
 def register_channel(name: str, source_tag: str) -> int:
@@ -131,3 +134,44 @@ def list_channels() -> list[dict]:
 def get_channel_by_tag(source_tag: str) -> Optional[dict]:
     """Получить канал по source_tag (алиас для get_channel_stats)."""
     return get_channel_stats(source_tag)
+
+
+def _migrate_beta_params(conn: sqlite3.Connection) -> None:
+    """Добавить колонки alpha_param и beta_param если их нет (миграция)."""
+    cursor = conn.execute("PRAGMA table_info(ad_channels)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "alpha_param" not in columns:
+        conn.execute(
+            "ALTER TABLE ad_channels ADD COLUMN alpha_param REAL NOT NULL DEFAULT 1.0"
+        )
+    if "beta_param" not in columns:
+        conn.execute(
+            "ALTER TABLE ad_channels ADD COLUMN beta_param REAL NOT NULL DEFAULT 1.0"
+        )
+    conn.commit()
+
+
+def get_beta_params(source_tag: str) -> tuple[float, float]:
+    """Получить параметры Beta-распределения для канала.
+
+    Returns:
+        Кортеж (alpha, beta). По умолчанию (1.0, 1.0).
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT alpha_param, beta_param FROM ad_channels WHERE source_tag = ?",
+            (source_tag,),
+        ).fetchone()
+        if row:
+            return (float(row["alpha_param"]), float(row["beta_param"]))
+        return (1.0, 1.0)
+
+
+def update_beta_params(source_tag: str, alpha: float, beta: float) -> None:
+    """Обновить параметры Beta-распределения для канала."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE ad_channels SET alpha_param = ?, beta_param = ? WHERE source_tag = ?",
+            (float(alpha), float(beta), source_tag),
+        )
+        conn.commit()

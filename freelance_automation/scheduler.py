@@ -91,7 +91,7 @@ class FreelanceScheduler:
                         break
 
                     text = self._pick_template(order)
-                    success = await platform.respond_to_order(order, text)
+                    success = await platform.respond_to_order(order, text, use_ai=True)
 
                     if success:
                         self._responses_this_hour.append(datetime.now(timezone.utc))

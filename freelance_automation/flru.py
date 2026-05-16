@@ -142,11 +142,38 @@ class FLruPlatform(FreelancePlatform):
             log.error("fetch_orders_failed", platform="fl.ru", error=str(e))
             return []
 
-    async def respond_to_order(self, order: Order, text: str) -> bool:
-        """Отправка отклика на заказ FL.ru."""
+    async def respond_to_order(
+        self, order: Order, text: str, use_ai: bool = True
+    ) -> bool:
+        """Отправка отклика на заказ FL.ru.
+
+        Args:
+            order: Заказ для отклика.
+            text: Текст отклика (используется если use_ai=False или AI недоступен).
+            use_ai: Генерировать отклик через AI вместо переданного текста.
+        """
         if not self._page:
             log.error("browser_not_initialized", platform="fl.ru")
             return False
+
+        response_text = text
+        if use_ai:
+            try:
+                import aiohttp
+
+                from freelance_automation.ai_responder import AIResponder
+                from freelance_automation.portfolio import select_relevant
+
+                portfolio_items = select_relevant(order)
+                responder = AIResponder()
+                async with aiohttp.ClientSession() as session:
+                    ai_text = await responder.generate_response(
+                        session, order, "fl.ru", portfolio_items
+                    )
+                    if ai_text:
+                        response_text = ai_text
+            except Exception as e:
+                log.warning("ai_responder_unavailable", error=str(e))
 
         try:
             await self._page.goto(order.url)
@@ -160,7 +187,7 @@ class FLruPlatform(FreelancePlatform):
                 return False
 
             await self._delay()
-            await textarea.fill(text)
+            await textarea.fill(response_text)
 
             # Отправка формы
             submit_btn = await self._page.query_selector(".b-post__form button[type='submit']")

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from ad_testing import models
 from ad_testing.stats import chi_squared_test
+from ad_testing.thompson import ThompsonSamplingEngine
 from logging_config import get_logger
 
 log = get_logger(__name__)
@@ -152,3 +153,51 @@ class ABTestEngine:
             "channels": summary,
             "total_channels": len(summary),
         }
+
+    def allocate_budget_thompson(self, total_budget: float) -> dict[str, float]:
+        """Распределить бюджет через Thompson Sampling.
+
+        Использует Beta-распределение для байесовского подхода
+        к multi-armed bandit задаче. Более эффективен, чем
+        фиксированное 80/20 разделение из allocate_budget().
+        """
+        channels = models.list_channels()
+        if not channels:
+            return {}
+
+        ts_engine = ThompsonSamplingEngine()
+        allocation = ts_engine.allocate_budget_thompson(total_budget, channels)
+        log.info(
+            "budget_allocated_thompson",
+            total_budget=total_budget,
+            allocation=allocation,
+        )
+        return allocation
+
+    def record_event_thompson(
+        self, source_tag: str, event_type: str, revenue: float = 0.0
+    ) -> None:
+        """Записать событие и обновить параметры Thompson Sampling.
+
+        Помимо обычной записи события, обновляет alpha/beta параметры
+        Beta-распределения для данного канала.
+        """
+        # Записать событие как обычно
+        models.record_event(source_tag, event_type, revenue)
+
+        # Обновить Beta-параметры для Thompson Sampling
+        if event_type in ("click", "conversion"):
+            is_conversion = event_type == "conversion"
+            channels = models.list_channels()
+            ts_engine = ThompsonSamplingEngine()
+            new_alpha, new_beta = ts_engine.update_arm(
+                source_tag, is_conversion, channels
+            )
+            models.update_beta_params(source_tag, new_alpha, new_beta)
+            log.debug(
+                "thompson_params_updated",
+                source_tag=source_tag,
+                event_type=event_type,
+                alpha=new_alpha,
+                beta=new_beta,
+            )
