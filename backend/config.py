@@ -25,6 +25,9 @@ class Settings:
 
     # Security settings
     ENCRYPTION_KEY: str = os.environ.get("ENCRYPTION_KEY", "")
+    ENCRYPTION_KEY_V1: str = os.environ.get("ENCRYPTION_KEY_V1", "")
+    ENCRYPTION_KEY_V2: str = os.environ.get("ENCRYPTION_KEY_V2", "")
+    ENCRYPTION_KEY_VERSION: int = int(os.environ.get("ENCRYPTION_KEY_VERSION", "1"))
     SENTRY_DSN: str = os.environ.get("SENTRY_DSN", "")
     EXCEL_PASSWORD: str = os.environ.get("EXCEL_PASSWORD", "kindergarten2024")
 
