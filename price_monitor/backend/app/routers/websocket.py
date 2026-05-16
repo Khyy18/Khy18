@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDisconnect, Query
 from pydantic import BaseModel
+from app.config import settings
 from app.middleware.auth import verify_token
 
 logger = logging.getLogger(__name__)
@@ -66,12 +67,18 @@ async def websocket_prices(websocket: WebSocket, token: str = Query("")):
 
 
 @router.post("/ws/notify-price-update")
-async def notify_price_update(data: PriceUpdateNotification):
+async def notify_price_update(
+    data: PriceUpdateNotification,
+    x_internal_token: str = Header(""),
+):
     """Internal endpoint for the bot/worker to notify about price changes.
 
     The bot calls this after detecting a price update, which then
     broadcasts the update to all connected WebSocket clients.
+    Requires X-Internal-Token header matching INTERNAL_API_KEY.
     """
+    if not settings.internal_api_key or x_internal_token != settings.internal_api_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
     await broadcast_price_update(
         product_id=data.product_id,
         old_price=data.old_price,

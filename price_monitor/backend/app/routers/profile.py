@@ -1,6 +1,7 @@
 """Profile router - user profile and subscription info."""
 from __future__ import annotations
 
+import asyncio
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -19,8 +20,8 @@ async def get_profile(
     user: User = Depends(get_current_user),
 ):
     """Get current user profile with subscription info."""
-    # Check and award any newly earned badges
-    await gamification_service.check_and_award_badges(user.id, db)
+    # Check and award badges in background (fire-and-forget) to avoid N+1 latency
+    asyncio.create_task(gamification_service.check_and_award_badges(user.id, db))
 
     return {
         "id": user.id,

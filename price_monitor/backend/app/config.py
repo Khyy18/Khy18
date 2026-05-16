@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Sentry
     sentry_dsn: str = ""
 
+    # Internal API key for service-to-service calls
+    internal_api_key: str = ""
+
     # Admin
     admin_telegram_ids: str = ""
 

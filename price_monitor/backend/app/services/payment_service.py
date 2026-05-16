@@ -135,7 +135,7 @@ class PaymentService:
         user_id: int,
         stars_amount: int,
         db: AsyncSession,
-        telegram_payment_charge_id: str | None = None,
+        telegram_payment_charge_id: str = "",
     ) -> dict:
         """Process successful Telegram Stars payment - activate VIP.
 
@@ -145,6 +145,9 @@ class PaymentService:
         proof of payment. Never expose this as a public API endpoint without
         verifying the payment through the Telegram Bot API first.
         """
+        if not telegram_payment_charge_id:
+            return {"ok": False, "error": "Missing payment charge ID"}
+
         from sqlalchemy import select
 
         result = await db.execute(select(User).where(User.id == user_id))
@@ -163,8 +166,7 @@ class PaymentService:
         pending_payment = pending_result.scalar_one_or_none()
         if pending_payment:
             pending_payment.status = "confirmed"
-            if telegram_payment_charge_id:
-                pending_payment.provider_payment_id = telegram_payment_charge_id
+            pending_payment.provider_payment_id = telegram_payment_charge_id
 
         days = stars_amount  # 1 star = 1 day
         user.is_vip = True
