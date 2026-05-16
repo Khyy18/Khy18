@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
 
 from ai_office.agents.alice import alice_config
 from ai_office.agents.sam import sam_config
@@ -21,6 +22,23 @@ class AgentState(TypedDict):
     chat_history: list[dict]
 
 
+class RouterDecision(BaseModel):
+    """Структурированный ответ роутера."""
+
+    target_agent: str = Field(
+        description="Имя агента для маршрутизации: 'alice' или 'sam'"
+    )
+
+
+ROUTER_SYSTEM_PROMPT = """Ты - маршрутизатор запросов в AI Office. Определи какому агенту адресовать сообщение пользователя.
+
+Доступные агенты:
+- alice: Персональный ассистент и продакт-менеджер. Занимается задачами, планированием, приоритетами, управлением проектами, общими вопросами.
+- sam: Senior Developer. Занимается кодом, архитектурой, багами, техническими вопросами, ревью, деплоем.
+
+Верни имя агента, которому лучше всего подходит запрос. Если не уверен - выбери alice."""
+
+
 def _get_llm() -> ChatOpenAI:
     """Получить экземпляр LLM."""
     return ChatOpenAI(
@@ -30,43 +48,50 @@ def _get_llm() -> ChatOpenAI:
     )
 
 
-def router_node(state: AgentState) -> AgentState:
-    """Маршрутизатор: определяет какому агенту адресовано сообщение."""
+async def router_node(state: AgentState) -> AgentState:
+    """Маршрутизатор: определяет какому агенту адресовано сообщение через LLM."""
     messages = state["messages"]
     if not messages:
         return {**state, "current_agent": "alice"}
 
     last_message = messages[-1]
-    content = ""
-    if isinstance(last_message, HumanMessage):
-        content = last_message.content.lower()
+    if not isinstance(last_message, HumanMessage):
+        return {**state, "current_agent": "alice"}
 
-    # Ключевые слова для маршрутизации
-    sam_keywords = [
-        "код", "code", "баг", "bug", "архитектур", "рефактор",
-        "функци", "класс", "api", "тест", "деплой", "deploy",
-        "sam", "сэм", "разработ", "программ", "ошибк",
-    ]
+    try:
+        router_llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            api_key=settings.openai_api_key,
+            temperature=0,
+        )
+        structured_llm = router_llm.with_structured_output(RouterDecision)
 
-    alice_keywords = [
-        "задач", "task", "план", "приоритет", "статус",
-        "alice", "алис", "проект", "управлени", "команд",
-    ]
+        # Формируем контекст для роутера
+        router_messages = [SystemMessage(content=ROUTER_SYSTEM_PROMPT)]
 
-    # Определяем агента по ключевым словам
-    sam_score = sum(1 for kw in sam_keywords if kw in content)
-    alice_score = sum(1 for kw in alice_keywords if kw in content)
+        # Добавляем историю чата для контекста
+        chat_history = state.get("chat_history", [])
+        for msg in chat_history[-5:]:
+            if msg["role"] == "human":
+                router_messages.append(HumanMessage(content=msg["content"]))
+            else:
+                router_messages.append(AIMessage(content=msg["content"]))
 
-    if sam_score > alice_score:
-        target_agent = "sam"
-    else:
-        # По умолчанию - Alice (как точка входа)
+        router_messages.append(HumanMessage(content=last_message.content))
+
+        decision = await structured_llm.ainvoke(router_messages)
+
+        target_agent = decision.target_agent.lower()
+        if target_agent not in ("alice", "sam"):
+            target_agent = "alice"
+
+    except Exception:
         target_agent = "alice"
 
     return {**state, "current_agent": target_agent}
 
 
-def alice_node(state: AgentState) -> AgentState:
+async def alice_node(state: AgentState) -> AgentState:
     """Нода агента Alice - персональный ассистент."""
     llm = _get_llm()
     llm_with_tools = llm.bind_tools(alice_config.tools)
@@ -74,11 +99,11 @@ def alice_node(state: AgentState) -> AgentState:
     # Формируем сообщения с системным промптом
     messages = [SystemMessage(content=alice_config.system_prompt)] + state["messages"]
 
-    response = llm_with_tools.invoke(messages)
+    response = await llm_with_tools.ainvoke(messages)
     return {**state, "messages": [response], "current_agent": "alice"}
 
 
-def sam_node(state: AgentState) -> AgentState:
+async def sam_node(state: AgentState) -> AgentState:
     """Нода агента Sam - разработчик."""
     llm = _get_llm()
     llm_with_tools = llm.bind_tools(sam_config.tools)
@@ -86,12 +111,12 @@ def sam_node(state: AgentState) -> AgentState:
     # Формируем сообщения с системным промптом
     messages = [SystemMessage(content=sam_config.system_prompt)] + state["messages"]
 
-    response = llm_with_tools.invoke(messages)
+    response = await llm_with_tools.ainvoke(messages)
     return {**state, "messages": [response], "current_agent": "sam"}
 
 
-def tool_node(state: AgentState) -> AgentState:
-    """Нода выполнения инструментов."""
+async def tool_node(state: AgentState) -> AgentState:
+    """Нода выполнения инструментов (async)."""
     messages = state["messages"]
     last_message = messages[-1]
 
@@ -107,7 +132,7 @@ def tool_node(state: AgentState) -> AgentState:
         tool_args = tool_call["args"]
 
         if tool_name in all_tools:
-            result = all_tools[tool_name].invoke(tool_args)
+            result = await all_tools[tool_name].ainvoke(tool_args)
             tool_messages.append(
                 ToolMessage(
                     content=str(result),

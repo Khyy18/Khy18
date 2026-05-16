@@ -5,6 +5,7 @@ from pyrogram.types import Message
 from langchain_core.messages import AIMessage, HumanMessage
 
 from ai_office.agents.orchestrator import build_graph
+from ai_office.memory import add_message, get_history
 from ai_office.telegram.utils import format_agent_message
 
 
@@ -55,9 +56,10 @@ async def handle_message(client: Client, message: Message) -> None:
     """Обработчик обычных сообщений - передача в оркестратор.
 
     При получении обычного сообщения:
-    1. Парсит текст
-    2. Передает в оркестратор для обработки
-    3. Отправляет ответ агента в чат
+    1. Сохраняет сообщение в историю
+    2. Передает в оркестратор с контекстом истории чата
+    3. Сохраняет ответ в историю
+    4. Отправляет ответ агента в чат
 
     Args:
         client: Pyrogram клиент
@@ -67,17 +69,33 @@ async def handle_message(client: Client, message: Message) -> None:
     if not text:
         return
 
+    chat_id = message.chat.id
+
+    # Сохраняем сообщение пользователя в историю
+    add_message(chat_id, "human", text)
+
     # Отправляем typing статус
-    await client.send_chat_action(message.chat.id, "typing")
+    await client.send_chat_action(chat_id, "typing")
 
     try:
+        # Получаем историю чата
+        history = get_history(chat_id)
+
+        # Формируем список сообщений из истории (без текущего - оно будет последним)
+        history_messages = []
+        for msg in history[:-1]:  # Исключаем текущее сообщение (оно только что добавлено)
+            if msg["role"] == "human":
+                history_messages.append(HumanMessage(content=msg["content"]))
+            else:
+                history_messages.append(AIMessage(content=msg["content"]))
+
         # Вызываем граф оркестратора
         graph = build_graph()
         initial_state = {
-            "messages": [HumanMessage(content=text)],
+            "messages": history_messages + [HumanMessage(content=text)],
             "current_agent": "",
             "task_context": {},
-            "chat_history": [],
+            "chat_history": history,
         }
         result = await graph.ainvoke(initial_state)
 
@@ -89,6 +107,9 @@ async def handle_message(client: Client, message: Message) -> None:
                 break
 
         if ai_response:
+            # Сохраняем ответ AI в историю
+            add_message(chat_id, "ai", ai_response)
+
             agent_name = result.get("current_agent", "alice").capitalize()
             role = "Персональный ассистент" if agent_name == "Alice" else "Разработчик"
             response_text = format_agent_message(agent_name, role, ai_response)

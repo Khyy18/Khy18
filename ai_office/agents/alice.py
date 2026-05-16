@@ -7,6 +7,7 @@ from ai_office.tools.task_tools import (
     assign_task,
     get_active_tasks,
 )
+from ai_office.tools.delegation import delegate_to_agent
 
 ALICE_SYSTEM_PROMPT = """Ты - Alice, персональный ассистент и продакт-менеджер в AI Office.
 
@@ -30,5 +31,5 @@ alice_config = AgentConfig(
     name="alice",
     role="Personal Assistant / Product Manager",
     system_prompt=ALICE_SYSTEM_PROMPT,
-    tools=[create_task, update_task_status, assign_task, get_active_tasks],
+    tools=[create_task, update_task_status, assign_task, get_active_tasks, delegate_to_agent],
 )

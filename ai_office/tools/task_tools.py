@@ -5,11 +5,20 @@ from sqlalchemy import select
 
 from ai_office.core.database import async_session
 from ai_office.core.models import ActivityLog, Agent, Task
-from ai_office.tools.db_helper import run_async
 
 
-async def _create_task_in_db(description: str, priority: str, executor_name: str) -> str:
-    """Создать задачу в базе данных."""
+@tool
+async def create_task(description: str, priority: str = "medium", executor_name: str = "") -> str:
+    """Создать новую задачу.
+
+    Args:
+        description: Описание задачи
+        priority: Приоритет задачи (low, medium, high)
+        executor_name: Имя исполнителя (alice или sam), пустая строка если не назначен
+
+    Returns:
+        Подтверждение создания задачи
+    """
     async with async_session() as session:
         executor_id = None
         if executor_name:
@@ -32,7 +41,6 @@ async def _create_task_in_db(description: str, priority: str, executor_name: str
         await session.flush()
 
         # Записываем в лог активности
-        # Ищем Alice как агента по умолчанию для логирования
         result = await session.execute(
             select(Agent).where(Agent.name == "Alice")
         )
@@ -53,8 +61,17 @@ async def _create_task_in_db(description: str, priority: str, executor_name: str
         )
 
 
-async def _update_task_status_in_db(task_id: int, new_status: str) -> str:
-    """Обновить статус задачи в базе данных."""
+@tool
+async def update_task_status(task_id: int, new_status: str) -> str:
+    """Обновить статус задачи.
+
+    Args:
+        task_id: ID задачи
+        new_status: Новый статус (open, in_progress, done)
+
+    Returns:
+        Подтверждение обновления
+    """
     async with async_session() as session:
         result = await session.execute(select(Task).where(Task.id == task_id))
         task = result.scalar_one_or_none()
@@ -66,8 +83,17 @@ async def _update_task_status_in_db(task_id: int, new_status: str) -> str:
         return f"Статус задачи #{task_id} обновлён на: {new_status}"
 
 
-async def _assign_task_in_db(task_id: int, agent_name: str) -> str:
-    """Назначить задачу агенту в базе данных."""
+@tool
+async def assign_task(task_id: int, agent_name: str) -> str:
+    """Назначить задачу агенту.
+
+    Args:
+        task_id: ID задачи
+        agent_name: Имя агента (alice или sam)
+
+    Returns:
+        Подтверждение назначения
+    """
     async with async_session() as session:
         result = await session.execute(select(Task).where(Task.id == task_id))
         task = result.scalar_one_or_none()
@@ -86,8 +112,13 @@ async def _assign_task_in_db(task_id: int, agent_name: str) -> str:
         return f"Задача #{task_id} назначена агенту: {agent_name}"
 
 
-async def _get_active_tasks_from_db() -> str:
-    """Получить список активных задач из базы данных."""
+@tool
+async def get_active_tasks() -> str:
+    """Получить список активных задач.
+
+    Returns:
+        Список активных задач в текстовом формате
+    """
     async with async_session() as session:
         result = await session.execute(
             select(Task).where(Task.status.in_(["open", "in_progress"]))
@@ -101,56 +132,3 @@ async def _get_active_tasks_from_db() -> str:
         for t in tasks:
             lines.append(f"  #{t.id} [{t.status}] {t.priority}: {t.description}")
         return "\n".join(lines)
-
-
-@tool
-def create_task(description: str, priority: str = "medium", executor_name: str = "") -> str:
-    """Создать новую задачу.
-
-    Args:
-        description: Описание задачи
-        priority: Приоритет задачи (low, medium, high)
-        executor_name: Имя исполнителя (alice или sam), пустая строка если не назначен
-
-    Returns:
-        Подтверждение создания задачи
-    """
-    return run_async(_create_task_in_db(description, priority, executor_name))
-
-
-@tool
-def update_task_status(task_id: int, new_status: str) -> str:
-    """Обновить статус задачи.
-
-    Args:
-        task_id: ID задачи
-        new_status: Новый статус (open, in_progress, done)
-
-    Returns:
-        Подтверждение обновления
-    """
-    return run_async(_update_task_status_in_db(task_id, new_status))
-
-
-@tool
-def assign_task(task_id: int, agent_name: str) -> str:
-    """Назначить задачу агенту.
-
-    Args:
-        task_id: ID задачи
-        agent_name: Имя агента (alice или sam)
-
-    Returns:
-        Подтверждение назначения
-    """
-    return run_async(_assign_task_in_db(task_id, agent_name))
-
-
-@tool
-def get_active_tasks() -> str:
-    """Получить список активных задач.
-
-    Returns:
-        Список активных задач в текстовом формате
-    """
-    return run_async(_get_active_tasks_from_db())

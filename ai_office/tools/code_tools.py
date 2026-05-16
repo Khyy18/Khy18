@@ -5,7 +5,6 @@ from sqlalchemy import select
 
 from ai_office.core.database import async_session
 from ai_office.core.models import ActivityLog, Agent
-from ai_office.tools.db_helper import run_async
 
 
 async def _log_activity(action_type: str, description: str) -> None:
@@ -26,7 +25,7 @@ async def _log_activity(action_type: str, description: str) -> None:
 
 
 @tool
-def execute_code(code: str, language: str = "python") -> str:
+async def execute_code(code: str, language: str = "python") -> str:
     """Выполнить фрагмент кода (имитация с логированием в БД).
 
     Args:
@@ -37,12 +36,12 @@ def execute_code(code: str, language: str = "python") -> str:
         Результат выполнения
     """
     result = f"[Имитация] Код на {language} выполнен успешно. Результат: OK"
-    run_async(_log_activity("code_executed", f"Выполнен код на {language}"))
+    await _log_activity("code_executed", f"Выполнен код на {language}")
     return result
 
 
 @tool
-def review_code(code: str, context: str = "") -> str:
+async def review_code(code: str, context: str = "") -> str:
     """Провести ревью кода (имитация с логированием в БД).
 
     Args:
@@ -56,12 +55,12 @@ def review_code(code: str, context: str = "") -> str:
         "[Имитация] Код проверен. "
         "Замечаний нет, качество соответствует стандартам."
     )
-    run_async(_log_activity("code_reviewed", f"Проведено ревью кода. Контекст: {context or 'общий'}"))
+    await _log_activity("code_reviewed", f"Проведено ревью кода. Контекст: {context or 'общий'}")
     return result
 
 
 @tool
-def search_docs(query: str, source: str = "general") -> str:
+async def search_docs(query: str, source: str = "general") -> str:
     """Поиск в документации (имитация с логированием в БД).
 
     Args:
@@ -72,5 +71,5 @@ def search_docs(query: str, source: str = "general") -> str:
         Найденная информация
     """
     result = f"[Имитация] Результаты поиска по запросу '{query}': информация найдена в {source}."
-    run_async(_log_activity("docs_searched", f"Поиск в документации: '{query}' (источник: {source})"))
+    await _log_activity("docs_searched", f"Поиск в документации: '{query}' (источник: {source})")
     return result
