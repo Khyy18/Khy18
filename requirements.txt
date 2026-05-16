@@ -1,0 +1,15 @@
+aiohttp>=3.9
+structlog
+sentry-sdk
+prometheus-client
+arq
+alembic
+asyncpg
+redis[hiredis]
+sqlalchemy
+numpy
+scipy
+fpdf2
+playwright
+playwright-stealth
+pyyaml
