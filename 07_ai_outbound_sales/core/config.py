@@ -112,5 +112,18 @@ class Settings(BaseSettings):
     # LinkedIn self-healing
     linkedin_self_healing_enabled: bool = True
 
+    # Voice / Twilio settings
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
+    deepgram_api_key: str = ""
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "default"
+    voice_max_call_duration: int = 180
+    voice_concurrent_calls_limit: int = 5
+    voice_calling_hours_start: int = 9
+    voice_calling_hours_end: int = 20
+    voice_amd_enabled: bool = True
+
 
 settings = Settings()  # type: ignore[call-arg]

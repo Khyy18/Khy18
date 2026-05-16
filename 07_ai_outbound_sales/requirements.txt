@@ -30,6 +30,10 @@ sentry-sdk[fastapi]
 dnspython
 scikit-learn
 joblib
+twilio
+deepgram-sdk
+elevenlabs
+websockets
 
 # Test dependencies
 pytest

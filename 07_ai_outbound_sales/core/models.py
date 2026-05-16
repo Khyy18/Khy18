@@ -44,6 +44,7 @@ class ChannelType(str, enum.Enum):
     email = "email"
     linkedin = "linkedin"
     twitter = "twitter"
+    voice = "voice"
 
 
 class UserRole(str, enum.Enum):
@@ -108,6 +109,26 @@ class OnboardingStep(str, enum.Enum):
     completed = "completed"
 
 
+class CallStatus(str, enum.Enum):
+    initiated = "initiated"
+    ringing = "ringing"
+    answered = "answered"
+    in_progress = "in_progress"
+    completed = "completed"
+    failed = "failed"
+    no_answer = "no_answer"
+    busy = "busy"
+
+
+class CallOutcome(str, enum.Enum):
+    qualified = "qualified"
+    not_interested = "not_interested"
+    voicemail = "voicemail"
+    no_answer = "no_answer"
+    error = "error"
+    busy = "busy"
+
+
 # ---------- Utility ----------
 
 def _utcnow() -> datetime:
@@ -143,6 +164,8 @@ class Tenant(Base):
     api_keys = relationship("ApiKey", back_populates="tenant")
     webhooks = relationship("Webhook", back_populates="tenant")
     lead_feedbacks = relationship("LeadFeedback", back_populates="tenant")
+    calls = relationship("Call", back_populates="tenant")
+    call_scripts = relationship("CallScript", back_populates="tenant")
 
 
 class User(Base):
@@ -453,3 +476,39 @@ class CostRecord(Base):
     amount_cents = Column(Integer, nullable=False)
     description = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class CallScript(Base):
+    __tablename__ = "call_scripts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    name = Column(String, nullable=False)
+    script_json = Column(JSONB, default=dict)
+    voice_id = Column(String, nullable=True)
+    language = Column(String, default="en")
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="call_scripts")
+
+
+class Call(Base):
+    __tablename__ = "calls"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=True)
+    twilio_sid = Column(String, nullable=True)
+    status = Column(Enum(CallStatus), default=CallStatus.initiated, nullable=False)
+    duration_seconds = Column(Integer, nullable=True)
+    started_at = Column(DateTime(timezone=True), default=_utcnow)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    recording_url = Column(String, nullable=True)
+    transcript = Column(Text, nullable=True)
+    outcome = Column(Enum(CallOutcome), nullable=True)
+    cost_cents = Column(Integer, default=0)
+    script_id = Column(UUID(as_uuid=True), ForeignKey("call_scripts.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="calls")
