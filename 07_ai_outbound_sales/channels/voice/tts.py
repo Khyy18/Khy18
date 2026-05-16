@@ -14,13 +14,40 @@ logger = logging.getLogger(__name__)
 
 ELEVENLABS_STREAM_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
 
+# Default ElevenLabs voice IDs per language
+DEFAULT_VOICE_IDS: dict[str, str] = {
+    "en": "21m00Tcm4TlvDq8ikWAM",  # Rachel
+    "ru": "AZnzlk1XvdvUeBnXmlld",  # Domi
+    "es": "EXAVITQu4vr4xnSDxMaL",  # Bella
+    "de": "ErXwobaYiN019PkySvjV",  # Antoni
+}
+
 
 class ElevenLabsTTS:
     """Text-to-speech using ElevenLabs streaming API."""
 
-    def __init__(self, api_key: str, voice_id: str = "default") -> None:
+    def __init__(self, api_key: str, voice_id: str = "default", language: str = "en") -> None:
         self._api_key = api_key
-        self._voice_id = voice_id
+        self._language = language
+        if voice_id and voice_id != "default":
+            self._voice_id = voice_id
+        else:
+            self._voice_id = DEFAULT_VOICE_IDS.get(language, DEFAULT_VOICE_IDS["en"])
+
+    @classmethod
+    def for_language(cls, api_key: str, language: str, voice_id: str | None = None) -> "ElevenLabsTTS":
+        """Create a TTS instance configured for a specific language.
+
+        Args:
+            api_key: ElevenLabs API key.
+            language: Language code (en, ru, es, de).
+            voice_id: Optional override voice ID. If not provided, uses default for language.
+
+        Returns:
+            Configured ElevenLabsTTS instance.
+        """
+        resolved_voice_id = voice_id or DEFAULT_VOICE_IDS.get(language, DEFAULT_VOICE_IDS["en"])
+        return cls(api_key=api_key, voice_id=resolved_voice_id, language=language)
 
     async def synthesize(
         self, text: str, output_format: str = "ulaw_8000"

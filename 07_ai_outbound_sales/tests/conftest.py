@@ -44,6 +44,7 @@ from core.models import (
     CallOutcome,
     VoiceAddon,
     VoiceAddonPlan,
+    LeadInteraction,
 )
 
 
@@ -432,3 +433,23 @@ def make_voice_addon(
     }
     defaults.update(kwargs)
     return VoiceAddon(**defaults)
+
+
+def make_lead_interaction(
+    lead_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
+    **kwargs,
+) -> LeadInteraction:
+    """Create a LeadInteraction instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "lead_id": lead_id or uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "interaction_type": "call",
+        "channel": "voice",
+        "summary": "Test interaction summary",
+        "context_json": {},
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return LeadInteraction(**defaults)

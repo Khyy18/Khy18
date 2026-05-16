@@ -128,6 +128,7 @@ class Settings(BaseSettings):
     voice_calling_hours_start: int = 9
     voice_calling_hours_end: int = 20
     voice_amd_enabled: bool = True
+    voice_supported_languages: str = "en,ru,es,de"
 
 
 settings = Settings()  # type: ignore[call-arg]

@@ -163,6 +163,68 @@ async def get_call(
     }
 
 
+@router.get("/calls/{call_id}/coaching")
+async def get_call_coaching(
+    call_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Get AI coaching analysis for a specific call.
+
+    Loads the call, verifies tenant ownership, and runs call coach analysis.
+    Returns structured coaching data with scores and improvement suggestions.
+    """
+    result = await session.execute(
+        select(Call).where(
+            Call.id == call_id,
+            Call.tenant_id == current_user.tenant_id,
+        )
+    )
+    call = result.scalar_one_or_none()
+    if call is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Call not found",
+        )
+
+    if not call.transcript:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No transcript available for coaching analysis",
+        )
+
+    from agents.call_coach import CallCoachAgent
+    from core.config import settings as app_settings
+    from core.db import async_session_factory
+
+    # Build a minimal LLM client mock or real client
+    try:
+        from core.llm import FallbackLLMClient
+        llm_client = FallbackLLMClient(app_settings)
+    except Exception:
+        from core.llm import LLMClient
+        llm_client = LLMClient(
+            provider="openai",
+            api_key=app_settings.openai_api_key,
+            model=app_settings.llm_openai_model,
+        )
+
+    coach = CallCoachAgent(
+        llm_client=llm_client,
+        settings=app_settings,
+        session_factory=async_session_factory,
+    )
+
+    try:
+        coaching_result = await coach.analyze_call(call.id)
+        return coaching_result.to_dict()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        )
+
+
 @router.post("/calls/{call_id}/replay")
 async def replay_call(
     call_id: str,

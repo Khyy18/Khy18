@@ -202,11 +202,13 @@ class Lead(Base):
     enrichment_data = Column(JSONB, default=dict)
     status = Column(Enum(LeadStatus), default=LeadStatus.new, nullable=False)
     score = Column(Float, nullable=True)
+    conversation_context = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     tenant = relationship("Tenant", back_populates="leads")
     messages = relationship("Message", back_populates="lead")
     pending_approvals = relationship("PendingApproval", back_populates="lead")
+    interactions = relationship("LeadInteraction", back_populates="lead")
 
 
 class Sequence(Base):
@@ -542,3 +544,20 @@ class VoiceAddon(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     tenant = relationship("Tenant", back_populates="voice_addons")
+
+
+class LeadInteraction(Base):
+    """Tracks individual interactions with leads across all channels."""
+
+    __tablename__ = "lead_interactions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    interaction_type = Column(String, nullable=False)  # "call", "email", "linkedin"
+    channel = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    context_json = Column(JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    lead = relationship("Lead", back_populates="interactions")

@@ -6,7 +6,9 @@ import enum
 import json
 import logging
 from typing import Any
+from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from core.config import Settings
@@ -44,6 +46,8 @@ Lead context:
 
 {script_instructions}
 
+{conversation_context}
+
 Current conversation state: {state}
 
 Based on the conversation state:
@@ -60,6 +64,122 @@ Return your response as a JSON object with these fields:
 Only return the JSON object, no other text.
 """
 
+# Multi-language system prompts
+VOICE_SYSTEM_PROMPTS: dict[str, str] = {
+    "en": VOICE_SYSTEM_PROMPT,
+    "ru": """\
+Вы AI голосовой помощник по продажам, совершающий исходящие звонки от имени компании.
+Ваша цель - вести естественный, профессиональный телефонный разговор, который квалифицирует потенциального клиента и продвигает к встрече или продаже.
+
+Рекомендации:
+- Говорите естественно и разговорно, как в настоящем телефонном разговоре
+- Отвечайте кратко (1-3 предложения максимум)
+- Будьте эмпатичны и слушайте внимательно
+- Никогда не давите и не будьте агрессивны
+- Если потенциальный клиент не заинтересован, завершите разговор вежливо
+
+{personality_instructions}
+
+Контекст лида:
+- Имя: {lead_name}
+- Компания: {lead_company}
+- Должность: {lead_title}
+
+{script_instructions}
+
+{conversation_context}
+
+Текущее состояние разговора: {state}
+
+На основе состояния разговора:
+- greeting: Представьтесь и объясните причину звонка
+- qualification: Задайте квалификационные вопросы
+- offer: Представьте ценностное предложение
+- objection_handling: Обработайте возражения
+- closing: Подведите итог и предложите следующие шаги
+
+Верните ответ как JSON объект с полями:
+- response_text: Ваш устный ответ (кратко и естественно)
+- new_state: Следующее состояние разговора
+
+Верните только JSON объект, никакого другого текста.
+""",
+    "es": """\
+Eres un asistente de ventas por voz con IA que realiza llamadas salientes en nombre de una empresa.
+Tu objetivo es tener una conversacion telefonica natural y profesional que califique al prospecto y avance hacia una reunion o venta.
+
+Pautas:
+- Habla de forma natural y conversacional, como en una llamada telefonica real
+- Mantén las respuestas concisas (1-3 oraciones como maximo)
+- Se empatico y escucha activamente
+- Nunca seas insistente o agresivo
+- Si el prospecto no esta interesado, se amable y termina la llamada cortesmente
+
+{personality_instructions}
+
+Contexto del lead:
+- Nombre: {lead_name}
+- Empresa: {lead_company}
+- Cargo: {lead_title}
+
+{script_instructions}
+
+{conversation_context}
+
+Estado actual de la conversacion: {state}
+
+Segun el estado de la conversacion:
+- greeting: Presentate y explica el motivo de la llamada
+- qualification: Haz preguntas de calificacion
+- offer: Presenta la propuesta de valor
+- objection_handling: Aborda las objeciones con empatia
+- closing: Resume el valor y sugiere proximos pasos
+
+Devuelve tu respuesta como un objeto JSON con estos campos:
+- response_text: Tu respuesta hablada (natural y breve)
+- new_state: El siguiente estado de la conversacion
+
+Solo devuelve el objeto JSON, sin otro texto.
+""",
+    "de": """\
+Sie sind ein KI-Sprachverkaufsassistent, der ausgehende Anrufe im Namen eines Unternehmens tatigt.
+Ihr Ziel ist es, ein naturliches, professionelles Telefongesprach zu fuhren, das den Interessenten qualifiziert und zu einem Meeting oder Verkauf fuhrt.
+
+Richtlinien:
+- Sprechen Sie naturlich und gesprächig, wie bei einem echten Telefonat
+- Halten Sie Antworten kurz (maximal 1-3 Satze)
+- Seien Sie empathisch und horen Sie aktiv zu
+- Seien Sie niemals aufdringlich oder aggressiv
+- Wenn der Interessent nicht interessiert ist, beenden Sie das Gesprach hoflich
+
+{personality_instructions}
+
+Lead-Kontext:
+- Name: {lead_name}
+- Unternehmen: {lead_company}
+- Position: {lead_title}
+
+{script_instructions}
+
+{conversation_context}
+
+Aktueller Gesprachszustand: {state}
+
+Basierend auf dem Gesprachszustand:
+- greeting: Stellen Sie sich vor und nennen Sie den Grund des Anrufs
+- qualification: Stellen Sie qualifizierende Fragen
+- offer: Prasentieren Sie das Wertversprechen
+- objection_handling: Gehen Sie auf Einwande ein
+- closing: Fassen Sie den Wert zusammen und schlagen Sie nachste Schritte vor
+
+Geben Sie Ihre Antwort als JSON-Objekt mit diesen Feldern zuruck:
+- response_text: Ihre gesprochene Antwort (naturlich und kurz)
+- new_state: Der nachste Gesprachszustand
+
+Geben Sie nur das JSON-Objekt zuruck, keinen anderen Text.
+""",
+}
+
 GREETING_PROMPT = """\
 You are an AI voice sales assistant. Generate a natural, warm greeting for an outbound call.
 
@@ -72,6 +192,8 @@ Lead context:
 
 {script_instructions}
 
+{conversation_context}
+
 Generate a brief, natural greeting (1-2 sentences) that:
 1. Introduces yourself by name (use the company name from the script if available)
 2. States why you are calling in a non-intrusive way
@@ -79,6 +201,40 @@ Generate a brief, natural greeting (1-2 sentences) that:
 
 Return only the greeting text, no JSON or additional formatting.
 """
+
+
+def detect_language(lead_data: dict[str, Any]) -> str:
+    """Detect the preferred language for a lead based on enrichment data.
+
+    Checks lead enrichment_data for country or locale fields and maps
+    to a supported language code. Falls back to 'en' if not found.
+
+    Args:
+        lead_data: Lead data dict, may include enrichment_data with country/locale.
+
+    Returns:
+        Language code string (en, ru, es, de).
+    """
+    from channels.voice.stt import LANGUAGE_MAP
+
+    enrichment = lead_data.get("enrichment_data", {})
+    if not enrichment:
+        enrichment = {}
+
+    # Check locale first (e.g., "ru_RU", "es_MX")
+    locale = enrichment.get("locale", "")
+    if locale:
+        lang_part = locale.split("_")[0].lower()
+        supported = {"en", "ru", "es", "de"}
+        if lang_part in supported:
+            return lang_part
+
+    # Check country code
+    country = enrichment.get("country", "").upper()
+    if country and country in LANGUAGE_MAP:
+        return LANGUAGE_MAP[country]
+
+    return "en"
 
 
 class VoiceConversationAgent:
@@ -95,6 +251,78 @@ class VoiceConversationAgent:
         self._session_factory = session_factory
         self._interrupted = False
 
+    async def load_conversation_history(self, lead_id: UUID, session: AsyncSession) -> str:
+        """Load previous interaction history for a lead from lead_interactions table.
+
+        Queries past interactions and builds a summary string for prompt context.
+
+        Args:
+            lead_id: UUID of the lead.
+            session: Active async database session.
+
+        Returns:
+            Summary string of past interactions, or empty string if none.
+        """
+        try:
+            from core.models import LeadInteraction
+            result = await session.execute(
+                select(LeadInteraction)
+                .where(LeadInteraction.lead_id == lead_id)
+                .order_by(LeadInteraction.created_at.desc())
+                .limit(5)
+            )
+            interactions = result.scalars().all()
+
+            if not interactions:
+                return ""
+
+            summaries = []
+            for interaction in reversed(interactions):
+                channel = interaction.channel or interaction.interaction_type
+                summary = interaction.summary or "No summary"
+                created = interaction.created_at.strftime("%Y-%m-%d") if interaction.created_at else "unknown date"
+                summaries.append(f"- {created} ({channel}): {summary}")
+
+            return "Previous interactions with this lead:\n" + "\n".join(summaries)
+        except Exception as exc:
+            logger.debug("Could not load conversation history: %s", exc)
+            return ""
+
+    async def save_interaction(
+        self,
+        lead_id: UUID,
+        tenant_id: UUID,
+        interaction_type: str,
+        channel: str,
+        summary: str,
+        context_json: dict[str, Any] | None = None,
+    ) -> None:
+        """Save a call interaction to the lead_interactions table.
+
+        Args:
+            lead_id: UUID of the lead.
+            tenant_id: UUID of the tenant.
+            interaction_type: Type of interaction (call, email, linkedin).
+            channel: Channel used.
+            summary: Summary of the interaction.
+            context_json: Optional JSON context data.
+        """
+        try:
+            from core.models import LeadInteraction
+            async with self._session_factory() as session:
+                interaction = LeadInteraction(
+                    lead_id=lead_id,
+                    tenant_id=tenant_id,
+                    interaction_type=interaction_type,
+                    channel=channel,
+                    summary=summary,
+                    context_json=context_json or {},
+                )
+                session.add(interaction)
+                await session.commit()
+        except Exception as exc:
+            logger.error("Failed to save interaction: %s", exc)
+
     async def generate_greeting(
         self, lead_data: dict[str, Any], script: dict[str, Any] | None = None
     ) -> str:
@@ -109,6 +337,7 @@ class VoiceConversationAgent:
         """
         personality_instructions = ""
         script_instructions = ""
+        conversation_context = ""
 
         if script:
             personality = script.get("personality", {})
@@ -125,12 +354,25 @@ class VoiceConversationAgent:
             if company_name:
                 script_instructions += f"\nYou are calling on behalf of: {company_name}"
 
+        # Load conversation history if lead_id available
+        lead_id = lead_data.get("id")
+        if lead_id:
+            try:
+                async with self._session_factory() as session:
+                    conversation_context = await self.load_conversation_history(
+                        UUID(str(lead_id)) if isinstance(lead_id, str) else lead_id,
+                        session,
+                    )
+            except Exception as exc:
+                logger.debug("Could not load history for greeting: %s", exc)
+
         prompt = GREETING_PROMPT.format(
             lead_name=f"{lead_data.get('first_name', '')} {lead_data.get('last_name', '')}".strip(),
             lead_company=lead_data.get("company", "Unknown"),
             lead_title=lead_data.get("title", ""),
             personality_instructions=personality_instructions,
             script_instructions=script_instructions,
+            conversation_context=conversation_context,
         )
 
         messages = [{"role": "user", "content": prompt}]
@@ -171,6 +413,7 @@ class VoiceConversationAgent:
 
         personality_instructions = ""
         script_instructions = ""
+        conversation_context = ""
 
         if script:
             personality = script.get("personality", {})
@@ -187,13 +430,30 @@ class VoiceConversationAgent:
             if value_prop:
                 script_instructions += f"\nValue proposition: {value_prop}"
 
-        system_prompt = VOICE_SYSTEM_PROMPT.format(
+        # Load conversation memory
+        lead_id = lead_data.get("id")
+        if lead_id:
+            try:
+                async with self._session_factory() as session:
+                    conversation_context = await self.load_conversation_history(
+                        UUID(str(lead_id)) if isinstance(lead_id, str) else lead_id,
+                        session,
+                    )
+            except Exception as exc:
+                logger.debug("Could not load history for transcript processing: %s", exc)
+
+        # Select language-appropriate system prompt
+        language = detect_language(lead_data)
+        system_prompt_template = VOICE_SYSTEM_PROMPTS.get(language, VOICE_SYSTEM_PROMPTS["en"])
+
+        system_prompt = system_prompt_template.format(
             lead_name=f"{lead_data.get('first_name', '')} {lead_data.get('last_name', '')}".strip(),
             lead_company=lead_data.get("company", "Unknown"),
             lead_title=lead_data.get("title", ""),
             state=state.value,
             personality_instructions=personality_instructions,
             script_instructions=script_instructions,
+            conversation_context=conversation_context,
         )
 
         messages: list[dict[str, str]] = [

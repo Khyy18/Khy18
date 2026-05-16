@@ -38,6 +38,44 @@ class ChannelRouter:
         """
         self._session_factory = session_factory
 
+    async def get_optimized_next_action(
+        self,
+        lead_id: uuid.UUID,
+        llm_client: Any = None,
+        settings: Any = None,
+    ) -> dict[str, Any] | None:
+        """Consult the sequence optimizer for the recommended next action.
+
+        Args:
+            lead_id: UUID of the lead.
+            llm_client: LLM client for the optimizer.
+            settings: Application settings.
+
+        Returns:
+            Dict with channel, delay_hours, reasoning, confidence or None if optimizer unavailable.
+        """
+        if llm_client is None or settings is None:
+            return None
+
+        try:
+            from agents.sequence_optimizer import SequenceOptimizerAgent
+
+            optimizer = SequenceOptimizerAgent(
+                llm_client=llm_client,
+                session_factory=self._session_factory,
+                settings=settings,
+            )
+            next_action = await optimizer.get_next_action(lead_id)
+            return {
+                "channel": next_action.channel,
+                "delay_hours": next_action.delay_hours,
+                "reasoning": next_action.reasoning,
+                "confidence": next_action.confidence,
+            }
+        except Exception as exc:
+            logger.warning("Sequence optimizer failed: %s", exc)
+            return None
+
     def determine_channel(self, step_config: dict[str, Any]) -> str:
         """Determine the channel type from a step configuration.
 

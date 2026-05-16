@@ -11,6 +11,22 @@ logger = logging.getLogger(__name__)
 DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 SILENCE_THRESHOLD_SECONDS = 1.5
 
+# Maps country codes / locales to Deepgram language codes
+LANGUAGE_MAP: dict[str, str] = {
+    "US": "en",
+    "GB": "en",
+    "AU": "en",
+    "CA": "en",
+    "RU": "ru",
+    "DE": "de",
+    "AT": "de",
+    "CH": "de",
+    "ES": "es",
+    "MX": "es",
+    "AR": "es",
+    "CO": "es",
+}
+
 
 class DeepgramSTT:
     """Real-time speech-to-text using Deepgram streaming WebSocket API."""
