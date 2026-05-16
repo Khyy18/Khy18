@@ -222,3 +222,143 @@ class IntegrationTestResponse(BaseModel):
 
     success: bool
     message: str
+
+
+class ApprovalRequestResponse(BaseModel):
+    """Ответ с информацией о запросе на одобрение."""
+
+    id: int
+    agent_name: str
+    action_type: str
+    description: str
+    metadata_json: Optional[str] = None
+    status: str
+    requested_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+    resolved_by_user_id: Optional[int] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ApprovalResolveRequest(BaseModel):
+    """Схема разрешения запроса на одобрение."""
+
+    approved: bool
+    user_id: int = 0
+
+
+class SLAStatusResponse(BaseModel):
+    """Ответ со статусом SLA."""
+
+    compliance_percent: float
+    avg_response_by_priority: dict
+    breaches_count: int
+    total_monitored: int
+
+
+class AnalyticsOverviewResponse(BaseModel):
+    """Ответ с обзором аналитики."""
+
+    tasks_completed_week: int
+    tasks_completed_month: int
+    avg_time_to_resolve: dict
+    agent_workload: list
+    bottleneck_agent: Optional[str] = None
+    throughput_trend: list
+
+
+class AgentAnalyticsResponse(BaseModel):
+    """Аналитика по конкретному агенту."""
+
+    agent_name: str
+    tasks_completed: int
+    avg_response_time: float
+    delegation_count: int
+    feedback_score: Optional[float] = None
+    sla_compliance_percent: float
+
+
+class ProductivityResponse(BaseModel):
+    """Ответ с метриками продуктивности команды."""
+
+    created_vs_completed: list
+    peak_hours: list
+    most_used_templates: list
+
+
+class AuditEntryResponse(BaseModel):
+    """Ответ с записью аудита."""
+
+    id: int
+    workspace_id: Optional[int] = None
+    actor_type: str
+    actor_id: str
+    action: str
+    resource_type: str
+    resource_id: Optional[str] = None
+    details_json: Optional[str] = None
+    ip_address: Optional[str] = None
+    timestamp: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class KnowledgeFactResponse(BaseModel):
+    """Ответ с фактом из графа знаний."""
+
+    id: int
+    subject: str
+    predicate: str
+    object_value: str
+    source_agent: str
+    confidence: float
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class KnowledgeFactCreate(BaseModel):
+    """Схема создания факта в графе знаний."""
+
+    subject: str
+    predicate: str
+    object_value: str
+    source_agent: str = "user"
+    confidence: float = 0.9
+
+
+class BrandingConfigResponse(BaseModel):
+    """Ответ с конфигурацией брендинга."""
+
+    company_name: str = "AI Office"
+    logo_url: str = ""
+    accent_color: str = "#3b82f6"
+    agent_names: dict = {}
+    enabled_agents: list = []
+    welcome_message: str = ""
+    custom_css: str = ""
+
+
+class BrandingConfigUpdate(BaseModel):
+    """Схема обновления конфигурации брендинга."""
+
+    company_name: Optional[str] = None
+    logo_url: Optional[str] = None
+    accent_color: Optional[str] = None
+    agent_names: Optional[dict] = None
+    enabled_agents: Optional[list] = None
+    welcome_message: Optional[str] = None
+    custom_css: Optional[str] = None
+
+
+class MarketplacePluginResponse(BaseModel):
+    """Ответ с информацией о плагине маркетплейса."""
+
+    id: str
+    name: str
+    description: str
+    version: str
+    author: str
+    download_url: str = ""
+    tools_count: int
+    installed: bool = False

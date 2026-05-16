@@ -22,6 +22,13 @@ from ai_office.api.routes.feedback import router as feedback_router
 from ai_office.api.routes.delegation_trace import router as delegation_trace_router
 from ai_office.api.routes.plugins import router as plugins_router
 from ai_office.api.routes.admin import router as admin_router
+from ai_office.api.routes.approval import router as approval_router
+from ai_office.api.routes.sla import router as sla_router
+from ai_office.api.routes.analytics import router as analytics_router
+from ai_office.api.routes.audit import router as audit_router
+from ai_office.api.routes.knowledge import router as knowledge_router
+from ai_office.api.routes.branding import router as branding_router
+from ai_office.api.routes.marketplace import router as marketplace_router
 from ai_office.api.middleware import TelegramAuthMiddleware
 from ai_office.api.observability import RequestLoggingMiddleware
 from ai_office.api.websocket import websocket_endpoint
@@ -84,6 +91,13 @@ app.include_router(feedback_router)
 app.include_router(delegation_trace_router)
 app.include_router(plugins_router)
 app.include_router(admin_router)
+app.include_router(approval_router)
+app.include_router(sla_router)
+app.include_router(analytics_router)
+app.include_router(audit_router)
+app.include_router(knowledge_router)
+app.include_router(branding_router)
+app.include_router(marketplace_router)
 
 
 @app.get("/api/health")

@@ -1,0 +1,7 @@
+[
+  {"id": "researcher", "name": "Researcher", "description": "Поиск информации в интернете и анализ источников", "version": "1.0.0", "author": "AI Office Team", "download_url": "", "tools_count": 3},
+  {"id": "translator", "name": "Translator", "description": "Перевод текста между языками с учётом контекста", "version": "1.0.0", "author": "AI Office Team", "download_url": "", "tools_count": 2},
+  {"id": "scheduler", "name": "Scheduler", "description": "Управление календарём, встречами и напоминаниями", "version": "1.0.0", "author": "AI Office Team", "download_url": "", "tools_count": 4},
+  {"id": "data_analyst", "name": "Data Analyst", "description": "Генерация SQL-запросов и визуализация данных", "version": "1.0.0", "author": "AI Office Team", "download_url": "", "tools_count": 3},
+  {"id": "copywriter", "name": "Copywriter", "description": "Создание маркетинговых текстов, email-рассылок и постов", "version": "1.0.0", "author": "AI Office Team", "download_url": "", "tools_count": 3}
+]
