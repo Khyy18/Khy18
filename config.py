@@ -43,6 +43,25 @@ def _safe_int(value: str, default: int = 0) -> int:
 # даже при отсутствии переменной - реальная проверка в main()/validate_config()).
 TELEGRAM_CHAT_ID = _safe_int(_TELEGRAM_CHAT_ID_RAW, 0)
 
+# --- Alerting ---
+ALERT_CHECK_INTERVAL_SEC = _safe_int(os.getenv("ALERT_CHECK_INTERVAL_SEC", "30"), 30)
+ALERT_ERROR_RATE_THRESHOLD = float(os.getenv("ALERT_ERROR_RATE_THRESHOLD", "0.05"))
+ALERT_LATENCY_P99_THRESHOLD = float(os.getenv("ALERT_LATENCY_P99_THRESHOLD", "2.0"))
+ALERT_QUEUE_BACKLOG_THRESHOLD = float(os.getenv("ALERT_QUEUE_BACKLOG_THRESHOLD", "100"))
+
+# --- Redis Sentinel ---
+_REDIS_SENTINEL_HOSTS_RAW = os.getenv("REDIS_SENTINEL_HOSTS", "")
+REDIS_SENTINEL_HOSTS: list[tuple[str, int]] = []
+if _REDIS_SENTINEL_HOSTS_RAW.strip():
+    for _pair in _REDIS_SENTINEL_HOSTS_RAW.split(","):
+        _pair = _pair.strip()
+        if ":" in _pair:
+            _host, _port_str = _pair.rsplit(":", 1)
+            REDIS_SENTINEL_HOSTS.append((_host.strip(), _safe_int(_port_str, 26379)))
+        elif _pair:
+            REDIS_SENTINEL_HOSTS.append((_pair, 26379))
+REDIS_SENTINEL_MASTER = os.getenv("REDIS_SENTINEL_MASTER", "mymaster")
+
 # --- Health & Rate Limiting ---
 # Порт для health-check сервера.
 HEALTH_PORT = _safe_int(os.getenv("HEALTH_PORT", "8080"), 8080)

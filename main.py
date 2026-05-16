@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import math
+import signal
 import statistics
 import time
 from datetime import datetime, timedelta, timezone
@@ -41,6 +42,9 @@ import news_engine
 import strategy_v2
 import telegram_bot
 from exchanges import get_adapter
+from logging_config import get_logger
+
+log = get_logger(__name__)
 
 
 TICK_SECONDS = 60
@@ -779,7 +783,7 @@ async def _heartbeat_tick(
             "\n".join(parts),
             reply_markup=telegram_bot.set_keyboard(),
         )
-        print(f"[HB] Heartbeat отправлен в Telegram")
+        print("[HB] Heartbeat отправлен в Telegram")
     except Exception as exc:  # noqa: BLE001
         print(f"[HB] Ошибка отправки heartbeat: {exc}")
 
@@ -1469,6 +1473,17 @@ async def main() -> None:
     memory.init_db()
     state = _build_state()
 
+    # Graceful shutdown: asyncio.Event + signal handlers.
+    shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _signal_handler() -> None:
+        log.info("shutdown_signal_received")
+        shutdown_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _signal_handler)
+
     async with aiohttp.ClientSession() as session:
         print("[MAIN] Zenith-Control Ultimate v2 запущен")
 
@@ -1524,10 +1539,27 @@ async def main() -> None:
             ),
             reply_markup=telegram_bot.set_keyboard(),
         )
-        await asyncio.gather(
-            trading_loop(state, session),
-            telegram_bot.run_bot(state, session),
-        )
+
+        # Background tasks including shutdown waiter.
+        tasks = [
+            asyncio.create_task(trading_loop(state, session), name="trading_loop"),
+            asyncio.create_task(telegram_bot.run_bot(state, session), name="telegram_bot"),
+            asyncio.create_task(shutdown_event.wait(), name="shutdown_waiter"),
+        ]
+
+        try:
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            # If shutdown_event fired, cancel remaining tasks.
+            if shutdown_event.is_set():
+                log.info("graceful_shutdown_started", pending=len(pending))
+                for t in pending:
+                    t.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+        finally:
+            log.info("shutdown_complete")
+            print("[MAIN] Graceful shutdown complete")
 
 
 if __name__ == "__main__":
