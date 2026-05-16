@@ -7,19 +7,18 @@ from datetime import datetime
 from sqlalchemy import Integer, select, func, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Click, Product
+from app.db.models import Click, Product, ShortLink
 
 BASE62_CHARS = string.ascii_letters + string.digits
 SHORT_ID_LENGTH = 8
 
-# In-memory mapping of short_id -> {affiliate_url, product_id}
-# In production, this would be a DB table; for this implementation,
-# we store the mapping alongside Click records and use in-memory cache.
-_short_links: dict[str, dict] = {}
-
 
 class TrackingService:
-    """Generates short links and records click events."""
+    """Generates short links and records click events.
+
+    Short link mappings are persisted in the ShortLink database table to survive
+    restarts and work correctly across multiple worker processes.
+    """
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -29,19 +28,30 @@ class TrackingService:
         """Generate a random 8-character base62 short ID."""
         return "".join(secrets.choice(BASE62_CHARS) for _ in range(SHORT_ID_LENGTH))
 
-    def create_short_link(self, product_id: int, affiliate_url: str) -> str:
-        """Create a short link mapping and return the short_id."""
+    async def create_short_link(self, product_id: int, affiliate_url: str) -> str:
+        """Create a short link mapping in the database and return the short_id."""
         short_id = self._generate_short_id()
-        _short_links[short_id] = {
-            "product_id": product_id,
-            "affiliate_url": affiliate_url,
-        }
+        link = ShortLink(
+            short_id=short_id,
+            product_id=product_id,
+            affiliate_url=affiliate_url,
+        )
+        self.db.add(link)
+        await self.db.commit()
         return short_id
 
-    @staticmethod
-    def resolve_short_link(short_id: str) -> dict | None:
-        """Resolve a short_id to its target URL and product_id."""
-        return _short_links.get(short_id)
+    async def resolve_short_link(self, short_id: str) -> dict | None:
+        """Resolve a short_id to its target URL and product_id from the database."""
+        result = await self.db.execute(
+            select(ShortLink).where(ShortLink.short_id == short_id)
+        )
+        link = result.scalar_one_or_none()
+        if not link:
+            return None
+        return {
+            "product_id": link.product_id,
+            "affiliate_url": link.affiliate_url,
+        }
 
     async def record_click(
         self,
@@ -51,7 +61,7 @@ class TrackingService:
         user_agent: str | None = None,
     ) -> None:
         """Record a click event for a short link."""
-        link_data = _short_links.get(short_id)
+        link_data = await self.resolve_short_link(short_id)
         if not link_data:
             return
 

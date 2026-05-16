@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # ЮKassa
     yukassa_shop_id: str = ""
     yukassa_secret_key: str = ""
+    yukassa_webhook_secret: str = ""  # Shared secret for webhook signature verification
+
+    # Admin
+    admin_telegram_ids: str = ""  # Comma-separated list of admin telegram IDs
 
     # Telegram
     telegram_admin_id: int = 0

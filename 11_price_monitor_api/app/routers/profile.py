@@ -2,14 +2,18 @@
 
 import secrets
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Alert, Favorite, User
 from app.db.session import get_db
-from app.middleware.auth import create_access_token, get_current_user
+from app.middleware.auth import (
+    _check_rate_limit,
+    create_access_token,
+    get_current_user,
+)
 from app.schemas.profile import AuthRequest, AuthResponse, ProfileOut
 
 router = APIRouter(tags=["profile"])
@@ -18,9 +22,15 @@ router = APIRouter(tags=["profile"])
 @router.post("/auth/register", response_model=AuthResponse)
 async def register_or_login(
     data: AuthRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Register a new user or login existing by telegram_id. Returns JWT."""
+    """Register a new user or login existing by telegram_id. Returns JWT.
+
+    Rate limited to prevent enumeration attacks on telegram_id.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(client_ip)
     result = await db.execute(
         select(User).where(User.telegram_id == data.telegram_id)
     )

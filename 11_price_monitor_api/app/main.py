@@ -3,10 +3,12 @@
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.db.models import User
 from app.db.session import init_db
+from app.middleware.auth import get_admin_user
 from app.routers import alerts, categories, deals, favorites, profile
 from app.routers import payments, tracking, chatbot
 from app.services.parser_monitor import parser_monitor
@@ -42,7 +44,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -64,7 +66,9 @@ async def health_check():
 
 
 @app.get("/admin/parser-status", tags=["admin"])
-async def parser_status():
-    """Get current parser data freshness status."""
+async def parser_status(
+    _admin: User = Depends(get_admin_user),
+):
+    """Get current parser data freshness status (admin only)."""
     result = await parser_monitor.check_parsers()
     return result

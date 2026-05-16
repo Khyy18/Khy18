@@ -79,24 +79,48 @@ class ChatbotService:
         return list(result.scalars().all())
 
     def _build_context(self, products: list[Product]) -> str:
-        """Build context string from found products."""
+        """Build context string from found products.
+
+        Truncates output to stay within LLM token limits. We limit context to
+        ~2000 characters (roughly 500 tokens) to leave room for the system
+        prompt and user message within the model's context window.
+        """
+        MAX_CONTEXT_CHARS = 2000
+
         if not products:
             return "Товары не найдены в базе данных."
 
         lines = ["Найденные товары:"]
+        current_length = len(lines[0])
+
         for p in products:
             latest_price = 0.0
             if p.price_history:
                 latest = sorted(p.price_history, key=lambda ph: ph.timestamp, reverse=True)[0]
                 latest_price = latest.price
-            lines.append(
+            line = (
                 f"- {p.name} ({p.marketplace}): {latest_price:.0f} руб. "
                 f"[категория: {p.category or 'нет'}]"
             )
+            # Check if adding this line would exceed the limit
+            if current_length + len(line) + 1 > MAX_CONTEXT_CHARS:
+                lines.append(f"... (ещё {len(products) - len(lines) + 1} товаров не показано)")
+                break
+            lines.append(line)
+            current_length += len(line) + 1
+
         return "\n".join(lines)
 
     async def _call_llm(self, user_message: str, context: str) -> str:
-        """Call OpenAI-compatible API with product context."""
+        """Call OpenAI-compatible API with product context.
+
+        User message is truncated to prevent excessive token usage.
+        """
+        # Cap user message length to prevent token overflow
+        max_user_msg_len = 500
+        if len(user_message) > max_user_msg_len:
+            user_message = user_message[:max_user_msg_len] + "..."
+
         try:
             client = self._get_client()
             response = await client.chat.completions.create(

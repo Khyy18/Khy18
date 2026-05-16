@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import User
 from app.db.session import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_admin_user
 from app.services.tracking_service import TrackingService
 
 router = APIRouter(tags=["tracking"])
@@ -19,11 +19,11 @@ async def redirect_short_link(
     db: AsyncSession = Depends(get_db),
 ):
     """Redirect to the affiliate URL and record a click."""
-    link_data = TrackingService.resolve_short_link(short_id)
+    service = TrackingService(db)
+    link_data = await service.resolve_short_link(short_id)
     if not link_data:
         raise HTTPException(status_code=404, detail="Link not found")
 
-    service = TrackingService(db)
     await service.record_click(
         short_id=short_id,
         ip=request.client.host if request.client else None,
@@ -36,9 +36,9 @@ async def redirect_short_link(
 @router.get("/admin/tracking/stats")
 async def get_tracking_stats(
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _admin: User = Depends(get_admin_user),
 ):
-    """Get click tracking statistics (auth required)."""
+    """Get click tracking statistics (admin only)."""
     service = TrackingService(db)
     stats = await service.get_stats()
     return {"stats": stats}

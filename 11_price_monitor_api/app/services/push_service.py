@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.db.models import Click, Favorite, Product, User
+from app.db.models import Click, Favorite, Product, PushLog, User
 
 logger = logging.getLogger(__name__)
 
@@ -102,15 +102,13 @@ class PushService:
                 return False
 
         # Check daily push limit (< 3 pushes today)
-        # We track this via chat_messages with role='push' as a simple approach
+        # Uses dedicated PushLog table to avoid polluting chat history
         today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-        from app.db.models import ChatMessage
 
         push_count_result = await db.execute(
-            select(func.count(ChatMessage.id)).where(
-                ChatMessage.user_id == user_id,
-                ChatMessage.role == "push",
-                ChatMessage.created_at >= today_start,
+            select(func.count(PushLog.id)).where(
+                PushLog.user_id == user_id,
+                PushLog.sent_at >= today_start,
             )
         )
         push_count = push_count_result.scalar() or 0
@@ -152,6 +150,11 @@ class PushService:
         }
 
         try:
+            # TODO: Migrate to FCM HTTP v1 API (https://firebase.google.com/docs/cloud-messaging/migrate-v1).
+            # The legacy endpoint (fcm.googleapis.com/fcm/send) is deprecated and will be removed.
+            # Migration requires: service account JSON key, OAuth2 token generation,
+            # and new endpoint: https://fcm.googleapis.com/v1/projects/{project_id}/messages:send
+            # Current implementation still works but should be updated before June 2024 deadline.
             async with httpx.AsyncClient() as client:
                 response = await client.post(
                     "https://fcm.googleapis.com/fcm/send",
@@ -163,15 +166,13 @@ class PushService:
                     timeout=10.0,
                 )
                 if response.status_code == 200:
-                    # Record push sent (for daily limit tracking)
-                    from app.db.models import ChatMessage
-
-                    push_record = ChatMessage(
+                    # Record push in dedicated PushLog table
+                    push_log = PushLog(
                         user_id=user_id,
-                        role="push",
-                        content=f"{title}: {body}",
+                        title=title,
+                        body=body,
                     )
-                    db.add(push_record)
+                    db.add(push_log)
                     await db.commit()
                     return True
                 else:

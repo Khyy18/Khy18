@@ -157,3 +157,31 @@ class ChatMessage(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="chat_messages")
+
+
+class ShortLink(Base):
+    """Persistent storage for short link mappings."""
+
+    __tablename__ = "short_links"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    short_id = Column(String, unique=True, nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    affiliate_url = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product")
+
+
+class PushLog(Base):
+    """Tracks push notifications sent to users (separate from chat messages)."""
+
+    __tablename__ = "push_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    title = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")
