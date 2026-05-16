@@ -164,3 +164,34 @@ CREATE INDEX IF NOT EXISTS idx_clicks_partner ON clicks(partner_id);
 CREATE INDEX IF NOT EXISTS idx_short_links_short_id ON short_links(short_id);
 CREATE INDEX IF NOT EXISTS idx_partners_widget_code ON partners(widget_code);
 CREATE INDEX IF NOT EXISTS idx_arbitrage_results_found_at ON arbitrage_results(found_at);
+
+CREATE TABLE IF NOT EXISTS niche_analyses (
+    id SERIAL PRIMARY KEY,
+    category VARCHAR(255) NOT NULL,
+    growth_percent FLOAT NOT NULL,
+    avg_price FLOAT,
+    product_count INTEGER DEFAULT 0,
+    recommendation TEXT,
+    analyzed_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS seller_copies (
+    id SERIAL PRIMARY KEY,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    title VARCHAR(512) NOT NULL,
+    description TEXT NOT NULL,
+    keywords TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS content_scripts (
+    id SERIAL PRIMARY KEY,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    script_type VARCHAR(100) NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_niche_analyses_category ON niche_analyses(category);
+CREATE INDEX IF NOT EXISTS idx_seller_copies_product ON seller_copies(product_id);
+CREATE INDEX IF NOT EXISTS idx_content_scripts_product ON content_scripts(product_id);

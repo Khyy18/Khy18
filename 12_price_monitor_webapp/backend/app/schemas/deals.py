@@ -17,19 +17,23 @@ class ForecastOut(BaseModel):
 class DealOut(BaseModel):
     id: str
     title: str
-    image: str
-    currentPrice: float
-    oldPrice: float
-    discount: float
-    category: str
+    image_url: str
+    current_price: float
+    original_price: float
+    discount_percent: float
     marketplace: str
-    priceHistory: list[PricePointOut] = []
+    category_id: str
+    category_name: str
+    url: str
+    price_history: list[PricePointOut] = []
+    is_favorite: bool = False
+    created_at: str = ""
     rating: float = 0.0
-    reviewsSummary: str = ""
-    affiliateUrl: str = ""
+    reviews_summary: str = ""
     forecast: ForecastOut | None = None
 
 class DealListResponse(BaseModel):
-    products: list[DealOut]
+    items: list[DealOut]
     total: int
-    hasMore: bool
+    page: int
+    has_next: bool

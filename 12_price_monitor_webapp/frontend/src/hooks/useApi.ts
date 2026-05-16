@@ -2,12 +2,28 @@ import { useQuery, useMutation, useInfiniteQuery, useQueryClient } from '@tansta
 import { apiClient } from '../api/client';
 import type { Product, Alert, Category, ArbitrageItem, UserProfile, ChatMessage, PaginatedResponse } from '../types';
 
+interface ArbitrageApiResult {
+  id: number;
+  product_name: string;
+  brand: string | null;
+  price_wb: number;
+  price_ozon: number;
+  diff_percent: number;
+  match_score: number;
+  found_at: string;
+}
+
+interface ArbitrageResponse {
+  results: ArbitrageApiResult[];
+  total: number;
+}
+
 export function useProducts(page = 1, category?: string) {
   return useQuery({
     queryKey: ['products', page, category],
     queryFn: () =>
       apiClient<PaginatedResponse<Product>>(
-        `/products?page=${page}${category ? `&category=${category}` : ''}`
+        `/deals?page=${page}${category ? `&category=${category}` : ''}`
       ),
   });
 }
@@ -17,7 +33,7 @@ export function useInfiniteProducts(category?: string) {
     queryKey: ['products', 'infinite', category],
     queryFn: ({ pageParam = 1 }) =>
       apiClient<PaginatedResponse<Product>>(
-        `/products?page=${pageParam}${category ? `&category=${category}` : ''}`
+        `/deals?page=${pageParam}${category ? `&category=${category}` : ''}`
       ),
     initialPageParam: 1,
     getNextPageParam: (lastPage) =>
@@ -28,7 +44,7 @@ export function useInfiniteProducts(category?: string) {
 export function useProduct(id: string) {
   return useQuery({
     queryKey: ['product', id],
-    queryFn: () => apiClient<Product>(`/products/${id}`),
+    queryFn: () => apiClient<Product>(`/deals/${id}`),
     enabled: !!id,
   });
 }
@@ -98,10 +114,25 @@ export function useProfile() {
 export function useArbitrage(minDiff?: number, marketplace?: string) {
   return useQuery({
     queryKey: ['arbitrage', minDiff, marketplace],
-    queryFn: () =>
-      apiClient<ArbitrageItem[]>(
-        `/arbitrage?${minDiff ? `min_diff=${minDiff}` : ''}${marketplace ? `&marketplace=${marketplace}` : ''}`
-      ),
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (minDiff) params.set('min_diff', String(minDiff));
+      const qs = params.toString();
+      const response = await apiClient<ArbitrageResponse>(
+        `/arbitrage${qs ? `?${qs}` : ''}`
+      );
+      return response.results.map((r): ArbitrageItem => ({
+        id: String(r.id),
+        title: r.product_name,
+        image_url: '',
+        wb_price: r.price_wb,
+        ozon_price: r.price_ozon,
+        diff_percent: Math.round(r.diff_percent * 10) / 10,
+        cheaper_on: r.price_wb < r.price_ozon ? 'wb' : 'ozon',
+        wb_url: '',
+        ozon_url: '',
+      }));
+    },
   });
 }
 
@@ -116,7 +147,7 @@ export function useSendMessage() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (message: string) =>
-      apiClient<ChatMessage>('/chat/send', {
+      apiClient<{ reply: string; product_ids: number[] }>('/chat', {
         method: 'POST',
         body: JSON.stringify({ message }),
       }),

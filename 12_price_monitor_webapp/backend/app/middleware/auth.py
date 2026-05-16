@@ -48,6 +48,14 @@ def verify_telegram_init_data(init_data: str) -> dict | None:
     Returns parsed user data if valid, None otherwise.
     """
     if not settings.telegram_bot_token:
+        # In dev mode without bot token, try to parse user data directly
+        try:
+            parsed = parse_qs(init_data)
+            user_str = parsed.get("user", [None])[0]
+            if user_str:
+                return json.loads(user_str)
+        except Exception:
+            pass
         return None
 
     try:

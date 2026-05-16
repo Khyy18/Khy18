@@ -15,6 +15,7 @@ from app.routers import (
     admin,
     alerts,
     arbitrage,
+    auth,
     categories,
     chatbot,
     content,
@@ -57,6 +58,7 @@ app.add_middleware(
 )
 
 # Register all routers
+app.include_router(auth.router)
 app.include_router(deals.router)
 app.include_router(categories.router)
 app.include_router(alerts.router)

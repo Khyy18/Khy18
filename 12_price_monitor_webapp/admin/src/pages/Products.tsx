@@ -1,60 +1,66 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import DataTable from '../components/DataTable';
+import { adminApiClient } from '../api/client';
 
-interface Product {
+interface ProductRow {
   [key: string]: unknown;
   id: number;
   name: string;
   marketplace: string;
-  price: string;
-  oldPrice: string;
-  discount: string;
-  clicks: number;
-  status: string;
+  category: string;
+  rating: number;
 }
 
-const mockProducts: Product[] = [
-  { id: 1, name: 'Наушники Sony WH-1000XM5', marketplace: 'Wildberries', price: '24 990 ₽', oldPrice: '34 990 ₽', discount: '-29%', clicks: 842, status: 'Активен' },
-  { id: 2, name: 'Кроссовки Nike Air Max 90', marketplace: 'Ozon', price: '8 490 ₽', oldPrice: '12 990 ₽', discount: '-35%', clicks: 567, status: 'Активен' },
-  { id: 3, name: 'Робот-пылесос Xiaomi', marketplace: 'Wildberries', price: '18 900 ₽', oldPrice: '29 900 ₽', discount: '-37%', clicks: 1203, status: 'Активен' },
-  { id: 4, name: 'iPhone 15 128GB', marketplace: 'Ozon', price: '69 990 ₽', oldPrice: '84 990 ₽', discount: '-18%', clicks: 2341, status: 'Активен' },
-  { id: 5, name: 'Куртка зимняя Columbia', marketplace: 'Wildberries', price: '12 450 ₽', oldPrice: '19 990 ₽', discount: '-38%', clicks: 398, status: 'Приостановлен' },
-  { id: 6, name: 'Планшет Samsung Tab S9', marketplace: 'Ozon', price: '44 990 ₽', oldPrice: '59 990 ₽', discount: '-25%', clicks: 612, status: 'Активен' },
-  { id: 7, name: 'Кофемашина DeLonghi', marketplace: 'Wildberries', price: '32 990 ₽', oldPrice: '49 990 ₽', discount: '-34%', clicks: 284, status: 'Активен' },
-  { id: 8, name: 'Умные часы Apple Watch SE', marketplace: 'Ozon', price: '21 990 ₽', oldPrice: '29 990 ₽', discount: '-27%', clicks: 891, status: 'Активен' },
-  { id: 9, name: 'Фен Dyson Supersonic', marketplace: 'Wildberries', price: '39 990 ₽', oldPrice: '49 990 ₽', discount: '-20%', clicks: 156, status: 'Приостановлен' },
-  { id: 10, name: 'PS5 Digital Edition', marketplace: 'Ozon', price: '42 990 ₽', oldPrice: '54 990 ₽', discount: '-22%', clicks: 1567, status: 'Активен' },
-  { id: 11, name: 'Мультиварка Redmond', marketplace: 'Wildberries', price: '5 990 ₽', oldPrice: '9 990 ₽', discount: '-40%', clicks: 423, status: 'Активен' },
-  { id: 12, name: 'Телевизор LG OLED 55"', marketplace: 'Ozon', price: '89 990 ₽', oldPrice: '129 990 ₽', discount: '-31%', clicks: 312, status: 'Активен' },
-];
+interface ProductResponse {
+  id: string;
+  title: string;
+  marketplace: string;
+  category_name: string;
+  current_price: number;
+  discount_percent: number;
+  image_url: string;
+  rating: number;
+}
+
+interface ProductListResponse {
+  items: ProductResponse[];
+  total: number;
+  page: number;
+  has_next: boolean;
+}
 
 const columns = [
   { key: 'id' as const, label: 'ID' },
   { key: 'name' as const, label: 'Название' },
   { key: 'marketplace' as const, label: 'Маркетплейс' },
-  { key: 'price' as const, label: 'Цена' },
-  { key: 'discount' as const, label: 'Скидка' },
-  { key: 'clicks' as const, label: 'Клики' },
-  {
-    key: 'status' as const,
-    label: 'Статус',
-    render: (value: unknown) => (
-      <span
-        className={`px-2 py-1 rounded-full text-xs font-medium ${
-          value === 'Активен' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-        }`}
-      >
-        {String(value)}
-      </span>
-    ),
-  },
+  { key: 'category' as const, label: 'Категория' },
+  { key: 'rating' as const, label: 'Рейтинг' },
 ];
 
 export default function Products() {
+  const [products, setProducts] = useState<ProductRow[]>([]);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
 
-  const filtered = mockProducts.filter((p) => {
+  useEffect(() => {
+    adminApiClient<ProductListResponse>('/deals?limit=50')
+      .then((data) => {
+        setProducts(
+          data.items.map((p) => ({
+            id: Number(p.id),
+            name: p.title,
+            marketplace: p.marketplace,
+            category: p.category_name || '-',
+            rating: p.rating || 0,
+          }))
+        );
+      })
+      .catch(() => setProducts([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = products.filter((p) => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase());
     const matchFilter = filter === 'all' || p.marketplace.toLowerCase() === filter;
     return matchSearch && matchFilter;
@@ -78,12 +84,18 @@ export default function Products() {
           className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-accent focus:border-transparent"
         >
           <option value="all">Все маркетплейсы</option>
-          <option value="wildberries">Wildberries</option>
+          <option value="wb">Wildberries</option>
           <option value="ozon">Ozon</option>
         </select>
       </div>
 
-      <DataTable columns={columns} data={filtered} pageSize={10} />
+      {loading ? (
+        <p className="text-gray-500">Загрузка...</p>
+      ) : filtered.length === 0 ? (
+        <p className="text-gray-500">Нет данных</p>
+      ) : (
+        <DataTable columns={columns} data={filtered} pageSize={10} />
+      )}
     </div>
   );
 }

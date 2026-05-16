@@ -25,19 +25,22 @@ def _product_to_deal(product: Product) -> DealOut:
     return DealOut(
         id=str(product.id),
         title=product.name,
-        image=product.image_url or "",
-        currentPrice=latest_price.price if latest_price else 0.0,
-        oldPrice=latest_price.old_price or 0.0 if latest_price else 0.0,
-        discount=latest_price.discount_percent or 0.0 if latest_price else 0.0,
-        category=product.category or "",
+        image_url=product.image_url or "",
+        current_price=latest_price.price if latest_price else 0.0,
+        original_price=latest_price.old_price or 0.0 if latest_price else 0.0,
+        discount_percent=latest_price.discount_percent or 0.0 if latest_price else 0.0,
         marketplace=product.marketplace,
-        priceHistory=[
+        category_id=product.category or "",
+        category_name=product.category or "",
+        url=product.url or "",
+        price_history=[
             PricePointOut(date=ph.timestamp.isoformat(), price=ph.price)
             for ph in sorted(product.price_history, key=lambda p: p.timestamp)
         ],
+        is_favorite=False,
+        created_at=product.created_at.isoformat() if product.created_at else "",
         rating=product.rating or 0.0,
-        reviewsSummary=product.reviews_summary or "",
-        affiliateUrl=product.url or "",
+        reviews_summary=product.reviews_summary or "",
         forecast=None,
     )
 
@@ -75,9 +78,9 @@ async def get_deals(
     products = result.scalars().all()
 
     deals = [_product_to_deal(p) for p in products]
-    has_more = (offset + limit) < total
+    has_next = (offset + limit) < total
 
-    response = DealListResponse(products=deals, total=total, hasMore=has_more)
+    response = DealListResponse(items=deals, total=total, page=page, has_next=has_next)
     await cache_set(cache_key, response.model_dump(), ttl=120)
     return response
 

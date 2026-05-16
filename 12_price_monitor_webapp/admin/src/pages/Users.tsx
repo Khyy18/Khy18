@@ -1,37 +1,23 @@
+import { useState, useEffect } from 'react';
 import DataTable from '../components/DataTable';
+import { fetchUsers, type UserResponse } from '../api/client';
 
-interface User {
+interface UserRow {
   [key: string]: unknown;
   id: number;
-  name: string;
-  telegram: string;
-  registered: string;
-  vip: string;
-  clicks: number;
-  status: string;
+  telegram_id: number;
+  username: string;
+  is_vip: string;
+  created_at: string;
 }
-
-const mockUsers: User[] = [
-  { id: 1, name: 'Алексей Иванов', telegram: '@alexey_iv', registered: '2024-01-15', vip: 'Premium', clicks: 342, status: 'Активен' },
-  { id: 2, name: 'Мария Петрова', telegram: '@maria_p', registered: '2024-02-03', vip: 'Free', clicks: 87, status: 'Активен' },
-  { id: 3, name: 'Дмитрий Козлов', telegram: '@dmitry_k', registered: '2024-01-22', vip: 'Premium', clicks: 521, status: 'Активен' },
-  { id: 4, name: 'Анна Сидорова', telegram: '@anna_s', registered: '2024-03-10', vip: 'Free', clicks: 45, status: 'Заблокирован' },
-  { id: 5, name: 'Сергей Волков', telegram: '@sergey_v', registered: '2024-02-28', vip: 'Premium', clicks: 678, status: 'Активен' },
-  { id: 6, name: 'Елена Новикова', telegram: '@elena_n', registered: '2024-03-15', vip: 'Free', clicks: 123, status: 'Активен' },
-  { id: 7, name: 'Павел Морозов', telegram: '@pavel_m', registered: '2024-01-08', vip: 'Premium', clicks: 891, status: 'Активен' },
-  { id: 8, name: 'Ольга Кузнецова', telegram: '@olga_k', registered: '2024-04-01', vip: 'Free', clicks: 56, status: 'Активен' },
-  { id: 9, name: 'Игорь Попов', telegram: '@igor_p', registered: '2024-02-14', vip: 'Free', clicks: 234, status: 'Активен' },
-  { id: 10, name: 'Наталья Соколова', telegram: '@natalia_s', registered: '2024-03-22', vip: 'Premium', clicks: 445, status: 'Активен' },
-  { id: 11, name: 'Андрей Лебедев', telegram: '@andrey_l', registered: '2024-04-05', vip: 'Free', clicks: 12, status: 'Заблокирован' },
-];
 
 const columns = [
   { key: 'id' as const, label: 'ID' },
-  { key: 'name' as const, label: 'Имя' },
-  { key: 'telegram' as const, label: 'Telegram' },
-  { key: 'registered' as const, label: 'Регистрация' },
+  { key: 'telegram_id' as const, label: 'Telegram ID' },
+  { key: 'username' as const, label: 'Username' },
+  { key: 'created_at' as const, label: 'Регистрация' },
   {
-    key: 'vip' as const,
+    key: 'is_vip' as const,
     label: 'Тариф',
     render: (value: unknown) => (
       <span
@@ -43,27 +29,39 @@ const columns = [
       </span>
     ),
   },
-  { key: 'clicks' as const, label: 'Клики' },
-  {
-    key: 'status' as const,
-    label: 'Статус',
-    render: (value: unknown) => (
-      <span
-        className={`px-2 py-1 rounded-full text-xs font-medium ${
-          value === 'Активен' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-        }`}
-      >
-        {String(value)}
-      </span>
-    ),
-  },
 ];
 
+function mapUser(u: UserResponse): UserRow {
+  return {
+    id: u.id,
+    telegram_id: u.telegram_id,
+    username: u.username || '-',
+    is_vip: u.is_vip ? 'Premium' : 'Free',
+    created_at: u.created_at.split('T')[0],
+  };
+}
+
 export default function Users() {
+  const [users, setUsers] = useState<UserRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchUsers()
+      .then((data) => setUsers(data.map(mapUser)))
+      .catch(() => setUsers([]))
+      .finally(() => setLoading(false));
+  }, []);
+
   return (
     <div>
       <h2 className="text-2xl font-bold text-gray-900 mb-6">Пользователи</h2>
-      <DataTable columns={columns} data={mockUsers} pageSize={10} />
+      {loading ? (
+        <p className="text-gray-500">Загрузка...</p>
+      ) : users.length === 0 ? (
+        <p className="text-gray-500">Нет данных</p>
+      ) : (
+        <DataTable columns={columns} data={users} pageSize={10} />
+      )}
     </div>
   );
 }

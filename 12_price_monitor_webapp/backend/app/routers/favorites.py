@@ -39,30 +39,33 @@ async def get_favorites(
             DealOut(
                 id=str(p.id),
                 title=p.name,
-                image=p.image_url or "",
-                currentPrice=latest_price.price if latest_price else 0.0,
-                oldPrice=latest_price.old_price or 0.0 if latest_price else 0.0,
-                discount=latest_price.discount_percent or 0.0 if latest_price else 0.0,
-                category=p.category or "",
+                image_url=p.image_url or "",
+                current_price=latest_price.price if latest_price else 0.0,
+                original_price=latest_price.old_price or 0.0 if latest_price else 0.0,
+                discount_percent=latest_price.discount_percent or 0.0 if latest_price else 0.0,
                 marketplace=p.marketplace,
-                priceHistory=[
+                category_id=p.category or "",
+                category_name=p.category or "",
+                url=p.url or "",
+                price_history=[
                     PricePointOut(date=ph.timestamp.isoformat(), price=ph.price)
                     for ph in sorted(p.price_history, key=lambda ph: ph.timestamp)
                 ],
+                is_favorite=True,
+                created_at=p.created_at.isoformat() if p.created_at else "",
                 rating=p.rating or 0.0,
-                reviewsSummary=p.reviews_summary or "",
-                affiliateUrl=p.url or "",
+                reviews_summary=p.reviews_summary or "",
             )
         )
     return items
 
 @router.post("/{product_id}")
-async def add_favorite(
+async def toggle_favorite(
     product_id: int,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Add product to favorites."""
+    """Toggle product in favorites. Returns current favorite state."""
     # Check product exists
     product = await db.get(Product, product_id)
     if not product:
@@ -74,13 +77,16 @@ async def add_favorite(
             Favorite.user_id == user.id, Favorite.product_id == product_id
         )
     )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Уже в избранном")
+    fav = existing.scalar_one_or_none()
+    if fav:
+        await db.delete(fav)
+        await db.commit()
+        return {"is_favorite": False}
 
-    fav = Favorite(user_id=user.id, product_id=product_id)
-    db.add(fav)
+    new_fav = Favorite(user_id=user.id, product_id=product_id)
+    db.add(new_fav)
     await db.commit()
-    return {"ok": True}
+    return {"is_favorite": True}
 
 @router.delete("/{product_id}")
 async def remove_favorite(
@@ -99,4 +105,4 @@ async def remove_favorite(
         raise HTTPException(status_code=404, detail="Не найдено в избранном")
     await db.delete(fav)
     await db.commit()
-    return {"ok": True}
+    return {"is_favorite": False}

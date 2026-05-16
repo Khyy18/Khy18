@@ -1,21 +1,26 @@
+import { useState, useEffect } from 'react';
+import { fetchParsers, type ParserResponse } from '../api/client';
+
 interface ParserStatus {
   name: string;
   lastRun: string;
-  nextRun: string;
-  successRate: number;
-  itemsParsed: number;
-  avgDuration: string;
+  productsCount: number;
   status: 'active' | 'warning' | 'error';
 }
 
-const parsers: ParserStatus[] = [
-  { name: 'Wildberries - Электроника', lastRun: '5 мин назад', nextRun: 'через 25 мин', successRate: 99.2, itemsParsed: 12480, avgDuration: '2m 34s', status: 'active' },
-  { name: 'Wildberries - Одежда', lastRun: '12 мин назад', nextRun: 'через 18 мин', successRate: 97.8, itemsParsed: 8920, avgDuration: '1m 45s', status: 'active' },
-  { name: 'Ozon - Электроника', lastRun: '8 мин назад', nextRun: 'через 22 мин', successRate: 98.5, itemsParsed: 15200, avgDuration: '3m 12s', status: 'active' },
-  { name: 'Ozon - Бытовая техника', lastRun: '2 часа назад', nextRun: 'через 5 мин', successRate: 85.3, itemsParsed: 6100, avgDuration: '4m 01s', status: 'warning' },
-  { name: 'Яндекс Маркет', lastRun: '4 часа назад', nextRun: 'вручную', successRate: 72.1, itemsParsed: 3200, avgDuration: '5m 22s', status: 'error' },
-  { name: 'Мегамаркет', lastRun: '15 мин назад', nextRun: 'через 15 мин', successRate: 96.4, itemsParsed: 4500, avgDuration: '2m 08s', status: 'active' },
-];
+function mapParser(p: ParserResponse): ParserStatus {
+  const statusMap: Record<string, 'active' | 'warning' | 'error'> = {
+    active: 'active',
+    warning: 'warning',
+    error: 'error',
+  };
+  return {
+    name: p.name,
+    lastRun: p.last_run || 'Нет данных',
+    productsCount: p.products_count,
+    status: statusMap[p.status] || 'active',
+  };
+}
 
 function statusBadge(status: ParserStatus['status']) {
   const styles = {
@@ -32,6 +37,34 @@ function statusBadge(status: ParserStatus['status']) {
 }
 
 export default function Parsers() {
+  const [parsers, setParsers] = useState<ParserStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchParsers()
+      .then((data) => setParsers(data.map(mapParser)))
+      .catch(() => setParsers([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-6">Статус парсеров</h2>
+        <p className="text-gray-500">Загрузка...</p>
+      </div>
+    );
+  }
+
+  if (parsers.length === 0) {
+    return (
+      <div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-6">Статус парсеров</h2>
+        <p className="text-gray-500">Нет данных о парсерах</p>
+      </div>
+    );
+  }
+
   return (
     <div>
       <h2 className="text-2xl font-bold text-gray-900 mb-6">Статус парсеров</h2>
@@ -49,22 +82,8 @@ export default function Parsers() {
                 <span className="font-medium text-gray-900">{p.lastRun}</span>
               </div>
               <div className="flex justify-between">
-                <span>Следующий запуск</span>
-                <span className="font-medium text-gray-900">{p.nextRun}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Успешность</span>
-                <span className={`font-medium ${p.successRate >= 95 ? 'text-green-600' : p.successRate >= 85 ? 'text-yellow-600' : 'text-red-600'}`}>
-                  {p.successRate}%
-                </span>
-              </div>
-              <div className="flex justify-between">
                 <span>Товаров обработано</span>
-                <span className="font-medium text-gray-900">{p.itemsParsed.toLocaleString('ru-RU')}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Среднее время</span>
-                <span className="font-medium text-gray-900">{p.avgDuration}</span>
+                <span className="font-medium text-gray-900">{p.productsCount.toLocaleString('ru-RU')}</span>
               </div>
             </div>
           </div>

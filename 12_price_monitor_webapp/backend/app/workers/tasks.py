@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta
 
 from arq import cron
+from arq.connections import RedisSettings
 from sqlalchemy import select
 
 from app.config import settings
@@ -96,7 +97,7 @@ async def task_cleanup_expired_vip(ctx: dict) -> dict:
 class WorkerSettings:
     """arq worker settings."""
 
-    redis_settings = None  # Set dynamically from app.config
+    redis_settings = RedisSettings.from_dsn(settings.redis_url)
 
     functions = [
         task_parse_marketplace,

@@ -61,10 +61,10 @@ export interface UserProfile {
 }
 
 export interface ChatMessage {
-  id: string;
+  id?: string;
   role: 'user' | 'assistant';
   content: string;
-  timestamp: string;
+  created_at: string;
 }
 
 export interface PaginatedResponse<T> {
