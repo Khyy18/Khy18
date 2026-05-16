@@ -31,6 +31,10 @@ class Settings:
     SENTRY_DSN: str = os.environ.get("SENTRY_DSN", "")
     EXCEL_PASSWORD: str = os.environ.get("EXCEL_PASSWORD", "kindergarten2024")
 
+    # Admin panel credentials
+    ADMIN_USER: str = os.environ.get("ADMIN_USER", "admin")
+    ADMIN_PASSWORD: str = os.environ.get("ADMIN_PASSWORD", "admin")
+
     # Salary calculation constants (same as bot)
     NDFL_RATE: float = 0.13
     PFR_RATE: float = 0.22

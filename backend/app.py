@@ -87,6 +87,10 @@ def create_app() -> FastAPI:
     app.include_router(audit_router.router, prefix="/api/v1")
     app.include_router(downloads_router.router, prefix="/api/v1")
 
+    # Mount SQLAdmin panel
+    from backend.admin import setup_admin
+    setup_admin(app)
+
     @app.on_event("startup")
     async def on_startup():
         async with engine.begin() as conn:
@@ -132,6 +136,29 @@ def _init_sentry():
             import sentry_sdk
             from sentry_sdk.integrations.fastapi import FastApiIntegration
             from sentry_sdk.integrations.starlette import StarletteIntegration
+            from backend.middleware.pii_mask import mask_all
+
+            def before_send(event, hint):
+                """Scrub PII from Sentry events before sending."""
+                # Mask event message
+                if event.get("message"):
+                    event["message"] = mask_all(event["message"])
+
+                # Mask logentry message
+                if event.get("logentry") and event["logentry"].get("message"):
+                    event["logentry"]["message"] = mask_all(
+                        event["logentry"]["message"]
+                    )
+
+                # Mask breadcrumb messages
+                if event.get("breadcrumbs") and event["breadcrumbs"].get("values"):
+                    for breadcrumb in event["breadcrumbs"]["values"]:
+                        if breadcrumb.get("message"):
+                            breadcrumb["message"] = mask_all(
+                                breadcrumb["message"]
+                            )
+
+                return event
 
             sentry_sdk.init(
                 dsn=settings.SENTRY_DSN,
@@ -140,6 +167,7 @@ def _init_sentry():
                     FastApiIntegration(),
                 ],
                 traces_sample_rate=0.1,
+                before_send=before_send,
             )
         except Exception:
             pass

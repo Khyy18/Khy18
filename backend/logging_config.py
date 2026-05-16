@@ -3,6 +3,8 @@
 import logging
 import structlog
 
+from backend.middleware.pii_mask import pii_processor
+
 
 def configure_logging():
     """Configure structlog with JSON processor for production."""
@@ -17,6 +19,7 @@ def configure_logging():
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
+            pii_processor,
             structlog.processors.JSONRenderer(),
         ],
         context_class=dict,

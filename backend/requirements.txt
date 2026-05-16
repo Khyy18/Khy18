@@ -14,3 +14,4 @@ cryptography>=41.0
 slowapi>=0.1.9
 sentry-sdk[fastapi]>=1.40.0
 structlog>=23.0
+sqladmin>=0.16.0

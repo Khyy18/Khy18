@@ -1,4 +1,6 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+from kindergarten_accountant_bot.config import WEBAPP_URL
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -23,6 +25,13 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("\U0001f4ca Ведомость", callback_data="menu_payroll"),
         ],
     ]
+    if WEBAPP_URL:
+        keyboard.append([
+            InlineKeyboardButton(
+                "\U0001f4f1 Открыть приложение",
+                web_app=WebAppInfo(url=WEBAPP_URL),
+            ),
+        ])
     return InlineKeyboardMarkup(keyboard)
 
 
