@@ -24,7 +24,7 @@ class CalculationsScreen extends StatelessWidget {
           ),
         ),
         body: SafeArea(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -67,6 +67,14 @@ class CalculationsScreen extends StatelessWidget {
                   subtitle: 'Расчёт больничного листа',
                   onTap: () => context.go('/sick'),
                   delay: 200,
+                ),
+                const SizedBox(height: 12),
+                _HubCard(
+                  icon: Icons.exit_to_app_outlined,
+                  title: 'Компенсация при увольнении',
+                  subtitle: 'Расчёт компенсации за неиспользованный отпуск',
+                  onTap: () => context.go('/compensation'),
+                  delay: 300,
                 ),
               ],
             ),

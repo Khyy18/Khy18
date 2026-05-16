@@ -30,6 +30,9 @@ import 'screens/pin_setup_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/document_scan_screen.dart';
+import 'screens/compensation_screen.dart';
+import 'screens/templates_screen.dart';
+import 'screens/calendar_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -240,6 +243,48 @@ class KindergartenApp extends ConsumerWidget {
                   animation: animation, child: child);
             },
           ),
+        ),
+        GoRoute(
+          path: '/compensation',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const CompensationScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
+        ),
+        GoRoute(
+          path: '/templates',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const TemplatesScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
+        ),
+        GoRoute(
+          path: '/calendar',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const CalendarScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
+        ),
+        GoRoute(
+          path: '/lock',
+          builder: (context, state) => LockScreen(onUnlocked: () {
+            GoRouter.of(context).go('/');
+          }),
         ),
         GoRoute(
           path: '/scan',

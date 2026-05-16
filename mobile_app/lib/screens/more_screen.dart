@@ -24,7 +24,7 @@ class MoreScreen extends StatelessWidget {
           ),
         ),
         body: SafeArea(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -63,11 +63,19 @@ class MoreScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 _HubCard(
-                  icon: Icons.payment_outlined,
-                  title: 'Платёжки',
-                  subtitle: 'Платёжные поручения',
-                  onTap: () => context.go('/payment'),
+                  icon: Icons.description_outlined,
+                  title: 'Шаблоны приказов',
+                  subtitle: 'Приказы на отпуск, приём, увольнение',
+                  onTap: () => context.go('/templates'),
                   delay: 300,
+                ),
+                const SizedBox(height: 12),
+                _HubCard(
+                  icon: Icons.calendar_month_outlined,
+                  title: 'Производственный календарь',
+                  subtitle: 'Рабочие и выходные дни 2024-2025',
+                  onTap: () => context.go('/calendar'),
+                  delay: 400,
                 ),
                 const SizedBox(height: 12),
                 _HubCard(
@@ -75,7 +83,7 @@ class MoreScreen extends StatelessWidget {
                   title: 'AI Ассистент',
                   subtitle: 'Задайте вопрос по бухгалтерии',
                   onTap: () => context.go('/ai_chat'),
-                  delay: 400,
+                  delay: 500,
                 ),
               ],
             ),
