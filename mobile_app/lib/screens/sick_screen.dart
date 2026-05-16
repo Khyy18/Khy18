@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../providers/salary_provider.dart';
 import '../services/api_service.dart';
+import '../services/file_export_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/result_card.dart';
@@ -171,11 +172,12 @@ class _SickScreenState extends ConsumerState<SickScreen> {
   void _exportExcel() async {
     try {
       final api = ApiService();
-      await api.exportSickExcel(
+      final bytes = await api.exportSickExcel(
         earnings2y: double.parse(_earningsController.text),
         stazhBracket: _stazhBracket,
         days: _days,
       );
+      await saveAndOpenFile(bytes, 'sick_export.xlsx');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

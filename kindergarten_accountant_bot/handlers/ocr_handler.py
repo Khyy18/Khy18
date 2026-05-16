@@ -129,6 +129,9 @@ async def ocr_excel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             caption="\U0001f4c4 \u0412\u0430\u0448 \u0440\u0430\u0441\u043f\u043e\u0437\u043d\u0430\u043d\u043d\u044b\u0439 \u0434\u043e\u043a\u0443\u043c\u0435\u043d\u0442",
         )
 
+        # Clean up stored OCR data
+        context.user_data.pop("ocr_result", None)
+
     except Exception as e:
         logger.error(f"OCR Excel callback error: {e}")
         await query.edit_message_text(

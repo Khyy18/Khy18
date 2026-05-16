@@ -11,6 +11,7 @@ from openpyxl.styles import Font, Border, Side, Alignment
 
 from backend.auth import verify_bearer_token
 from backend.ai.groq_client import vision_completion
+from backend.config import settings
 from backend.schemas.ocr import OcrProcessRequest, OcrProcessResponse, OcrToExcelRequest
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ async def ocr_process(
     """Process an image through OCR using Groq Vision API."""
     if not data.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
+
+    # Limit base64 payload to ~10MB (which is ~7.5MB decoded image)
+    if len(data.image_base64) > 10_000_000:
+        raise HTTPException(status_code=413, detail="Image too large (max 10MB)")
 
     result = await vision_completion(data.image_base64, OCR_PROMPT)
 
@@ -66,6 +71,13 @@ async def ocr_process(
         fields=fields,
         raw_text=result,
     )
+
+
+def _sanitize_cell(value: str) -> str:
+    """Prevent Excel formula injection."""
+    if value and value[0] in ('=', '+', '-', '@'):
+        return "'" + value
+    return value
 
 
 @router.post("/to-excel")
@@ -109,9 +121,13 @@ async def ocr_to_excel(
     # Data rows
     row = 4
     for key, value in data.fields.items():
-        ws.cell(row=row, column=1, value=key).border = thin_border
-        ws.cell(row=row, column=2, value=value).border = thin_border
+        ws.cell(row=row, column=1, value=_sanitize_cell(key)).border = thin_border
+        ws.cell(row=row, column=2, value=_sanitize_cell(value)).border = thin_border
         row += 1
+
+    # Sheet protection (same as calculator exports)
+    ws.protection.sheet = True
+    ws.protection.password = settings.EXCEL_PASSWORD
 
     buffer = io.BytesIO()
     wb.save(buffer)

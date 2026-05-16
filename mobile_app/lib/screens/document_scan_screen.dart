@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/api_service.dart';
+import '../services/file_export_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/result_card.dart';
@@ -105,7 +106,8 @@ class _DocumentScanScreenState extends ConsumerState<DocumentScanScreen> {
       for (final entry in _fieldControllers.entries) {
         fields[entry.key] = entry.value.text;
       }
-      await _api.exportOcrToExcel(fields, _docType);
+      final bytes = await _api.exportOcrToExcel(fields, _docType);
+      await saveAndOpenFile(bytes, 'ocr_$_docType.xlsx');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

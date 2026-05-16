@@ -2,9 +2,10 @@
 
 import calendar
 import io
+from datetime import date as date_type
 from typing import List
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
@@ -45,28 +46,36 @@ async def bulk_mark(
     _token: str = Depends(verify_bearer_token),
 ):
     """Mark multiple employees with same status for a given date."""
+    # Validate date format
+    try:
+        date_type.fromisoformat(data.date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid date format. Use YYYY-MM-DD")
+
     mark_type = _STATUS_TO_MARK.get(data.status, data.status)
-    count = 0
-    for emp_id in data.employee_ids:
-        # Check if mark already exists for this employee/date
-        existing = await db.execute(
-            select(TimesheetMark).where(
-                TimesheetMark.employee_id == emp_id,
-                TimesheetMark.date == data.date,
-            )
+
+    # Fetch all existing marks for this date+employees in one query
+    existing = await db.execute(
+        select(TimesheetMark).where(
+            TimesheetMark.employee_id.in_(data.employee_ids),
+            TimesheetMark.date == data.date,
         )
-        mark = existing.scalar_one_or_none()
-        if mark:
-            mark.mark_type = mark_type
+    )
+    existing_marks = {m.employee_id: m for m in existing.scalars().all()}
+
+    # Update existing, create new
+    for emp_id in data.employee_ids:
+        if emp_id in existing_marks:
+            existing_marks[emp_id].mark_type = mark_type
         else:
             db.add(TimesheetMark(
                 employee_id=emp_id,
                 date=data.date,
                 mark_type=mark_type,
             ))
-        count += 1
+
     await db.commit()
-    return {"updated": count}
+    return {"updated": len(data.employee_ids)}
 
 
 @router.post("/mark", response_model=TimesheetMarkResponse, status_code=201)

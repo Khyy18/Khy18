@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../providers/salary_provider.dart';
 import '../services/api_service.dart';
+import '../services/file_export_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/result_card.dart';
@@ -244,12 +245,13 @@ class _SalaryScreenState extends ConsumerState<SalaryScreen> {
   void _exportExcel() async {
     try {
       final api = ApiService();
-      await api.exportSalaryExcel(
+      final bytes = await api.exportSalaryExcel(
         oklad: double.parse(_okladController.text),
         rate: _rate,
         stazhPercent: _stazhPercent,
         categoryPercent: _categoryPercent,
       );
+      await saveAndOpenFile(bytes, 'salary_export.xlsx');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../providers/salary_provider.dart';
 import '../services/api_service.dart';
+import '../services/file_export_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/result_card.dart';
@@ -135,10 +136,11 @@ class _VacationScreenState extends ConsumerState<VacationScreen> {
   void _exportExcel() async {
     try {
       final api = ApiService();
-      await api.exportVacationExcel(
+      final bytes = await api.exportVacationExcel(
         totalEarnings: double.parse(_earningsController.text),
         days: _days,
       );
+      await saveAndOpenFile(bytes, 'vacation_export.xlsx');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

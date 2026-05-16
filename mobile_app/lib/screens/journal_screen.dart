@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../providers/journal_provider.dart';
 import '../services/api_service.dart';
+import '../services/file_export_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/empty_state.dart';
 
@@ -24,7 +25,8 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
   void _exportExcel() async {
     try {
       final api = ApiService();
-      await api.exportJournalExcel();
+      final bytes = await api.exportJournalExcel();
+      await saveAndOpenFile(bytes, 'journal_export.xlsx');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
