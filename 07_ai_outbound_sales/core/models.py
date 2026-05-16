@@ -360,6 +360,7 @@ class Webhook(Base):
     url = Column(String, nullable=False)
     events = Column(JSONB, default=list)
     secret = Column(String, nullable=False)
+    template_type = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
     is_active = Column(Boolean, default=True, nullable=False)
 

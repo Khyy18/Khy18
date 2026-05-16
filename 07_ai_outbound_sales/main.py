@@ -36,6 +36,7 @@ from dashboard.routes.trial import router as trial_router
 from dashboard.routes.preview import router as preview_router
 from dashboard.routes.referral import router as referral_router
 from dashboard.routes.webhook_status import router as webhook_status_router
+from dashboard.routes.crm_webhooks import router as crm_webhooks_router
 from dashboard.routes.costs import router as costs_router
 from dashboard.views import router as views_router
 from agents.approval_queue import router as approvals_router, set_email_sender
@@ -440,6 +441,7 @@ app.include_router(trial_router)
 app.include_router(preview_router)
 app.include_router(referral_router)
 app.include_router(webhook_status_router)
+app.include_router(crm_webhooks_router)
 app.include_router(costs_router)
 app.include_router(approvals_router)
 app.include_router(deliverability_router)
