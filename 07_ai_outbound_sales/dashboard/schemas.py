@@ -255,6 +255,7 @@ class PlanResponse(BaseModel):
     emails_limit: int
     linkedin_limit: int
     campaigns_limit: int
+    domains_limit: int
     price_cents: int
     stripe_price_id: Optional[str] = None
 

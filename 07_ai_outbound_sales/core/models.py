@@ -96,7 +96,7 @@ class SubscriptionStatus(str, enum.Enum):
 class PlanName(str, enum.Enum):
     starter = "starter"
     growth = "growth"
-    scale = "scale"
+    agency = "agency"
     enterprise = "enterprise"
 
 
@@ -272,6 +272,7 @@ class Plan(Base):
     emails_limit = Column(Integer, nullable=False)
     linkedin_limit = Column(Integer, nullable=False)
     campaigns_limit = Column(Integer, nullable=False)
+    domains_limit = Column(Integer, nullable=False, default=1)
     price_cents = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
