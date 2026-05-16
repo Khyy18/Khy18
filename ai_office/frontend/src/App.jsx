@@ -23,6 +23,7 @@ export default function App() {
   const [wsActivity, setWsActivity] = useState(null)
   const [selectedAgent, setSelectedAgent] = useState(null)
   const [userRole, setUserRole] = useState('viewer')
+  const [streamingMessages, setStreamingMessages] = useState({})
 
   // Инициализация Telegram Web App и определение роли
   useEffect(() => {
@@ -93,6 +94,40 @@ export default function App() {
     new_activity: useCallback((data) => {
       setWsActivity(prev => prev ? [data, ...prev] : [data])
     }, []),
+
+    agent_typing_chunk: useCallback((data) => {
+      setStreamingMessages(prev => {
+        const existing = prev[data.message_id] || { text: '', agent: data.agent, isComplete: false }
+        return {
+          ...prev,
+          [data.message_id]: {
+            ...existing,
+            text: existing.text + data.chunk,
+          },
+        }
+      })
+    }, []),
+
+    agent_response_complete: useCallback((data) => {
+      setStreamingMessages(prev => {
+        const updated = {
+          ...prev,
+          [data.message_id]: {
+            text: data.full_text,
+            agent: data.agent,
+            isComplete: true,
+          },
+        }
+        // Clear completed message after 2 seconds
+        setTimeout(() => {
+          setStreamingMessages(current => {
+            const { [data.message_id]: _, ...rest } = current
+            return rest
+          })
+        }, 2000)
+        return updated
+      })
+    }, []),
   }
 
   const { connected, error: wsError } = useWebSocket('/api/ws', wsHandlers)
@@ -146,7 +181,18 @@ export default function App() {
               <div className="space-y-3">
                 {agents && agents.length > 0 ? (
                   agents.map((agent) => (
-                    <AgentCard key={agent.id || agent.name} agent={agent} onSelect={setSelectedAgent} />
+                    <AgentCard
+                      key={agent.id || agent.name}
+                      agent={agent}
+                      onSelect={setSelectedAgent}
+                      streamingText={
+                        Object.values(streamingMessages).find(
+                          m => m.agent === agent.name && !m.isComplete
+                        ) || Object.values(streamingMessages).find(
+                          m => m.agent === agent.name
+                        ) || null
+                      }
+                    />
                   ))
                 ) : (
                   <div className="text-center py-8 text-white/30 text-sm">

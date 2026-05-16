@@ -1,11 +1,12 @@
 import { Activity, Cpu, Pause } from 'lucide-react'
 import TypingIndicator from './TypingIndicator'
+import StreamingMessage from './StreamingMessage'
 
 /**
  * Карточка агента с glass-morphism эффектом
  * Отображает: аватар, имя, роль, статус, текущую задачу
  */
-export default function AgentCard({ agent, onSelect }) {
+export default function AgentCard({ agent, onSelect, streamingText }) {
   // Получаем инициалы из имени агента
   const initials = agent.name
     .split(' ')
@@ -89,6 +90,13 @@ export default function AgentCard({ agent, onSelect }) {
               {agent.current_task}
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Streaming response */}
+      {streamingText && (
+        <div className="mt-3 pl-15">
+          <StreamingMessage text={streamingText.text} isComplete={streamingText.isComplete} />
         </div>
       )}
     </div>

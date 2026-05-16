@@ -14,6 +14,7 @@ from ai_office.core.config import settings
 from ai_office.core.llm_provider import llm_provider
 from ai_office.core.memory import agent_memory
 from ai_office.core.rate_limiter import BudgetExhaustedError, Priority
+from ai_office.core.streaming import StreamingCallback
 from ai_office.tools.memory_tools import set_current_agent
 
 logger = logging.getLogger(__name__)
@@ -119,11 +120,13 @@ def make_agent_node(config):
             logger.debug(f"Ошибка при recall памяти для {config.name}: {e}")
 
         try:
+            streaming_cb = StreamingCallback(agent_name=config.name)
             response = await llm_provider.ainvoke_with_retry(
                 messages=messages,
                 agent_name=config.name,
                 tools=config.tools if config.tools else None,
                 priority=Priority.URGENT,
+                streaming_callback=streaming_cb,
             )
         except BudgetExhaustedError:
             response = AIMessage(content="Бюджет на сегодня исчерпан")

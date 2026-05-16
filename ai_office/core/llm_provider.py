@@ -4,6 +4,7 @@ import asyncio
 import time
 from typing import Any, Optional
 
+from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_openai import ChatOpenAI
 
 from ai_office.core.config import settings
@@ -180,6 +181,7 @@ class LLMProvider:
         agent_name: str = "unknown",
         tools: Optional[list] = None,
         priority: Priority = Priority.NORMAL,
+        streaming_callback: Optional[AsyncCallbackHandler] = None,
         **kwargs,
     ) -> Any:
         """Вызвать LLM с retry и fallback.
@@ -216,7 +218,11 @@ class LLMProvider:
                     if tools:
                         model = model.bind_tools(tools)
 
-                    response = await model.ainvoke(messages)
+                    invoke_kwargs = {}
+                    if streaming_callback:
+                        invoke_kwargs["config"] = {"callbacks": [streaming_callback]}
+
+                    response = await model.ainvoke(messages, **invoke_kwargs)
                     latency = time.perf_counter() - start_time
 
                     # Log usage
