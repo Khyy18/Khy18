@@ -402,3 +402,30 @@ class ShareCardResponse(BaseModel):
     completed_in: str
     priority: str
     share_text: str
+
+
+class SubscriptionStatusResponse(BaseModel):
+    """Ответ со статусом подписки workspace."""
+
+    tier: str
+    messages_remaining: Optional[int] = None
+    messages_limit: Optional[int] = None
+    messages_used: int
+    agents_available: list[str]
+
+
+class PublicAgentResponse(BaseModel):
+    """Ответ с информацией об агенте для публичного API."""
+
+    name: str
+    role: str
+    status: str
+
+
+class PublicActivityResponse(BaseModel):
+    """Ответ с записью активности для публичного API."""
+
+    agent_name: str
+    action_type: str
+    action_description: str
+    timestamp: Optional[datetime] = None

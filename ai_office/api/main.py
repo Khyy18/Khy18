@@ -31,6 +31,8 @@ from ai_office.api.routes.branding import router as branding_router
 from ai_office.api.routes.marketplace import router as marketplace_router
 from ai_office.api.routes.referral import router as referral_router
 from ai_office.api.routes.share import router as share_router
+from ai_office.api.routes.public import router as public_router
+from ai_office.api.routes.subscription import router as subscription_router
 from ai_office.api.middleware import TelegramAuthMiddleware
 from ai_office.api.observability import RequestLoggingMiddleware
 from ai_office.api.websocket import websocket_endpoint
@@ -102,6 +104,8 @@ app.include_router(branding_router)
 app.include_router(marketplace_router)
 app.include_router(referral_router)
 app.include_router(share_router)
+app.include_router(public_router)
+app.include_router(subscription_router)
 
 
 @app.get("/api/health")

@@ -20,6 +20,9 @@ class Workspace(Base):
     owner_telegram_id: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     settings_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    subscription_tier: Mapped[str] = mapped_column(String(20), server_default="free")
+    messages_used_this_month: Mapped[int] = mapped_column(Integer, server_default="0")
+    is_public: Mapped[bool] = mapped_column(Boolean, server_default="0")
 
 
 class SystemSetting(Base):
