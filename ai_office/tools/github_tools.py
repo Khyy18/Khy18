@@ -59,7 +59,8 @@ async def create_github_issue(repo: str, title: str, body: str, labels: str = ""
         data = response.json()
         result = f"Issue создан: #{data['number']} - {data['title']}\nURL: {data['html_url']}"
     else:
-        result = f"Ошибка создания issue: {response.status_code} - {response.text}"
+        error_detail = response.text[:150] if response.text else "Нет деталей"
+        result = f"Ошибка GitHub API (HTTP {response.status_code}): {error_detail}"
 
     await _log_activity("github_issue_created", f"Создан issue в {repo}: {title}")
     return result
@@ -100,7 +101,8 @@ async def list_github_issues(repo: str, state: str = "open") -> str:
                 lines.append(f"  #{issue['number']} - {issue['title']} [{issue['state']}]")
             result = "\n".join(lines)
     else:
-        result = f"Ошибка получения issues: {response.status_code} - {response.text}"
+        error_detail = response.text[:150] if response.text else "Нет деталей"
+        result = f"Ошибка GitHub API (HTTP {response.status_code}): {error_detail}"
 
     await _log_activity("github_issues_listed", f"Список issues {repo} ({state})")
     return result
@@ -136,7 +138,8 @@ async def create_pull_request_comment(repo: str, pr_number: int, body: str) -> s
         data = response.json()
         result = f"Комментарий добавлен к PR #{pr_number}\nURL: {data['html_url']}"
     else:
-        result = f"Ошибка добавления комментария: {response.status_code} - {response.text}"
+        error_detail = response.text[:150] if response.text else "Нет деталей"
+        result = f"Ошибка GitHub API (HTTP {response.status_code}): {error_detail}"
 
     await _log_activity("github_pr_commented", f"Комментарий к PR #{pr_number} в {repo}")
     return result

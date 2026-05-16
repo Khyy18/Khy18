@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react'
 export default function AgentGraph() {
   const [delegations, setDelegations] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
     const fetchDelegations = async () => {
@@ -17,7 +18,8 @@ export default function AgentGraph() {
           setDelegations(data)
         }
       } catch (err) {
-        // ignore
+        console.error('Failed to fetch delegations:', err)
+        setError('Ошибка загрузки данных')
       } finally {
         setLoading(false)
       }
@@ -66,6 +68,15 @@ export default function AgentGraph() {
     return (
       <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
         <div className="text-center py-8 text-white/30 text-sm">Loading...</div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+        <h2 className="text-white/80 font-medium text-sm mb-4">Delegation Graph</h2>
+        <div className="text-center py-8 text-red-400/70 text-sm">{error}</div>
       </div>
     )
   }

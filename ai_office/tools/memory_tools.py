@@ -1,5 +1,7 @@
 """Инструменты памяти агентов - сохранение и поиск фактов/решений."""
 
+import contextvars
+
 from langchain_core.tools import tool
 from sqlalchemy import select
 
@@ -8,18 +10,20 @@ from ai_office.core.memory import agent_memory
 from ai_office.core.models import ActivityLog, Agent
 
 # Текущий агент (устанавливается оркестратором перед вызовом инструментов)
-_current_agent: str = "alice"
+# Используем ContextVar для безопасности при конкурентных async-задачах
+_current_agent_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_agent", default="alice"
+)
 
 
 def set_current_agent(name: str) -> None:
     """Установить имя текущего агента для контекста инструментов."""
-    global _current_agent
-    _current_agent = name
+    _current_agent_var.set(name)
 
 
 def get_current_agent() -> str:
     """Получить имя текущего агента."""
-    return _current_agent
+    return _current_agent_var.get()
 
 
 async def _log_activity(action_type: str, description: str) -> None:

@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react'
 export default function TaskTimeline() {
   const [activities, setActivities] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
     const fetchActivity = async () => {
@@ -17,7 +18,8 @@ export default function TaskTimeline() {
           setActivities(data.items || [])
         }
       } catch (err) {
-        // ignore
+        console.error('Failed to fetch activity:', err)
+        setError('Ошибка загрузки данных')
       } finally {
         setLoading(false)
       }
@@ -57,6 +59,15 @@ export default function TaskTimeline() {
     return (
       <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
         <div className="text-center py-8 text-white/30 text-sm">Loading...</div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+        <h2 className="text-white/80 font-medium text-sm mb-4">Timeline</h2>
+        <div className="text-center py-8 text-red-400/70 text-sm">{error}</div>
       </div>
     )
   }

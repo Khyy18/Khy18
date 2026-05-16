@@ -1,5 +1,6 @@
 """Инструменты разработчика - записывают активность в БД."""
 
+import os
 import subprocess
 import tempfile
 
@@ -38,6 +39,8 @@ async def execute_python_code(code: str) -> str:
         Результат выполнения (stdout или stderr)
     """
     try:
+        # Minimal safe environment - only PATH for Python to work
+        safe_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
         with tempfile.TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 ["python", "-c", code],
@@ -45,6 +48,8 @@ async def execute_python_code(code: str) -> str:
                 text=True,
                 timeout=5,
                 cwd=tmpdir,
+                env=safe_env,
+                stdin=subprocess.DEVNULL,
             )
         if result.returncode == 0:
             output = result.stdout.strip() or "(код выполнен без вывода)"

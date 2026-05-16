@@ -38,7 +38,7 @@ async def analyze_seo(url: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             response = await client.get(url)
-            html = response.text
+            html = response.text[:50000]  # Limit to 50KB for parsing
 
             # Извлекаем title
             title = ""

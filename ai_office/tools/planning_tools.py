@@ -110,22 +110,14 @@ async def execute_next_step(plan_id: int) -> str:
         )
         next_step = result.scalar_one_or_none()
 
-        await session.commit()
-
         lines = [f"Выполнен шаг {pending_step.step_number}: {pending_step.description}"]
         if next_step:
             lines.append(f"Следующий шаг {next_step.step_number}: {next_step.description}")
         else:
             plan.status = "completed"
-            async with async_session() as session2:
-                result2 = await session2.execute(
-                    select(Plan).where(Plan.id == plan_id)
-                )
-                p = result2.scalar_one_or_none()
-                if p:
-                    p.status = "completed"
-                    await session2.commit()
             lines.append("Это был последний шаг. План завершён!")
+
+        await session.commit()
 
     await _log_activity("plan_step_executed", f"Выполнен шаг плана #{plan_id}")
     return "\n".join(lines)

@@ -22,6 +22,7 @@ export default function AgentDetailView({ agent, onClose }) {
   const [activity, setActivity] = useState([])
   const [tasks, setTasks] = useState([])
   const [visible, setVisible] = useState(false)
+  const [error, setError] = useState(null)
 
   // Анимация появления
   useEffect(() => {
@@ -47,7 +48,8 @@ export default function AgentDetailView({ agent, onClose }) {
           setTasks(taskData)
         }
       } catch (err) {
-        // ignore
+        console.error('Failed to fetch agent data:', err)
+        setError('Ошибка загрузки данных')
       }
     }
     fetchData()
@@ -99,6 +101,11 @@ export default function AgentDetailView({ agent, onClose }) {
         </div>
 
         {/* Tools */}
+        {error && (
+          <div className="mb-4 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-xl">
+            <p className="text-red-400/70 text-xs">{error}</p>
+          </div>
+        )}
         {tools.length > 0 && (
           <div className="mb-4">
             <h3 className="text-white/70 font-medium text-xs uppercase tracking-wider mb-2">
