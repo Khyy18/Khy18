@@ -27,8 +27,12 @@ async def handle_command(client: Client, message: Message) -> None:
     if command == "/agents":
         response = (
             "\U0001f465 **Агенты AI Office:**\n\n"
-            "\U0001f469\u200d\U0001f4bc **Alice** - Персональный ассистент\n"
-            "\U0001f468\u200d\U0001f4bb **Sam** - Разработчик\n"
+            "\U0001f469\u200d\U0001f4bc **Alice** - Персональный ассистент / PM\n"
+            "\U0001f468\u200d\U0001f4bb **Sam** - Senior Developer\n"
+            "\U0001f3a8 **Max** - UI/UX Designer\n"
+            "\U0001f4ca **Eva** - Business Analyst\n"
+            "\U0001f50d **Leo** - QA Engineer\n"
+            "\U0001f680 **Nova** - DevOps / SRE\n"
         )
         await message.reply(response)
 
@@ -43,7 +47,7 @@ async def handle_command(client: Client, message: Message) -> None:
         response = (
             "\U00002705 **Статус системы:**\n\n"
             "AI Office работает в штатном режиме.\n"
-            "Агенты: 2 активных\n"
+            "Агенты: 6 активных\n"
             "API: доступен"
         )
         await message.reply(response)

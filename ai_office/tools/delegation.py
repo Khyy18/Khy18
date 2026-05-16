@@ -10,34 +10,25 @@ from ai_office.core.database import async_session
 from ai_office.core.models import ActivityLog, Agent, Task
 
 
-# Системные промпты агентов для вызова при делегировании
-_AGENT_PROMPTS = {
-    "alice": (
-        "Ты - Alice, персональный ассистент и продакт-менеджер. "
-        "Отвечай на русском языке. Будь краткой и по делу."
-    ),
-    "sam": (
-        "Ты - Sam, Senior Developer. "
-        "Отвечай на русском языке. Давай конкретные технические решения."
-    ),
-}
-
-
 @tool
 async def delegate_to_agent(agent_name: str, task_description: str) -> str:
     """Делегировать задачу другому агенту.
 
     Args:
-        agent_name: Имя агента-исполнителя (alice или sam)
+        agent_name: Имя агента-исполнителя (alice, sam, max, eva, leo, nova)
         task_description: Описание задачи для делегирования
 
     Returns:
         Ответ агента-исполнителя
     """
-    agent_name_lower = agent_name.lower()
+    from ai_office.agents.registry import registry
 
-    if agent_name_lower not in _AGENT_PROMPTS:
-        return f"Агент '{agent_name}' не найден. Доступные агенты: alice, sam."
+    agent_name_lower = agent_name.lower()
+    config = registry.get(agent_name_lower)
+
+    if not config:
+        available = ", ".join(registry.get_names())
+        return f"Агент '{agent_name}' не найден. Доступные агенты: {available}."
 
     # Создаем задачу в БД
     async with async_session() as session:
@@ -77,7 +68,7 @@ async def delegate_to_agent(agent_name: str, task_description: str) -> str:
         temperature=0.7,
     )
 
-    system_prompt = _AGENT_PROMPTS[agent_name_lower]
+    system_prompt = config.system_prompt
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=task_description),

@@ -5,8 +5,12 @@ from typing import List
 
 # Эмодзи для агентов
 AGENT_EMOJIS: dict[str, str] = {
-    "Alice": "\U0001f469\u200d\U0001f4bc",  # 👩‍💼
-    "Sam": "\U0001f468\u200d\U0001f4bb",    # 👨‍💻
+    "Alice": "\U0001f469\u200d\U0001f4bc",  # woman office worker
+    "Sam": "\U0001f468\u200d\U0001f4bb",    # man technologist
+    "Max": "\U0001f3a8",                     # artist palette
+    "Eva": "\U0001f4ca",                     # bar chart
+    "Leo": "\U0001f50d",                     # magnifying glass
+    "Nova": "\U0001f680",                    # rocket
 }
 
 
@@ -21,7 +25,7 @@ def format_agent_message(agent_name: str, role: str, text: str) -> str:
     Returns:
         Отформатированная строка
     """
-    emoji = AGENT_EMOJIS.get(agent_name, "\U0001f916")  # 🤖 по умолчанию
+    emoji = AGENT_EMOJIS.get(agent_name, "\U0001f916")  # default robot
     return f"{emoji} **{agent_name}** ({role}):\n{text}"
 
 

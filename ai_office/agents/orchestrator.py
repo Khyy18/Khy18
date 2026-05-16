@@ -1,6 +1,6 @@
 """Оркестратор агентов на базе LangGraph StateGraph."""
 
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -8,8 +8,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
-from ai_office.agents.alice import alice_config
-from ai_office.agents.sam import sam_config
+from ai_office.agents.registry import registry
 from ai_office.core.config import settings
 
 
@@ -26,7 +25,7 @@ class RouterDecision(BaseModel):
     """Структурированный ответ роутера."""
 
     target_agent: str = Field(
-        description="Имя агента для маршрутизации: 'alice' или 'sam'"
+        description="Имя агента для маршрутизации"
     )
 
 
@@ -35,6 +34,10 @@ ROUTER_SYSTEM_PROMPT = """Ты - маршрутизатор запросов в 
 Доступные агенты:
 - alice: Персональный ассистент и продакт-менеджер. Занимается задачами, планированием, приоритетами, управлением проектами, общими вопросами.
 - sam: Senior Developer. Занимается кодом, архитектурой, багами, техническими вопросами, ревью, деплоем.
+- max: UI/UX дизайнер. Занимается дизайном интерфейсов, вайрфреймами, UX-аудитом, юзабилити, визуальной частью.
+- eva: Бизнес-аналитик. Занимается требованиями, user stories, аналитическими отчётами, метриками, исследованием рынка.
+- leo: QA инженер. Занимается тестированием, тест-планами, баг-репортами, верификацией исправлений, качеством продукта.
+- nova: DevOps/SRE инженер. Занимается деплоями, мониторингом, CI/CD, инфраструктурой, производительностью.
 
 Верни имя агента, которому лучше всего подходит запрос. Если не уверен - выбери alice."""
 
@@ -82,7 +85,7 @@ async def router_node(state: AgentState) -> AgentState:
         decision = await structured_llm.ainvoke(router_messages)
 
         target_agent = decision.target_agent.lower()
-        if target_agent not in ("alice", "sam"):
+        if target_agent not in registry.get_names():
             target_agent = "alice"
 
     except Exception:
@@ -91,28 +94,22 @@ async def router_node(state: AgentState) -> AgentState:
     return {**state, "current_agent": target_agent}
 
 
-async def alice_node(state: AgentState) -> AgentState:
-    """Нода агента Alice - персональный ассистент."""
-    llm = _get_llm()
-    llm_with_tools = llm.bind_tools(alice_config.tools)
+def make_agent_node(config):
+    """Фабрика нод агентов: создаёт async-функцию ноды для заданного агента."""
 
-    # Формируем сообщения с системным промптом
-    messages = [SystemMessage(content=alice_config.system_prompt)] + state["messages"]
+    async def agent_node(state: AgentState) -> AgentState:
+        llm = _get_llm()
+        llm_with_tools = llm.bind_tools(config.tools)
 
-    response = await llm_with_tools.ainvoke(messages)
-    return {**state, "messages": [response], "current_agent": "alice"}
+        # Формируем сообщения с системным промптом
+        messages = [SystemMessage(content=config.system_prompt)] + state["messages"]
 
+        response = await llm_with_tools.ainvoke(messages)
+        return {**state, "messages": [response], "current_agent": config.name}
 
-async def sam_node(state: AgentState) -> AgentState:
-    """Нода агента Sam - разработчик."""
-    llm = _get_llm()
-    llm_with_tools = llm.bind_tools(sam_config.tools)
-
-    # Формируем сообщения с системным промптом
-    messages = [SystemMessage(content=sam_config.system_prompt)] + state["messages"]
-
-    response = await llm_with_tools.ainvoke(messages)
-    return {**state, "messages": [response], "current_agent": "sam"}
+    agent_node.__name__ = f"{config.name}_node"
+    agent_node.__doc__ = f"Нода агента {config.name} - {config.role}."
+    return agent_node
 
 
 async def tool_node(state: AgentState) -> AgentState:
@@ -123,8 +120,11 @@ async def tool_node(state: AgentState) -> AgentState:
     if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
         return state
 
-    # Собираем все доступные инструменты
-    all_tools = {t.name: t for t in alice_config.tools + sam_config.tools}
+    # Собираем все доступные инструменты из реестра
+    all_tools = {}
+    for config in registry.get_all():
+        for t in config.tools:
+            all_tools[t.name] = t
 
     tool_messages = []
     for tool_call in last_message.tool_calls:
@@ -150,14 +150,13 @@ async def tool_node(state: AgentState) -> AgentState:
     return {**state, "messages": tool_messages}
 
 
-def _route_after_router(state: AgentState) -> Literal["alice_node", "sam_node"]:
+def _route_after_router(state: AgentState) -> str:
     """Условное ребро: после роутера направляем к нужному агенту."""
-    if state.get("current_agent") == "sam":
-        return "sam_node"
-    return "alice_node"
+    agent_name = state.get("current_agent", "alice")
+    return f"{agent_name}_node"
 
 
-def _route_after_agent(state: AgentState) -> Literal["tool_node", "__end__"]:
+def _route_after_agent(state: AgentState) -> str:
     """Условное ребро: после агента проверяем нужны ли вызовы инструментов."""
     messages = state["messages"]
     if not messages:
@@ -169,11 +168,10 @@ def _route_after_agent(state: AgentState) -> Literal["tool_node", "__end__"]:
     return "__end__"
 
 
-def _route_after_tools(state: AgentState) -> Literal["alice_node", "sam_node"]:
+def _route_after_tools(state: AgentState) -> str:
     """Условное ребро: после выполнения инструментов возвращаемся к агенту."""
-    if state.get("current_agent") == "sam":
-        return "sam_node"
-    return "alice_node"
+    agent_name = state.get("current_agent", "alice")
+    return f"{agent_name}_node"
 
 
 def build_graph() -> StateGraph:
@@ -182,37 +180,38 @@ def build_graph() -> StateGraph:
 
     # Добавляем ноды
     graph.add_node("router", router_node)
-    graph.add_node("alice_node", alice_node)
-    graph.add_node("sam_node", sam_node)
     graph.add_node("tool_node", tool_node)
+
+    # Динамически добавляем ноды агентов из реестра
+    agent_nodes = {}
+    for config in registry.get_all():
+        node_name = f"{config.name}_node"
+        agent_nodes[config.name] = node_name
+        graph.add_node(node_name, make_agent_node(config))
 
     # Точка входа
     graph.set_entry_point("router")
 
-    # Условные ребра после роутера
+    # Условные ребра после роутера -> к агенту
     graph.add_conditional_edges(
         "router",
         _route_after_router,
-        {"alice_node": "alice_node", "sam_node": "sam_node"},
+        {node_name: node_name for node_name in agent_nodes.values()},
     )
 
-    # Условные ребра после агентов (инструменты или завершение)
-    graph.add_conditional_edges(
-        "alice_node",
-        _route_after_agent,
-        {"tool_node": "tool_node", "__end__": END},
-    )
-    graph.add_conditional_edges(
-        "sam_node",
-        _route_after_agent,
-        {"tool_node": "tool_node", "__end__": END},
-    )
+    # Условные ребра после каждого агента (инструменты или завершение)
+    for node_name in agent_nodes.values():
+        graph.add_conditional_edges(
+            node_name,
+            _route_after_agent,
+            {"tool_node": "tool_node", "__end__": END},
+        )
 
     # После выполнения инструментов возвращаемся к агенту
     graph.add_conditional_edges(
         "tool_node",
         _route_after_tools,
-        {"alice_node": "alice_node", "sam_node": "sam_node"},
+        {node_name: node_name for node_name in agent_nodes.values()},
     )
 
     # Компилируем граф
