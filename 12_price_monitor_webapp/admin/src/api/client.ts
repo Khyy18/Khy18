@@ -13,6 +13,11 @@ export function getAdminToken(): string | null {
   return adminToken;
 }
 
+export function clearAdminToken() {
+  adminToken = null;
+  localStorage.removeItem('admin_token');
+}
+
 export async function adminApiClient<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -88,4 +93,24 @@ export async function fetchPosts(limit = 20): Promise<PostResponse[]> {
 
 export async function fetchParsers(): Promise<ParserResponse[]> {
   return adminApiClient<ParserResponse[]>('/admin/parsers');
+}
+
+export interface DayMetric {
+  date: string;
+  clicks: number;
+  conversions: number;
+}
+
+export interface MonthRevenue {
+  month: string;
+  revenue: number;
+}
+
+export interface AnalyticsResponse {
+  clicks_by_day: DayMetric[];
+  revenue_by_month: MonthRevenue[];
+}
+
+export async function fetchAnalytics(): Promise<AnalyticsResponse> {
+  return adminApiClient<AnalyticsResponse>('/admin/analytics');
 }

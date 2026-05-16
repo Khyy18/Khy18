@@ -2,14 +2,24 @@
 from __future__ import annotations
 
 
+from datetime import date, timedelta
+
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import cast, Date, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Alert, Click, Payment, Post, Product, User
 from app.db.session import get_db
 from app.middleware.auth import get_admin_user
-from app.schemas.admin import PostCreate, PostOut, StatsOut, UserAdminOut
+from app.schemas.admin import (
+    AnalyticsOut,
+    DayMetricOut,
+    MonthRevenueOut,
+    PostCreate,
+    PostOut,
+    StatsOut,
+    UserAdminOut,
+)
 from app.services.parser_monitor import parser_monitor
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -130,3 +140,75 @@ async def get_parser_status(
     """Get parser health status."""
     result = await parser_monitor.check_parsers()
     return result
+
+@router.get("/analytics", response_model=AnalyticsOut)
+async def get_analytics(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(get_admin_user),
+):
+    """Get time-series analytics data for dashboard charts."""
+
+    # Clicks and conversions by day for last 7 days
+    today = date.today()
+    week_ago = today - timedelta(days=6)
+
+    clicks_query = (
+        select(
+            cast(Click.timestamp, Date).label("day"),
+            func.count(Click.id).label("clicks"),
+            func.count(func.nullif(Click.converted, False)).label("conversions"),
+        )
+        .where(cast(Click.timestamp, Date) >= week_ago)
+        .group_by(cast(Click.timestamp, Date))
+        .order_by(cast(Click.timestamp, Date))
+    )
+    clicks_result = await db.execute(clicks_query)
+    clicks_rows = clicks_result.all()
+
+    # Build map of day -> metrics
+    day_map: dict[str, tuple[int, int]] = {}
+    for row in clicks_rows:
+        day_map[str(row.day)] = (row.clicks, row.conversions)
+
+    clicks_by_day: list[DayMetricOut] = []
+    for i in range(7):
+        d = week_ago + timedelta(days=i)
+        day_str = str(d)
+        clicks_count, conv_count = day_map.get(day_str, (0, 0))
+        clicks_by_day.append(
+            DayMetricOut(date=day_str, clicks=clicks_count, conversions=conv_count)
+        )
+
+    # Revenue by month for last 6 months
+    month_names = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек']
+    revenue_by_month: list[MonthRevenueOut] = []
+
+    for i in range(5, -1, -1):
+        # Calculate month start/end
+        month_offset = today.month - 1 - i
+        year = today.year + (month_offset // 12)
+        month = (month_offset % 12) + 1
+        month_start = date(year, month, 1)
+        if month == 12:
+            month_end = date(year + 1, 1, 1)
+        else:
+            month_end = date(year, month + 1, 1)
+
+        rev_query = select(
+            func.coalesce(func.sum(Payment.amount), 0.0)
+        ).where(
+            Payment.status == "confirmed",
+            cast(Payment.created_at, Date) >= month_start,
+            cast(Payment.created_at, Date) < month_end,
+        )
+        rev_result = await db.execute(rev_query)
+        total_rev = rev_result.scalar() or 0.0
+
+        revenue_by_month.append(
+            MonthRevenueOut(month=month_names[month - 1], revenue=float(total_rev))
+        )
+
+    return AnalyticsOut(
+        clicks_by_day=clicks_by_day,
+        revenue_by_month=revenue_by_month,
+    )

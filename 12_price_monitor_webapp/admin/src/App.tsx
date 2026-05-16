@@ -6,6 +6,8 @@ import Posts from './pages/Posts';
 import Analytics from './pages/Analytics';
 import Parsers from './pages/Parsers';
 import Settings from './pages/Settings';
+import Login from './pages/Login';
+import ProtectedRoute from './components/ProtectedRoute';
 
 const navItems = [
   { path: '/', label: 'Дашборд', icon: '📊' },
@@ -17,7 +19,7 @@ const navItems = [
   { path: '/settings', label: 'Настройки', icon: '⚙️' },
 ];
 
-export default function App() {
+function AdminLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-gray-50">
       <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
@@ -47,16 +49,34 @@ export default function App() {
       </aside>
 
       <main className="flex-1 p-8">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/products" element={<Products />} />
-          <Route path="/users" element={<Users />} />
-          <Route path="/posts" element={<Posts />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/parsers" element={<Parsers />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
+        {children}
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/*"
+        element={
+          <ProtectedRoute>
+            <AdminLayout>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/products" element={<Products />} />
+                <Route path="/users" element={<Users />} />
+                <Route path="/posts" element={<Posts />} />
+                <Route path="/analytics" element={<Analytics />} />
+                <Route path="/parsers" element={<Parsers />} />
+                <Route path="/settings" element={<Settings />} />
+              </Routes>
+            </AdminLayout>
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
   );
 }

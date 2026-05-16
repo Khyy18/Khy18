@@ -49,3 +49,16 @@ class ParserStatusOut(BaseModel):
 class SettingUpdate(BaseModel):
     key: str
     value: str
+
+class DayMetricOut(BaseModel):
+    date: str
+    clicks: int
+    conversions: int
+
+class MonthRevenueOut(BaseModel):
+    month: str
+    revenue: float
+
+class AnalyticsOut(BaseModel):
+    clicks_by_day: list[DayMetricOut]
+    revenue_by_month: list[MonthRevenueOut]
