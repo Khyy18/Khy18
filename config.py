@@ -83,6 +83,20 @@ RATE_LIMIT_RPS = _safe_int(os.getenv("RATE_LIMIT_RPS", "10"), 10)
 RATE_LIMIT_BURST = _safe_int(os.getenv("RATE_LIMIT_BURST", "20"), 20)
 
 
+# --- Lead Scoring ---
+LEAD_SCORE_AUTO_RESPOND_THRESHOLD = _safe_int(
+    os.getenv("LEAD_SCORE_AUTO_RESPOND_THRESHOLD", "70"), 70
+)
+LEAD_SCORING_DB_PATH = os.getenv("LEAD_SCORING_DB_PATH", "lead_scoring.db")
+
+# --- Content Generation ---
+CONTENT_GENERATION_HOUR = _safe_int(
+    os.getenv("CONTENT_GENERATION_HOUR", "10"), 10
+)
+
+# --- Pricing ---
+PRICING_BASE_MULTIPLIER = float(os.getenv("PRICING_BASE_MULTIPLIER", "1.0"))
+
 # --- Торговые константы (v1 legacy) ---
 # Следующие четыре константы сохранены для обратной совместимости со v1
 # (стратегия RSI-cross, ai_analyst.decide). Новый код v2 опирается на

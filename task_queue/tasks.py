@@ -69,6 +69,13 @@ async def generate_offer_task(
     return f"offer_generated:id={offer_id}"
 
 
+async def content_generation_task(ctx: dict[str, Any]) -> str:
+    """Задача ежедневной генерации контента."""
+    from content_generator.scheduler import content_generation_task as _task
+
+    return await _task(ctx)
+
+
 async def viral_notification_task(
     ctx: dict[str, Any],
     referrer_tg_id: int,

@@ -7,6 +7,7 @@ from logging_config import get_logger
 from task_queue.config import JOB_TIMEOUT, MAX_JOBS, QUEUE_NAME, get_redis_settings
 from task_queue.tasks import (
     backup_task,
+    content_generation_task,
     freelance_scan_task,
     generate_offer_task,
     retry_webhook_task,
@@ -33,6 +34,7 @@ class WorkerSettings:
     redis_settings = get_redis_settings()
     functions = [
         backup_task,
+        content_generation_task,
         freelance_scan_task,
         generate_offer_task,
         retry_webhook_task,
