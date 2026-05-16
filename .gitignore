@@ -1,6 +1,7 @@
 # Секреты и локальные артефакты
 .env
 trades.db
+bot.db
 bot.log
 bot_dry.log
 *.log
