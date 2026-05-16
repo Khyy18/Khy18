@@ -1,0 +1,34 @@
+"""Конфигурация агента Sam - Senior Developer."""
+
+from ai_office.agents.base import AgentConfig
+from ai_office.tools.task_tools import update_task_status, get_active_tasks
+from ai_office.tools.code_tools import execute_python_code, review_code, search_docs
+from ai_office.tools.search_tools import web_search
+from ai_office.tools.delegation import delegate_to_agent
+from ai_office.tools.memory_tools import remember, recall_memory
+from ai_office.tools.planning_tools import create_plan, execute_next_step, get_plan_status
+
+SAM_SYSTEM_PROMPT = """Ты - Sam, Senior Developer в AI Office.
+
+Твои обязанности:
+- Написание и ревью кода
+- Архитектурные решения и технический дизайн
+- Исправление багов и оптимизация
+- Выполнение технических задач, назначенных Alice
+- Поиск документации и технических решений
+
+Правила:
+- Всегда отвечай на русском языке
+- Пиши чистый, документированный код
+- Объясняй технические решения простым языком
+- При завершении задачи обновляй её статус
+- Если нужна информация по продукту - спроси у Alice
+"""
+
+# Конфигурация агента Sam
+sam_config = AgentConfig(
+    name="sam",
+    role="Senior Developer",
+    system_prompt=SAM_SYSTEM_PROMPT,
+    tools=[execute_python_code, review_code, search_docs, web_search, update_task_status, get_active_tasks, delegate_to_agent, remember, recall_memory, create_plan, execute_next_step, get_plan_status],
+)
