@@ -46,28 +46,39 @@ def _current_version() -> int:
     return settings.ENCRYPTION_KEY_VERSION
 
 
-def encrypt_field(plaintext: str, key: bytes) -> str:
+def encrypt_field(plaintext: str, key: bytes, aad: Optional[bytes] = None) -> str:
     """Encrypt plaintext using AES-256-GCM.
 
     Returns base64(nonce + ciphertext + tag) as a string.
     Nonce is 12 bytes, generated randomly for each call.
+    If aad (associated authenticated data) is provided, it is bound to the ciphertext.
     """
     nonce = os.urandom(12)
     aesgcm = AESGCM(key)
-    ct = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), None)
+    ct = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), aad)
     # ct includes ciphertext + 16-byte tag appended by AESGCM
     return base64.b64encode(nonce + ct).decode("ascii")
 
 
-def decrypt_field(encrypted: str, key: bytes) -> str:
+def decrypt_field(encrypted: str, key: bytes, aad: Optional[bytes] = None) -> str:
     """Decrypt an AES-256-GCM encrypted value.
 
     Expects base64(nonce + ciphertext + tag).
+    If aad is provided, it must match the AAD used during encryption.
+    For backward compatibility, if decryption with AAD fails, retries without AAD.
     """
     raw = base64.b64decode(encrypted)
     nonce = raw[:12]
     ct = raw[12:]
     aesgcm = AESGCM(key)
+    if aad is not None:
+        try:
+            plaintext = aesgcm.decrypt(nonce, ct, aad)
+            return plaintext.decode("utf-8")
+        except Exception:
+            # Backward compatibility: retry without AAD for data encrypted before AAD was added
+            plaintext = aesgcm.decrypt(nonce, ct, None)
+            return plaintext.decode("utf-8")
     plaintext = aesgcm.decrypt(nonce, ct, None)
     return plaintext.decode("utf-8")
 
@@ -76,13 +87,14 @@ def encrypt_value(plaintext: str) -> str:
     """Encrypt a plaintext string with the current version key.
 
     Returns 'vN:base64data' format. If no key is configured, returns
-    plaintext unchanged (dev mode).
+    plaintext unchanged (dev mode). Uses the version string as AAD.
     """
     version = _current_version()
     key = _get_key(version)
     if key is None:
         return plaintext
-    encrypted = encrypt_field(plaintext, key)
+    version_aad = f"v{version}".encode("utf-8")
+    encrypted = encrypt_field(plaintext, key, aad=version_aad)
     return f"v{version}:{encrypted}"
 
 
@@ -107,7 +119,8 @@ def decrypt_value(ciphertext: str) -> str:
             # No key for this version, return as-is
             return ciphertext
         try:
-            return decrypt_field(data, key)
+            version_aad = f"v{version}".encode("utf-8")
+            return decrypt_field(data, key, aad=version_aad)
         except Exception:
             return ciphertext
 

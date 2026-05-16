@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 
 import sentry_sdk
@@ -112,6 +113,11 @@ def main():
 
     if WEBHOOK_URL:
         # Webhook mode
+        if not WEBHOOK_SECRET:
+            logging.warning(
+                "WARNING: Webhook запущен без WEBHOOK_SECRET - "
+                "входящие обновления не аутентифицируются"
+            )
         asyncio.run(_run_webhook(app))
     else:
         # Polling mode (default, unchanged behavior)

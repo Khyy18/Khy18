@@ -15,6 +15,8 @@ class SyncQueueEntry {
   final Map<String, dynamic>? body;
   final String timestamp;
   final String status;
+  final int retryCount;
+  final int maxRetries;
 
   SyncQueueEntry({
     required this.id,
@@ -23,6 +25,8 @@ class SyncQueueEntry {
     this.body,
     required this.timestamp,
     required this.status,
+    this.retryCount = 0,
+    this.maxRetries = 5,
   });
 
   Map<String, dynamic> toMap() => {
@@ -32,6 +36,8 @@ class SyncQueueEntry {
         'body': body,
         'timestamp': timestamp,
         'status': status,
+        'retryCount': retryCount,
+        'maxRetries': maxRetries,
       };
 
   factory SyncQueueEntry.fromMap(Map<dynamic, dynamic> map) {
@@ -44,10 +50,12 @@ class SyncQueueEntry {
           : null,
       timestamp: map['timestamp'] as String,
       status: map['status'] as String,
+      retryCount: (map['retryCount'] as int?) ?? 0,
+      maxRetries: (map['maxRetries'] as int?) ?? 5,
     );
   }
 
-  SyncQueueEntry copyWith({String? status}) {
+  SyncQueueEntry copyWith({String? status, int? retryCount}) {
     return SyncQueueEntry(
       id: id,
       endpoint: endpoint,
@@ -55,6 +63,8 @@ class SyncQueueEntry {
       body: body,
       timestamp: timestamp,
       status: status ?? this.status,
+      retryCount: retryCount ?? this.retryCount,
+      maxRetries: maxRetries,
     );
   }
 }
@@ -142,12 +152,29 @@ class SyncService {
           if (success) {
             await _box!.delete(entry.id);
           } else {
-            await _box!.put(
-                entry.id, entry.copyWith(status: 'failed').toMap());
+            final newRetryCount = entry.retryCount + 1;
+            if (newRetryCount >= entry.maxRetries) {
+              // Move to dead_letter status - stop retrying
+              await _box!.put(
+                  entry.id,
+                  entry.copyWith(status: 'dead_letter', retryCount: newRetryCount).toMap());
+            } else {
+              await _box!.put(
+                  entry.id,
+                  entry.copyWith(status: 'failed', retryCount: newRetryCount).toMap());
+            }
           }
         } catch (e) {
-          await _box!.put(
-              entry.id, entry.copyWith(status: 'failed').toMap());
+          final newRetryCount = entry.retryCount + 1;
+          if (newRetryCount >= entry.maxRetries) {
+            await _box!.put(
+                entry.id,
+                entry.copyWith(status: 'dead_letter', retryCount: newRetryCount).toMap());
+          } else {
+            await _box!.put(
+                entry.id,
+                entry.copyWith(status: 'failed', retryCount: newRetryCount).toMap());
+          }
         }
         _notifyPendingCount();
       }

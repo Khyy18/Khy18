@@ -3,10 +3,12 @@
 import os
 from typing import Optional
 
+import structlog
 from sqladmin import Admin, ModelView
 from sqladmin.authentication import AuthenticationBackend
 from starlette.requests import Request
 
+from backend.config import settings
 from backend.database import engine
 from backend.models.employee import Employee
 from backend.models.child import Child
@@ -15,6 +17,9 @@ from backend.models.audit_log import AuditLog
 from backend.models.reminder import Reminder
 from backend.models.timesheet import TimesheetMark
 from backend.models.payment import ParentPayment
+from backend.security.encryption import decrypt_value
+
+logger = structlog.get_logger(__name__)
 
 
 # --- Authentication ---
@@ -45,12 +50,30 @@ class AdminAuth(AuthenticationBackend):
         return False
 
 
+# --- Column formatters for encrypted fields ---
+
+def _decrypt_column(model, name):
+    """Create a column formatter that decrypts the value for display."""
+    def formatter(m, a):
+        value = getattr(m, name, None)
+        if value:
+            try:
+                return decrypt_value(value)
+            except Exception:
+                return value
+        return value
+    return formatter
+
+
 # --- Model Views ---
 
 class EmployeeAdmin(ModelView, model=Employee):
     name = "Сотрудник"
     name_plural = "Сотрудники"
     column_list = [Employee.id, Employee.fio, Employee.position, Employee.rate]
+    column_formatters = {
+        Employee.fio: _decrypt_column(Employee, "fio"),
+    }
 
 
 class ChildAdmin(ModelView, model=Child):
@@ -60,6 +83,10 @@ class ChildAdmin(ModelView, model=Child):
         Child.id, Child.child_fio, Child.group_name,
         Child.parent_fio, Child.discount_percent,
     ]
+    column_formatters = {
+        Child.child_fio: _decrypt_column(Child, "child_fio"),
+        Child.parent_fio: _decrypt_column(Child, "parent_fio"),
+    }
 
 
 class JournalEntryAdmin(ModelView, model=JournalEntry):
@@ -110,7 +137,19 @@ class ParentPaymentAdmin(ModelView, model=ParentPayment):
 
 def setup_admin(app):
     """Mount SQLAdmin at /admin/ with authentication."""
-    authentication_backend = AdminAuth(secret_key="admin-secret-key-change-me")
+    # Use SECRET_KEY from settings instead of hard-coded value
+    session_secret = os.environ.get("ADMIN_SESSION_SECRET", "") or settings.SECRET_KEY
+    authentication_backend = AdminAuth(secret_key=session_secret)
+
+    # Warn if default admin credentials are still in use
+    admin_user = os.environ.get("ADMIN_USER", "admin")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "admin")
+    if admin_user == "admin" and admin_password == "admin":
+        logger.warning(
+            "Admin panel uses default credentials (admin/admin). "
+            "Set ADMIN_USER and ADMIN_PASSWORD environment variables for production."
+        )
+
     admin = Admin(
         app,
         engine,
