@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.session import init_db
 from app.routers import alerts, categories, deals, favorites, profile
-from app.routers import payments, tracking
+from app.routers import payments, tracking, chatbot
 from app.services.parser_monitor import parser_monitor
 from app.services.proxy_pool import proxy_pool
 
@@ -54,6 +54,7 @@ app.include_router(favorites.router)
 app.include_router(profile.router)
 app.include_router(payments.router)
 app.include_router(tracking.router)
+app.include_router(chatbot.router)
 
 
 @app.get("/health", tags=["system"])

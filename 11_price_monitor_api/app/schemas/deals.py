@@ -8,6 +8,13 @@ class PricePointOut(BaseModel):
     price: float
 
 
+class ForecastOut(BaseModel):
+    trend: str
+    recommendation: str
+    confidence: float
+    reasoning: str
+
+
 class DealOut(BaseModel):
     id: str
     title: str
@@ -21,7 +28,7 @@ class DealOut(BaseModel):
     rating: float
     reviewsSummary: str
     affiliateUrl: str
-    forecast: str | None = None
+    forecast: ForecastOut | None = None
 
     model_config = {"from_attributes": True}
 

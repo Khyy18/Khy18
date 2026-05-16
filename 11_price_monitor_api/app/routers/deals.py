@@ -8,9 +8,12 @@ from sqlalchemy.orm import selectinload
 from app.db.models import Product, PriceHistory, User
 from app.db.session import get_db
 from app.middleware.auth import get_current_user
-from app.schemas.deals import DealListResponse, DealOut, PricePointOut
+from app.schemas.deals import DealListResponse, DealOut, ForecastOut, PricePointOut
+from app.services.price_forecast import PriceForecastService
 
 router = APIRouter(prefix="/deals", tags=["deals"])
+
+_forecast_service = PriceForecastService()
 
 
 def _product_to_deal(product: Product) -> DealOut:
@@ -84,4 +87,17 @@ async def get_deal_by_id(
     product = result.scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=404, detail="Deal not found")
-    return _product_to_deal(product)
+
+    deal = _product_to_deal(product)
+
+    # Add price forecast if history is available
+    forecast_result = await _forecast_service.forecast(deal_id, db)
+    if forecast_result:
+        deal.forecast = ForecastOut(
+            trend=forecast_result.trend,
+            recommendation=forecast_result.recommendation,
+            confidence=forecast_result.confidence,
+            reasoning=forecast_result.reasoning,
+        )
+
+    return deal

@@ -3,6 +3,7 @@
 import secrets
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,3 +62,19 @@ async def get_profile(
         dealsTracked=deals_tracked,
         bestDeal=0.0,
     )
+
+
+class FcmTokenRequest(BaseModel):
+    token: str
+
+
+@router.post("/profile/fcm-token")
+async def save_fcm_token(
+    data: FcmTokenRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Save user's FCM token for push notifications."""
+    user.fcm_token = data.token
+    await db.commit()
+    return {"status": "ok"}
