@@ -42,6 +42,8 @@ from dashboard.routes.reports import router as reports_router
 from dashboard.views import router as views_router
 from agents.approval_queue import router as approvals_router, set_email_sender
 from channels.email.deliverability_routes import router as deliverability_router
+from dashboard.routes.voice import router as voice_router
+from dashboard.routes.voice_webhooks import router as voice_webhooks_router
 
 # Initialize structured logging
 setup_logging()
@@ -364,6 +366,63 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.error("Failed to start InboxListener: %s", exc)
 
+    # Initialize Voice Channel services if Twilio is configured
+    _voice_scheduler_task: asyncio.Task | None = None
+    if settings.twilio_account_sid:
+        try:
+            from channels.voice import TwilioClient, DeepgramSTT, ElevenLabsTTS, CallManager
+            from scheduler.voice_scheduler import VoiceScheduler
+
+            twilio_client = TwilioClient(
+                account_sid=settings.twilio_account_sid,
+                auth_token=settings.twilio_auth_token,
+                from_number=settings.twilio_phone_number,
+            )
+            deepgram_stt = DeepgramSTT(api_key=settings.deepgram_api_key)
+            elevenlabs_tts = ElevenLabsTTS(
+                api_key=settings.elevenlabs_api_key,
+                voice_id=settings.elevenlabs_voice_id,
+            )
+
+            # Use the webhook LLM client already created above
+            voice_llm = getattr(app.state, "llm_client", None)
+
+            call_manager = CallManager(
+                twilio_client=twilio_client,
+                stt=deepgram_stt,
+                tts=elevenlabs_tts,
+                llm_client=voice_llm,
+                session_factory=async_session_factory,
+                settings=settings,
+            )
+            app.state.call_manager = call_manager
+
+            voice_scheduler = VoiceScheduler(
+                session_factory=async_session_factory,
+                call_manager=call_manager,
+                settings=settings,
+                redis_url=settings.redis_url,
+            )
+            app.state.voice_scheduler = voice_scheduler
+
+            async def _voice_scheduler_loop() -> None:
+                interval = 60  # Check every 60 seconds
+                while True:
+                    try:
+                        await voice_scheduler.run_voice_tick()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.error("Voice scheduler error: %s", exc)
+                    await asyncio.sleep(interval)
+
+            _voice_scheduler_task = asyncio.create_task(
+                _voice_scheduler_loop(), name="voice_scheduler"
+            )
+            logger.info("Voice channel services initialized")
+        except Exception as exc:
+            logger.error("Failed to initialize voice services: %s", exc)
+
     yield
 
     # Shutdown
@@ -398,6 +457,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except asyncio.CancelledError:
             pass
         logger.info("InboxListener stopped")
+
+    if _voice_scheduler_task is not None:
+        _voice_scheduler_task.cancel()
+        try:
+            await _voice_scheduler_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Voice scheduler stopped")
 
     if _scheduler is not None:
         await _scheduler.stop()
@@ -447,6 +514,8 @@ app.include_router(costs_router)
 app.include_router(reports_router)
 app.include_router(approvals_router)
 app.include_router(deliverability_router)
+app.include_router(voice_router)
+app.include_router(voice_webhooks_router)
 app.include_router(views_router)
 
 # Mount static files

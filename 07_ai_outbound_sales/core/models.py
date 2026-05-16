@@ -307,6 +307,7 @@ class Plan(Base):
     linkedin_limit = Column(Integer, nullable=False)
     campaigns_limit = Column(Integer, nullable=False)
     domains_limit = Column(Integer, nullable=False, default=1)
+    voice_calls_limit = Column(Integer, default=0, nullable=False)
     price_cents = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
@@ -340,6 +341,7 @@ class UsageRecord(Base):
     leads_used = Column(Integer, default=0, nullable=False)
     emails_used = Column(Integer, default=0, nullable=False)
     linkedin_used = Column(Integer, default=0, nullable=False)
+    voice_calls_used = Column(Integer, default=0, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=_utcnow)
 
     tenant = relationship("Tenant", back_populates="usage_records")

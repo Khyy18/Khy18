@@ -38,6 +38,10 @@ from core.models import (
     ABTest,
     ABTestAssignment,
     ABTestStatus,
+    Call,
+    CallScript,
+    CallStatus,
+    CallOutcome,
 )
 
 
@@ -342,6 +346,7 @@ def make_plan(**kwargs) -> Plan:
         "linkedin_limit": 100,
         "campaigns_limit": 5,
         "domains_limit": 1,
+        "voice_calls_limit": 0,
         "price_cents": 2900,
         "created_at": datetime.now(timezone.utc),
     }
@@ -366,3 +371,40 @@ def make_subscription(
     }
     defaults.update(kwargs)
     return Subscription(**defaults)
+
+
+def make_call(
+    tenant_id: uuid.UUID | None = None,
+    lead_id: uuid.UUID | None = None,
+    **kwargs,
+) -> Call:
+    """Create a Call instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "lead_id": lead_id or uuid.uuid4(),
+        "twilio_sid": f"CA{uuid.uuid4().hex[:32]}",
+        "status": CallStatus.initiated,
+        "started_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return Call(**defaults)
+
+
+def make_call_script(
+    tenant_id: uuid.UUID | None = None,
+    **kwargs,
+) -> CallScript:
+    """Create a CallScript instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "name": "Test Script",
+        "script_json": {"greeting_template": "Hello!", "topics": ["product demo"]},
+        "voice_id": "default",
+        "language": "en",
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return CallScript(**defaults)
