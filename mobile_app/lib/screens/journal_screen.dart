@@ -71,95 +71,127 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
             ),
           ],
         ),
-      body: Column(
-        children: [
-          Container(
-            margin: const EdgeInsets.all(24),
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withOpacity(0.06),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.primary.withOpacity(0.15)),
+        body: _buildBody(state),
+      ),
+    );
+  }
+
+  Widget _buildBody(JournalState state) {
+    if (state.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (state.error != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, size: 48, color: AppColors.expense),
+            const SizedBox(height: 16),
+            const Text('Не удалось загрузить данные'),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => ref.read(journalProvider.notifier).fetch(),
+              child: const Text('Повторить'),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _BalanceColumn(
-                  label: 'Доход',
-                  value: state.totalIncome,
-                  color: AppColors.success,
-                ),
-                Container(width: 1, height: 40, color: Theme.of(context).colorScheme.outline),
-                _BalanceColumn(
-                  label: 'Расход',
-                  value: state.totalExpense,
-                  color: AppColors.expense,
-                ),
-                Container(width: 1, height: 40, color: Theme.of(context).colorScheme.outline),
-                _BalanceColumn(
-                  label: 'Баланс',
-                  value: state.balance,
-                  color: AppColors.primary,
-                ),
-              ],
-            ),
-          ).animate().fadeIn(duration: 300.ms),
-          Expanded(
-            child: state.entries.isEmpty
-                ? const EmptyState(
-                    icon: Icons.book_outlined,
-                    message: 'Журнал пуст',
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    itemCount: state.entries.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final entry = state.entries[index];
-                      final isIncome = entry.type == 'income';
-                      return Card(
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 4),
-                          leading: Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: (isIncome
-                                      ? AppColors.success
-                                      : AppColors.expense)
-                                  .withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Icon(
-                              isIncome
-                                  ? Icons.arrow_upward
-                                  : Icons.arrow_downward,
-                              color: isIncome
-                                  ? AppColors.success
-                                  : AppColors.expense,
-                              size: 20,
-                            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Container(
+          margin: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.primary.withOpacity(0.15)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _BalanceColumn(
+                label: 'Доход',
+                value: state.totalIncome,
+                color: AppColors.success,
+              ),
+              Container(
+                  width: 1,
+                  height: 40,
+                  color: Theme.of(context).colorScheme.outline),
+              _BalanceColumn(
+                label: 'Расход',
+                value: state.totalExpense,
+                color: AppColors.expense,
+              ),
+              Container(
+                  width: 1,
+                  height: 40,
+                  color: Theme.of(context).colorScheme.outline),
+              _BalanceColumn(
+                label: 'Баланс',
+                value: state.balance,
+                color: AppColors.primary,
+              ),
+            ],
+          ),
+        ).animate().fadeIn(duration: 300.ms),
+        Expanded(
+          child: state.entries.isEmpty
+              ? const EmptyState(
+                  icon: Icons.book_outlined,
+                  message: 'Журнал пуст',
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  itemCount: state.entries.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final entry = state.entries[index];
+                    final isIncome = entry.type == 'income';
+                    return Card(
+                      child: ListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 4),
+                        leading: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: (isIncome
+                                    ? AppColors.success
+                                    : AppColors.expense)
+                                .withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                          title: Text(entry.description),
-                          subtitle: Text(entry.date),
-                          trailing: Text(
-                            '${isIncome ? '+' : '-'}${entry.amount.toStringAsFixed(0)} р.',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: isIncome
-                                  ? AppColors.success
-                                  : AppColors.expense,
-                            ),
+                          child: Icon(
+                            isIncome
+                                ? Icons.arrow_upward
+                                : Icons.arrow_downward,
+                            color: isIncome
+                                ? AppColors.success
+                                : AppColors.expense,
+                            size: 20,
                           ),
                         ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    ),
+                        title: Text(entry.description),
+                        subtitle: Text(entry.date),
+                        trailing: Text(
+                          '${isIncome ? '+' : '-'}${entry.amount.toStringAsFixed(0)} р.',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: isIncome
+                                ? AppColors.success
+                                : AppColors.expense,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
     );
   }
 }

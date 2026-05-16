@@ -200,7 +200,15 @@ class _SickScreenState extends ConsumerState<SickScreen> {
 
   void _calculate() {
     final earnings = double.tryParse(_earningsController.text);
-    if (earnings == null || earnings <= 0) return;
+    if (earnings == null || earnings <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Введите корректное значение'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     ref.read(calculationProvider.notifier).calculateSick(
           earnings2y: earnings,
           stazhBracket: _stazhBracket,

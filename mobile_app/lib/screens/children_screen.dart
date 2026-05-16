@@ -36,71 +36,96 @@ class _ChildrenScreenState extends ConsumerState<ChildrenScreen> {
             onPressed: () => context.go('/'),
           ),
         ),
-      body: state.children.isEmpty
-          ? const EmptyState(
-              icon: Icons.child_care_outlined,
-              message: 'Список детей пуст.\nДобавьте первого ребёнка.',
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.all(24),
-              itemCount: state.children.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (context, index) {
-                final child = state.children[index];
-                return Dismissible(
-                  key: ValueKey(child.id),
-                  direction: DismissDirection.endToStart,
-                  onDismissed: (_) {
-                    if (child.id != null) {
-                      ref.read(childrenProvider.notifier).delete(child.id!);
-                    }
-                  },
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: 24),
-                    decoration: BoxDecoration(
-                      color: AppColors.expense.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Icon(Icons.delete_outline,
-                        color: AppColors.expense),
-                  ),
-                  child: Card(
-                    child: ListTile(
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 20, vertical: 8),
-                      leading: CircleAvatar(
-                        backgroundColor: AppColors.primary.withOpacity(0.1),
-                        child: Text(
-                          child.name.isNotEmpty
-                              ? child.name[0].toUpperCase()
-                              : '?',
-                          style: const TextStyle(
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      title: Text(child.name),
-                      subtitle: Text(child.group),
-                      trailing: Text(
-                        '${child.monthlyFee.toInt()} руб.',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
+        body: _buildBody(state),
         floatingActionButton: FloatingActionButton(
-        onPressed: () {},
-        backgroundColor: AppColors.primary,
-        child: const Icon(Icons.add, color: Colors.white),
+          onPressed: () {},
+          backgroundColor: AppColors.primary,
+          child: const Icon(Icons.add, color: Colors.white),
+        ),
       ),
-      ),
+    );
+  }
+
+  Widget _buildBody(ChildrenState state) {
+    if (state.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (state.error != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, size: 48, color: AppColors.expense),
+            const SizedBox(height: 16),
+            const Text('Не удалось загрузить данные'),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => ref.read(childrenProvider.notifier).fetch(),
+              child: const Text('Повторить'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (state.children.isEmpty) {
+      return const EmptyState(
+        icon: Icons.child_care_outlined,
+        message: 'Список детей пуст.\nДобавьте первого ребёнка.',
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(24),
+      itemCount: state.children.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final child = state.children[index];
+        return Dismissible(
+          key: ValueKey(child.id),
+          direction: DismissDirection.endToStart,
+          onDismissed: (_) {
+            if (child.id != null) {
+              ref.read(childrenProvider.notifier).delete(child.id!);
+            }
+          },
+          background: Container(
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: 24),
+            decoration: BoxDecoration(
+              color: AppColors.expense.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Icon(Icons.delete_outline, color: AppColors.expense),
+          ),
+          child: Card(
+            child: ListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              leading: CircleAvatar(
+                backgroundColor: AppColors.primary.withOpacity(0.1),
+                child: Text(
+                  child.name.isNotEmpty ? child.name[0].toUpperCase() : '?',
+                  style: const TextStyle(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              title: Text(child.name),
+              subtitle: Text(child.group),
+              trailing: Text(
+                '${child.monthlyFee.toInt()} руб.',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -163,7 +163,15 @@ class _VacationScreenState extends ConsumerState<VacationScreen> {
 
   void _calculate() {
     final earnings = double.tryParse(_earningsController.text);
-    if (earnings == null || earnings <= 0) return;
+    if (earnings == null || earnings <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Введите корректное значение'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     ref.read(calculationProvider.notifier).calculateVacation(
           totalEarnings: earnings,
           days: _days,

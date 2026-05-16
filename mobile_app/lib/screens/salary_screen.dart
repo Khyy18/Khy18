@@ -73,34 +73,38 @@ class _SalaryScreenState extends ConsumerState<SalaryScreen> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 8),
-              SegmentedButton<double>(
-                segments: const [
-                  ButtonSegment(value: 0.25, label: Text('0.25')),
-                  ButtonSegment(value: 0.5, label: Text('0.5')),
-                  ButtonSegment(value: 0.75, label: Text('0.75')),
-                  ButtonSegment(value: 1.0, label: Text('1.0')),
-                ],
-                selected: {_rate},
-                onSelectionChanged: (v) => setState(() => _rate = v.first),
-                style: ButtonStyle(
-                  backgroundColor: WidgetStateProperty.resolveWith((states) {
-                    if (states.contains(WidgetState.selected)) {
-                      return AppColors.primary;
-                    }
-                    return Colors.transparent;
-                  }),
-                  foregroundColor: WidgetStateProperty.resolveWith((states) {
-                    if (states.contains(WidgetState.selected)) {
-                      return Colors.white;
-                    }
-                    return Theme.of(context).colorScheme.onSurface;
-                  }),
-                  side: WidgetStatePropertyAll(
-                    BorderSide(color: AppColors.primary.withOpacity(0.5)),
-                  ),
-                  shape: WidgetStatePropertyAll(
-                    RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: SegmentedButton<double>(
+                  segments: const [
+                    ButtonSegment(value: 0.25, label: Text('0.25')),
+                    ButtonSegment(value: 0.5, label: Text('0.5')),
+                    ButtonSegment(value: 0.75, label: Text('0.75')),
+                    ButtonSegment(value: 1.0, label: Text('1.0')),
+                  ],
+                  selected: {_rate},
+                  onSelectionChanged: (v) => setState(() => _rate = v.first),
+                  style: ButtonStyle(
+                    backgroundColor: WidgetStateProperty.resolveWith((states) {
+                      if (states.contains(WidgetState.selected)) {
+                        return AppColors.primary;
+                      }
+                      return Colors.transparent;
+                    }),
+                    foregroundColor: WidgetStateProperty.resolveWith((states) {
+                      if (states.contains(WidgetState.selected)) {
+                        return Colors.white;
+                      }
+                      return Theme.of(context).colorScheme.onSurface;
+                    }),
+                    side: WidgetStatePropertyAll(
+                      BorderSide(color: AppColors.primary.withOpacity(0.5)),
+                    ),
+                    shape: WidgetStatePropertyAll(
+                      RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
                   ),
                 ),
               ),
@@ -274,8 +278,18 @@ class _SalaryScreenState extends ConsumerState<SalaryScreen> {
 
   void _calculate() {
     if (!_formKey.currentState!.validate()) return;
+    final oklad = double.tryParse(_okladController.text);
+    if (oklad == null || oklad <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Введите корректное значение'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     ref.read(calculationProvider.notifier).calculateSalary(
-          oklad: double.parse(_okladController.text),
+          oklad: oklad,
           rate: _rate,
           stazhPercent: _stazhPercent,
           categoryPercent: _categoryPercent,
