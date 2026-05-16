@@ -43,6 +43,14 @@ def _safe_int(value: str, default: int = 0) -> int:
 # даже при отсутствии переменной - реальная проверка в main()/validate_config()).
 TELEGRAM_CHAT_ID = _safe_int(_TELEGRAM_CHAT_ID_RAW, 0)
 
+# --- Health & Rate Limiting ---
+# Порт для health-check сервера.
+HEALTH_PORT = _safe_int(os.getenv("HEALTH_PORT", "8080"), 8080)
+# Rate limiter: запросов в секунду (пополнение бакета).
+RATE_LIMIT_RPS = _safe_int(os.getenv("RATE_LIMIT_RPS", "10"), 10)
+# Rate limiter: максимальная вместимость бакета (burst).
+RATE_LIMIT_BURST = _safe_int(os.getenv("RATE_LIMIT_BURST", "20"), 20)
+
 
 # --- Торговые константы (v1 legacy) ---
 # Следующие четыре константы сохранены для обратной совместимости со v1

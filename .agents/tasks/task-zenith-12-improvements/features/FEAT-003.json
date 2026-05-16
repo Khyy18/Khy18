@@ -1,0 +1,39 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "ARQ task queue module, health-check endpoint with aiohttp server, and rate limiter middleware. Creates task_queue/ module on ARQ (asyncio Redis queue) for background jobs. Adds /health endpoint (JSON: status, uptime, db_ok, redis_ok, last_heartbeat). Implements token bucket rate limiter for webhook routes.",
+  "status": "in_progress",
+  "steps": [
+    "Add arq to requirements.txt",
+    "Create task_queue/__init__.py with exported symbols",
+    "Create task_queue/config.py: ARQ WorkerSettings with redis_settings from config.REDIS_URL, job_timeout, max_jobs, queue_name. Add REDIS_URL to main config.py if not already there",
+    "Create task_queue/tasks.py: define async task functions - freelance_scan_task (calls FreelanceScheduler.run_once), generate_offer_task (calls OfferGenerator.generate_pdf + send), viral_notification_task (sends referral notifications). Each task is a standalone async function decorated/registered for ARQ",
+    "Create task_queue/worker.py: ARQ worker entry point with WorkerSettings class referencing tasks from tasks.py",
+    "Create task_queue/enqueue.py: helper functions to enqueue tasks - enqueue_freelance_scan(), enqueue_offer_generation(user_tg_id, user_name, amount, desc), enqueue_viral_notification(referrer_tg_id, bonus_info). Uses arq.create_pool to get ArqRedis and enqueue_job",
+    "Create health/__init__.py and health/server.py: aiohttp app with /health endpoint returning JSON {status: 'ok'|'degraded', uptime_seconds, db_ok: bool, redis_ok: bool, last_heartbeat: ISO timestamp, version: '2.1'}. db_ok checks SQLite/PG connectivity. redis_ok pings Redis if REDIS_URL configured. uptime calculated from process start time",
+    "Integrate health server into main.py: start aiohttp runner on configurable HEALTH_PORT (default 8080) in asyncio.gather alongside trading loop and telegram bot",
+    "Create rate_limiter/__init__.py and rate_limiter/middleware.py: token bucket algorithm implementation. TokenBucket class with capacity, refill_rate, per-IP tracking. aiohttp middleware that checks bucket before processing request. Returns 429 Too Many Requests when exceeded. Config: RATE_LIMIT_RPS (default 10), RATE_LIMIT_BURST (default 20) from config.py",
+    "Create rate_limiter/redis_backend.py: Redis-backed token bucket for distributed deployments. Uses Redis MULTI/EXEC for atomic bucket operations. Falls back to in-memory if Redis unavailable",
+    "Apply rate limiter middleware to payments/webhook.py aiohttp app (in setup_routes or as app-level middleware)",
+    "Add HEALTH_PORT, RATE_LIMIT_RPS, RATE_LIMIT_BURST to config.py",
+    "Create tests/test_task_queue.py: test task functions can be imported and are valid coroutines, test enqueue helpers construct correct job payloads (mock arq pool)",
+    "Create tests/test_health.py: test /health endpoint returns 200 with expected JSON fields, test uptime increases, test db_ok reflects actual DB state",
+    "Create tests/test_rate_limiter.py: test token bucket allows requests within limit, test returns 429 when exceeded, test bucket refills over time"
+  ],
+  "acceptance_criteria": [
+    "task_queue/ module with config.py, tasks.py, worker.py, enqueue.py exists",
+    "health/ module with /health endpoint returning proper JSON exists",
+    "rate_limiter/ module with token bucket middleware exists",
+    "Rate limiter applied to webhook routes",
+    "All new tests pass: pytest tests/test_task_queue.py tests/test_health.py tests/test_rate_limiter.py",
+    "ruff check passes"
+  ],
+  "verification": [
+    "pip install -r requirements.txt",
+    "ruff check . --select=E,F,I --ignore=F401,E501",
+    "pytest tests/ -v --tb=short",
+    "python -c \"from task_queue import tasks, worker, enqueue; from health.server import create_health_app; from rate_limiter.middleware import RateLimiterMiddleware\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

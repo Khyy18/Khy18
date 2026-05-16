@@ -7,6 +7,7 @@ import os
 from aiohttp import web
 
 from payments.service import PaymentService
+from rate_limiter.middleware import RateLimiterMiddleware
 
 
 def setup_routes(
@@ -19,6 +20,9 @@ def setup_routes(
     # Use provided secret_token or fall back to env var
     app["webhook_secret"] = secret_token or os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
     app.router.add_post("/webhook/telegram", _handle_update)
+    # Применяем rate limiter middleware
+    rate_limiter = RateLimiterMiddleware()
+    app.middlewares.append(rate_limiter.middleware)
 
 
 async def _handle_update(request: web.Request) -> web.Response:

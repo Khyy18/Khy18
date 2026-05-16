@@ -14,3 +14,4 @@ sqlalchemy
 structlog
 sentry-sdk
 prometheus-client
+arq
