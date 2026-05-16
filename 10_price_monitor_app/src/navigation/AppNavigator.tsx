@@ -1,52 +1,16 @@
 import React from 'react';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
-import {View, Text} from 'react-native';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import {useTheme} from '../theme/ThemeContext';
 
-// Placeholder screens - will be implemented in FEAT-002
-const FeedScreen = () => (
-  <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
-    <Text>Feed</Text>
-  </View>
-);
-
-const CategoriesScreen = () => (
-  <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
-    <Text>Categories</Text>
-  </View>
-);
-
-const AlertsScreen = () => (
-  <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
-    <Text>Alerts</Text>
-  </View>
-);
-
-const FavoritesScreen = () => (
-  <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
-    <Text>Favorites</Text>
-  </View>
-);
-
-const ProfileScreen = () => (
-  <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
-    <Text>Profile</Text>
-  </View>
-);
-
-const ProductDetailScreen = () => (
-  <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
-    <Text>Product Detail</Text>
-  </View>
-);
-
-const SettingsScreen = () => (
-  <View style={{flex: 1, justifyContent: 'center', alignItems: 'center'}}>
-    <Text>Settings</Text>
-  </View>
-);
+import FeedScreen from '../screens/FeedScreen';
+import CategoriesScreen from '../screens/CategoriesScreen';
+import AlertsScreen from '../screens/AlertsScreen';
+import FavoritesScreen from '../screens/FavoritesScreen';
+import ProfileScreen from '../screens/ProfileScreen';
+import ProductDetailScreen from '../screens/ProductDetailScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 
 export type RootStackParamList = {
   MainTabs: undefined;
@@ -55,7 +19,7 @@ export type RootStackParamList = {
 };
 
 export type TabParamList = {
-  Feed: undefined;
+  Feed: {category?: string} | undefined;
   Categories: undefined;
   Alerts: undefined;
   Favorites: undefined;
@@ -77,10 +41,7 @@ const TabNavigator: React.FC = () => {
           backgroundColor: colors.card,
           borderTopColor: colors.border,
         },
-        headerStyle: {
-          backgroundColor: colors.background,
-        },
-        headerTintColor: colors.text,
+        headerShown: false,
       }}>
       <Tab.Screen
         name="Feed"

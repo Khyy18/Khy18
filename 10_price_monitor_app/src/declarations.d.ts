@@ -11,6 +11,7 @@ declare module 'react-native-chart-kit' {
     labelColor?: (opacity: number) => string;
     style?: ViewStyle;
     propsForDots?: object;
+    strokeWidth?: number;
   }
 
   export interface LineChartData {
