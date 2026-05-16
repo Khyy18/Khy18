@@ -1,0 +1,37 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Part 1 - Technical bug fixes: unify bot+backend DB, fix Telegram initData HMAC validation, add Alembic migrations, improve rate limiter with sliding window, add retry logic to parsers, add graceful shutdown to bot.",
+  "status": "completed",
+  "steps": [
+    "1. In bot/config.py: add fields database_url (default sqlite+aiosqlite:///./data/bot.db) and postgresql_url (same default as backend) so bot reads DATABASE_URL/POSTGRESQL_URL from env.",
+    "2. Create bot/db/session.py - async SQLAlchemy engine+session using the same pattern as backend/app/db/session.py. Import models from backend (use sys.path or relative import). Provide get_db() async generator and init_db().",
+    "3. Rewrite bot/db/queries.py to use SQLAlchemy async sessions instead of raw aiosqlite. Import models from the backend's app.db.models (Product, PriceHistory, User, Alert, Post). All existing function signatures must be preserved but implementation uses ORM.",
+    "4. Update bot/db/models.py (rename to legacy or replace) - init_db() should now call the SQLAlchemy create_all from session.py. Keep backward compat for imports.",
+    "5. Fix backend/app/middleware/auth.py verify_telegram_init_data(): change hmac.new -> hmac.new is wrong, must be hmac.new(). Actually the bug is that 'hmac.new' doesn't exist - it should be 'hmac.HMAC' or use hmac.new (which is hmac.new in older Python but current Python uses hmac.new). The correct call is: hmac.new(key, msg, hashlib.sha256) which is actually hmac.new() - verify that it uses the correct function name. Looking at the code, it uses 'hmac.new(...)' which should be 'hmac.new(...)' - but in Python's hmac module the function is called 'hmac.new()'. Let me re-check... The code has 'hmac.new(' which IS correct in Python (hmac.new is an alias for hmac.HMAC). This should work. Keep as-is if correct, or ensure the signature: secret_key = HMAC_SHA256('WebAppData', bot_token), then hash = HMAC_SHA256(secret_key, data_check_string).",
+    "6. Add backend/alembic.ini and backend/alembic/ directory with proper configuration. Create env.py that imports app.db.models.Base and app.config.settings for the DB URL. Create initial migration with all current models (auto-generate from metadata).",
+    "7. Update backend/app/middleware/rate_limit.py to implement sliding window using Redis sorted sets (ZADD/ZRANGEBYSCORE/ZREMRANGEBYSCORE). Key format: rate_limit:{ip}:{endpoint}. If Redis unavailable, fallback to in-memory dict with TTL (log warning).",
+    "8. In bot/parsers/wildberries.py and bot/parsers/ozon.py: add retry decorator/logic with exponential backoff (3 attempts, delays 1s/3s/9s). Wrap fetch_product and search_products. Log each failed attempt with logger.warning.",
+    "9. In bot/main.py: add signal handlers for SIGTERM and SIGINT. On signal, gracefully shut down: stop polling, shutdown scheduler, close DB session, close HTTP clients, then exit.",
+    "10. Update bot/requirements.txt: add sqlalchemy[asyncio]>=2.0, asyncpg>=0.29, tenacity>=8.2 (for retry). Update backend/requirements.txt: add alembic>=1.13."
+  ],
+  "acceptance_criteria": [
+    "bot/config.py has database_url and postgresql_url fields",
+    "bot/db/session.py exists with async SQLAlchemy engine",
+    "bot/db/queries.py uses SQLAlchemy ORM instead of raw aiosqlite",
+    "backend/app/middleware/auth.py verify_telegram_init_data uses correct HMAC-SHA256 algorithm",
+    "backend/alembic.ini and backend/alembic/ directory exist with initial migration",
+    "backend/app/middleware/rate_limit.py implements sliding window via Redis sorted sets",
+    "bot/parsers/wildberries.py and ozon.py have retry with exponential backoff",
+    "bot/main.py handles SIGTERM/SIGINT for graceful shutdown",
+    "Python imports resolve without errors for both backend and bot"
+  ],
+  "verification": [
+    "cd /projects/sandbox/Khy18/price_monitor/backend && python -c \"import app.main; import app.middleware.rate_limit; import app.middleware.auth; print('backend OK')\"",
+    "cd /projects/sandbox/Khy18/price_monitor/bot && python -c \"import bot.main; import bot.db.session; import bot.db.queries; print('bot OK')\"",
+    "test -f /projects/sandbox/Khy18/price_monitor/backend/alembic.ini && echo 'alembic.ini exists'",
+    "test -d /projects/sandbox/Khy18/price_monitor/backend/alembic && echo 'alembic dir exists'"
+  ],
+  "blocked_reason": null,
+  "findings": "All changes verified. hmac.new() in auth.py is correct Python (hmac.new exists in Python 3.11). Bot uses sys.path manipulation to import backend models. Legacy aiosqlite get_db() kept for scheduler/tasks.py backward compat. pip must be invoked via 'python -m pip' since system pip targets Python 3.9 but the runtime is Python 3.11."
+}
