@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Playwright-based freelance automation module (freelance_automation/) for auto-responding on Kwork and FL.ru platforms.",
+  "status": "in_progress",
+  "steps": [
+    "Create freelance_automation/__init__.py exporting key classes.",
+    "Create freelance_automation/base.py with abstract base class FreelancePlatform: methods login(cookies_path), fetch_new_orders() -> list[Order], respond_to_order(order, text) -> bool. Define Order dataclass (id, title, description, budget, url, posted_at).",
+    "Create freelance_automation/kwork.py implementing KworkPlatform(FreelancePlatform). Use playwright async API for headless Chromium. Login by loading cookies from a JSON file. Navigate to orders page, parse new orders via page selectors. Auto-respond with unique text (template + order title reference). Handle errors gracefully with retries.",
+    "Create freelance_automation/flru.py implementing FLruPlatform(FreelancePlatform). Same pattern as kwork.py but for FL.ru selectors and URL structure.",
+    "Create freelance_automation/scheduler.py with FreelanceScheduler class: async loop that runs every N minutes (configurable), checks all platforms for new orders, responds to matching orders (keyword filter), logs results. Uses asyncio.sleep-based scheduling.",
+    "Create freelance_automation/config.py with constants: SCAN_INTERVAL_MINUTES (default 5), RESPONSE_TEMPLATES (list of Russian-language response templates with {title} placeholder), KWORK_COOKIES_PATH, FLRU_COOKIES_PATH, MAX_RESPONSES_PER_HOUR.",
+    "Add tests in tests/test_freelance_automation.py: test Order dataclass, test scheduler logic (mock platforms), test response template formatting, test base class interface."
+  ],
+  "acceptance_criteria": [
+    "freelance_automation/ directory exists with __init__.py, base.py, kwork.py, flru.py, scheduler.py, config.py",
+    "python -c 'from freelance_automation import KworkPlatform, FLruPlatform, FreelanceScheduler' imports without error",
+    "pytest tests/test_freelance_automation.py passes"
+  ],
+  "verification": [
+    "python -c 'from freelance_automation import KworkPlatform, FLruPlatform, FreelanceScheduler'",
+    "python -m pytest tests/test_freelance_automation.py -v"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
