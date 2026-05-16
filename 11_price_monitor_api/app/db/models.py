@@ -108,6 +108,7 @@ class Payment(Base):
     amount = Column(Float, nullable=False)
     currency = Column(String, default="RUB")
     status = Column(String, default="pending")
+    plan = Column(String, nullable=True)
     provider = Column(String, nullable=False)
     provider_payment_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

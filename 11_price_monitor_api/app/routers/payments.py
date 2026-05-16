@@ -31,27 +31,6 @@ _YUKASSA_ALLOWED_IPS = {
 }
 
 
-def _verify_webhook_signature(body: bytes, signature: str) -> bool:
-    """Verify the webhook request using HMAC-SHA256 with the shared secret.
-
-    YuKassa can be configured to send a signature header. If no webhook secret
-    is configured, we skip signature verification but log a warning.
-    """
-    if not settings.yukassa_webhook_secret:
-        logger.warning(
-            "YUKASSA_WEBHOOK_SECRET not configured - webhook signature "
-            "verification is disabled. Set this in production!"
-        )
-        return True
-
-    expected = hmac.new(
-        settings.yukassa_webhook_secret.encode(),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)
-
-
 @router.post("/create", response_model=PaymentResponse)
 async def create_payment(
     body: PaymentCreate,

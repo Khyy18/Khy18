@@ -72,6 +72,7 @@ class PaymentService:
                 amount=amount,
                 currency="RUB",
                 status="pending",
+                plan=plan,
                 provider="yukassa",
                 provider_payment_id=provider_payment_id,
             )
@@ -108,13 +109,18 @@ class PaymentService:
 
         payment.status = "succeeded"
 
+        # Determine VIP duration from plan (prefer webhook metadata, fall back to Payment record)
+        metadata = payment_obj.get("metadata", {})
+        plan = metadata.get("plan") or payment.plan or "monthly"
+        vip_days = 365 if plan == "yearly" else 30
+
         user_result = await self.db.execute(
             select(User).where(User.id == payment.user_id)
         )
         user = user_result.scalar_one_or_none()
         if user:
             user.is_vip = True
-            user.vip_expires_at = datetime.utcnow() + timedelta(days=30)
+            user.vip_expires_at = datetime.utcnow() + timedelta(days=vip_days)
 
         await self.db.commit()
         return True

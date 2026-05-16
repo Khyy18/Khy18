@@ -21,6 +21,25 @@ security = HTTPBearer()
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX_REQUESTS = 10  # max requests per window per IP
+_RATE_LIMIT_MAX_KEYS = 10000  # max unique IPs to track before forced eviction
+_rate_limit_last_cleanup = 0.0  # timestamp of last full cleanup
+_RATE_LIMIT_CLEANUP_INTERVAL = 300  # run full cleanup every 5 minutes
+
+
+def _cleanup_rate_limit_store() -> None:
+    """Remove stale entries from the rate limit store to prevent memory leaks."""
+    global _rate_limit_last_cleanup
+    now = time.time()
+    if now - _rate_limit_last_cleanup < _RATE_LIMIT_CLEANUP_INTERVAL:
+        return
+    _rate_limit_last_cleanup = now
+    window_start = now - _RATE_LIMIT_WINDOW
+    stale_keys = [
+        key for key, timestamps in _rate_limit_store.items()
+        if not timestamps or all(ts <= window_start for ts in timestamps)
+    ]
+    for key in stale_keys:
+        del _rate_limit_store[key]
 
 
 def _check_rate_limit(client_ip: str) -> None:
@@ -30,9 +49,12 @@ def _check_rate_limit(client_ip: str) -> None:
     deployments. For production with multiple workers/instances, replace with
     Redis-based rate limiting (e.g., slowapi with Redis backend).
     """
+    # Periodically prune stale keys to prevent unbounded memory growth
+    _cleanup_rate_limit_store()
+
     now = time.time()
     window_start = now - _RATE_LIMIT_WINDOW
-    # Clean old entries
+    # Clean old entries for current IP
     _rate_limit_store[client_ip] = [
         ts for ts in _rate_limit_store[client_ip] if ts > window_start
     ]
@@ -42,6 +64,15 @@ def _check_rate_limit(client_ip: str) -> None:
             detail="Too many requests. Try again later.",
         )
     _rate_limit_store[client_ip].append(now)
+
+    # Hard cap: if store exceeds max keys, remove oldest entries
+    if len(_rate_limit_store) > _RATE_LIMIT_MAX_KEYS:
+        oldest_keys = sorted(
+            _rate_limit_store.keys(),
+            key=lambda k: _rate_limit_store[k][-1] if _rate_limit_store[k] else 0,
+        )
+        for key in oldest_keys[: len(_rate_limit_store) - _RATE_LIMIT_MAX_KEYS]:
+            del _rate_limit_store[key]
 
 
 def create_access_token(data: dict) -> str:
