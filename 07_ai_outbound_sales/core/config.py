@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     linkedin_min_action_cooldown_hours: int = 2
     linkedin_proxy_list: str = "[]"
 
+    # LinkedIn proxy rotation
+    linkedin_proxy_provider: str = "static"
+    linkedin_proxy_api_key: str = ""
+    linkedin_proxy_pool_size: int = 10
+
     # Observability
     sentry_dsn: str = ""
 

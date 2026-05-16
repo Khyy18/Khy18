@@ -45,6 +45,8 @@ from core.models import (
     VoiceAddon,
     VoiceAddonPlan,
     LeadInteraction,
+    Webhook,
+    WebhookDelivery,
 )
 
 
