@@ -7,6 +7,9 @@ import random
 from datetime import datetime, timezone
 from typing import Optional
 
+import aiohttp
+
+import config
 from freelance_automation.base import FreelancePlatform, Order
 from freelance_automation.config import (
     MAX_RESPONSES_PER_HOUR,
@@ -68,8 +71,19 @@ class FreelanceScheduler:
         budget_str = str(int(order.budget)) if order.budget else "договорный"
         return template.format(title=order.title, budget=budget_str)
 
-    async def run_once(self) -> None:
+    async def run_once(self, session: Optional[aiohttp.ClientSession] = None) -> None:
         """Один цикл сканирования всех платформ и отправки откликов."""
+        owns_session = session is None
+        if owns_session:
+            session = aiohttp.ClientSession()
+        try:
+            await self._scan_platforms(session)
+        finally:
+            if owns_session:
+                await session.close()
+
+    async def _scan_platforms(self, session: aiohttp.ClientSession) -> None:
+        """Scan all platforms and send responses."""
         for platform in self.platforms:
             try:
                 orders = await platform.fetch_new_orders(
@@ -82,6 +96,14 @@ class FreelanceScheduler:
                     if order.id in self._responded_order_ids:
                         log.debug("order_skipped_duplicate", order_title=order.title)
                         continue
+
+                    # Fraud check before responding
+                    if config.FRAUD_FILTER_ENABLED:
+                        from fraud_detector.integration import filter_before_response
+                        is_safe = await filter_before_response(session, order)
+                        if not is_safe:
+                            log.info("order_skipped_fraud", order_title=order.title)
+                            continue
 
                     if not self._can_respond():
                         log.warning(

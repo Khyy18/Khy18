@@ -97,6 +97,14 @@ CONTENT_GENERATION_HOUR = _safe_int(
 # --- Pricing ---
 PRICING_BASE_MULTIPLIER = float(os.getenv("PRICING_BASE_MULTIPLIER", "1.0"))
 
+# --- Fraud Detection ---
+FRAUD_SCORE_THRESHOLD = _safe_int(os.getenv("FRAUD_SCORE_THRESHOLD", "70"), 70)
+FRAUD_DB_PATH = os.getenv("FRAUD_DB_PATH", "fraud.db")
+FRAUD_FILTER_ENABLED = os.getenv("FRAUD_FILTER_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+
+# --- Churn Prediction ---
+CHURN_RISK_THRESHOLD = float(os.getenv("CHURN_RISK_THRESHOLD", "0.7"))
+
 # --- Торговые константы (v1 legacy) ---
 # Следующие четыре константы сохранены для обратной совместимости со v1
 # (стратегия RSI-cross, ai_analyst.decide). Новый код v2 опирается на
