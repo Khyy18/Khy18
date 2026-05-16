@@ -1,0 +1,11 @@
+services:
+  zenith:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env
+    volumes:
+      - ../trades.db:/app/trades.db
+    init: true
+    restart: unless-stopped

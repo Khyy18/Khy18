@@ -1,0 +1,66 @@
+services:
+  zenith-blue:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: zenith-blue
+    ports:
+      - "8081:8080"
+    env_file:
+      - ../../.env
+    networks:
+      - zenith-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  zenith-green:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: zenith-green
+    ports:
+      - "8082:8080"
+    env_file:
+      - ../../.env
+    networks:
+      - zenith-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: zenith-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./active_upstream.conf:/etc/nginx/active_upstream.conf
+    networks:
+      - zenith-net
+    depends_on:
+      - zenith-blue
+      - zenith-green
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: zenith-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - zenith-net
+    restart: unless-stopped
+
+networks:
+  zenith-net:
+    driver: bridge
