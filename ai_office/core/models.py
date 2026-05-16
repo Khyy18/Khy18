@@ -3,10 +3,36 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, ForeignKey, Float, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Float, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ai_office.core.database import Base
+
+
+class Workspace(Base):
+    """Модель рабочего пространства (мультитенантность)."""
+
+    __tablename__ = "workspaces"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    telegram_chat_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    name: Mapped[str] = mapped_column(String(200))
+    owner_telegram_id: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    settings_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class SystemSetting(Base):
+    """Модель системных настроек."""
+
+    __tablename__ = "system_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(200), unique=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, onupdate=func.now(), nullable=True
+    )
 
 
 class Plan(Base):
@@ -21,6 +47,9 @@ class Plan(Base):
     )
     status: Mapped[str] = mapped_column(String(50), default="active")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
 
     # Связи
     steps: Mapped[list["PlanStep"]] = relationship(
@@ -63,6 +92,9 @@ class Agent(Base):
     current_task_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("tasks.id", use_alter=True), nullable=True
     )
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
 
     # Связи
     activity_logs: Mapped[list["ActivityLog"]] = relationship(
@@ -92,6 +124,9 @@ class Task(Base):
         onupdate=func.now(), nullable=True
     )
     closed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
 
     def __repr__(self) -> str:
         return f"<Task(id={self.id}, status='{self.status}', priority='{self.priority}')>"
@@ -108,6 +143,9 @@ class ActivityLog(Base):
     action_description: Mapped[str] = mapped_column(Text)
     metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
 
     # Связи
     agent: Mapped["Agent"] = relationship(back_populates="activity_logs", lazy="selectin")
@@ -129,6 +167,9 @@ class TokenUsage(Base):
     estimated_cost_usd: Mapped[float] = mapped_column(default=0.0)
     agent_name: Mapped[str] = mapped_column(String(100))
     timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
 
 
 class User(Base):
@@ -156,6 +197,9 @@ class DelegationTrace(Base):
     )
     messages_json: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
 
 
 class TaskTemplate(Base):
@@ -172,6 +216,9 @@ class TaskTemplate(Base):
     )
     category: Mapped[str] = mapped_column(String(100))
     icon: Mapped[str] = mapped_column(String(50))
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
 
 
 class Feedback(Base):
@@ -187,3 +234,6 @@ class Feedback(Base):
     is_positive: Mapped[Optional[bool]] = mapped_column(nullable=True)
     comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )

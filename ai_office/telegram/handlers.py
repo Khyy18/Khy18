@@ -17,7 +17,7 @@ from sqlalchemy import select, func
 from ai_office.agents.orchestrator import build_graph
 from ai_office.core.config import settings
 from ai_office.core.database import async_session
-from ai_office.core.models import Agent, User
+from ai_office.core.models import Agent, User, Workspace
 from ai_office.core.permissions import (
     UserRole,
     check_permission,
@@ -52,6 +52,41 @@ async def _auto_seed_agents() -> None:
 
         await session.commit()
         logger.info("Auto-seeded %d agents into database", len(registry.get_all()))
+
+
+async def get_or_create_workspace(
+    chat_id: int, owner_telegram_id: int, name: str
+) -> Workspace:
+    """Получить или создать рабочее пространство по chat_id.
+
+    Args:
+        chat_id: Telegram chat ID
+        owner_telegram_id: Telegram ID владельца
+        name: Название рабочего пространства
+
+    Returns:
+        Workspace: объект рабочего пространства
+    """
+    async with async_session() as session:
+        result = await session.execute(
+            select(Workspace).where(Workspace.telegram_chat_id == chat_id)
+        )
+        workspace = result.scalar_one_or_none()
+        if workspace:
+            return workspace
+
+        workspace = Workspace(
+            telegram_chat_id=chat_id,
+            name=name,
+            owner_telegram_id=owner_telegram_id,
+        )
+        session.add(workspace)
+        await session.commit()
+        await session.refresh(workspace)
+        logger.info(
+            "Created workspace '%s' for chat_id=%d", name, chat_id
+        )
+        return workspace
 
 
 async def handle_start(client: Client, message: Message) -> None:
@@ -286,6 +321,10 @@ async def handle_message(client: Client, message: Message) -> None:
 
         # Авто-создание агентов
         await _auto_seed_agents()
+
+        # Авто-создание рабочего пространства
+        workspace_name = message.chat.title or f"Chat {chat_id}"
+        await get_or_create_workspace(chat_id, telegram_id, workspace_name)
 
         # Проверка прав: viewer не может общаться с агентами
         if not await check_permission(telegram_id, UserRole.ADMIN, session=session):

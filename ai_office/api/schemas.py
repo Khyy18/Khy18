@@ -172,3 +172,53 @@ class DelegationTraceResponse(BaseModel):
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+
+class AdminAgentUpdate(BaseModel):
+    """Схема обновления агента (для админ-панели)."""
+
+    system_prompt: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class SystemSettingResponse(BaseModel):
+    """Ответ с информацией о системной настройке."""
+
+    id: int
+    key: str
+    value: str
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class SystemSettingUpdate(BaseModel):
+    """Схема обновления системной настройки."""
+
+    value: str
+
+
+class WorkspaceResponse(BaseModel):
+    """Ответ с информацией о рабочем пространстве."""
+
+    id: int
+    telegram_chat_id: int
+    name: str
+    owner_telegram_id: int
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class IntegrationTestRequest(BaseModel):
+    """Запрос на тестирование интеграции."""
+
+    integration_type: str
+    api_key: str
+
+
+class IntegrationTestResponse(BaseModel):
+    """Ответ на тестирование интеграции."""
+
+    success: bool
+    message: str
