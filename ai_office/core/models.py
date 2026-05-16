@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import ForeignKey, String, Text, func
+from sqlalchemy import ForeignKey, Float, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ai_office.core.database import Base
@@ -114,3 +114,18 @@ class ActivityLog(Base):
 
     def __repr__(self) -> str:
         return f"<ActivityLog(id={self.id}, agent_id={self.agent_id}, action='{self.action_type}')>"
+
+
+class TokenUsage(Base):
+    """Учёт использования токенов LLM."""
+
+    __tablename__ = "token_usage"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(50))
+    model: Mapped[str] = mapped_column(String(100))
+    prompt_tokens: Mapped[int] = mapped_column(default=0)
+    completion_tokens: Mapped[int] = mapped_column(default=0)
+    estimated_cost_usd: Mapped[float] = mapped_column(default=0.0)
+    agent_name: Mapped[str] = mapped_column(String(100))
+    timestamp: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -11,6 +11,25 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", description="API ключ OpenAI")
     openai_model: str = Field(default="gpt-4o-mini", description="Модель OpenAI")
 
+    # Anthropic
+    anthropic_api_key: str = Field(default="", description="API ключ Anthropic")
+
+    # Groq
+    groq_api_key: str = Field(default="", description="API ключ Groq")
+
+    # LLM Multi-Provider
+    llm_providers: str = Field(
+        default="openai,anthropic,groq",
+        description="Порядок провайдеров через запятую (fallback chain)",
+    )
+    llm_max_retries: int = Field(default=3, description="Макс. количество повторов на провайдер")
+
+    # Rate Limiter and Budget
+    daily_budget_usd: float = Field(default=10.0, description="Дневной бюджет в USD")
+    global_rpm_limit: int = Field(default=100, description="Глобальный лимит запросов/мин")
+    agent_rpm_limit: int = Field(default=20, description="Лимит запросов/мин на агента")
+    enable_rate_limiter: bool = Field(default=True, description="Включить rate limiter")
+
     # Telegram
     telegram_api_id: int = Field(default=0, description="Telegram API ID")
     telegram_api_hash: str = Field(default="", description="Telegram API Hash")

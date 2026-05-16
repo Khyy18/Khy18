@@ -11,7 +11,9 @@ from pydantic import BaseModel, Field
 
 from ai_office.agents.registry import registry
 from ai_office.core.config import settings
+from ai_office.core.llm_provider import llm_provider
 from ai_office.core.memory import agent_memory
+from ai_office.core.rate_limiter import BudgetExhaustedError, Priority
 from ai_office.tools.memory_tools import set_current_agent
 
 logger = logging.getLogger(__name__)
@@ -50,11 +52,7 @@ def _build_router_prompt() -> str:
 
 def _get_llm() -> ChatOpenAI:
     """Получить экземпляр LLM."""
-    return ChatOpenAI(
-        model=settings.openai_model,
-        api_key=settings.openai_api_key,
-        temperature=0.7,
-    )
+    return llm_provider.get_chat_model()
 
 
 async def router_node(state: AgentState) -> AgentState:
@@ -68,11 +66,7 @@ async def router_node(state: AgentState) -> AgentState:
         return {**state, "current_agent": "alice"}
 
     try:
-        router_llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            api_key=settings.openai_api_key,
-            temperature=0,
-        )
+        router_llm = llm_provider.get_chat_model(temperature=0)
         structured_llm = router_llm.with_structured_output(RouterDecision)
 
         # Формируем контекст для роутера
@@ -104,9 +98,6 @@ def make_agent_node(config):
     """Фабрика нод агентов: создаёт async-функцию ноды для заданного агента."""
 
     async def agent_node(state: AgentState) -> AgentState:
-        llm = _get_llm()
-        llm_with_tools = llm.bind_tools(config.tools)
-
         # Формируем сообщения с системным промптом
         messages = [SystemMessage(content=config.system_prompt)] + state["messages"]
 
@@ -127,7 +118,15 @@ def make_agent_node(config):
         except Exception as e:
             logger.debug(f"Ошибка при recall памяти для {config.name}: {e}")
 
-        response = await llm_with_tools.ainvoke(messages)
+        try:
+            response = await llm_provider.ainvoke_with_retry(
+                messages=messages,
+                agent_name=config.name,
+                tools=config.tools if config.tools else None,
+                priority=Priority.URGENT,
+            )
+        except BudgetExhaustedError:
+            response = AIMessage(content="Бюджет на сегодня исчерпан")
 
         # Автоматическое сохранение ответа в память (только финальные ответы без tool_calls)
         try:

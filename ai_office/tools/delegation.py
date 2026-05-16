@@ -2,12 +2,13 @@
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 from sqlalchemy import select
 
 from ai_office.core.config import settings
 from ai_office.core.database import async_session
+from ai_office.core.llm_provider import llm_provider
 from ai_office.core.models import ActivityLog, Agent, Task
+from ai_office.core.rate_limiter import Priority
 
 
 @tool
@@ -62,13 +63,6 @@ async def delegate_to_agent(agent_name: str, task_description: str) -> str:
         await session.commit()
 
     # Вызываем LLM от имени целевого агента с привязкой инструментов
-    llm = ChatOpenAI(
-        model=settings.openai_model,
-        api_key=settings.openai_api_key,
-        temperature=0.7,
-    )
-    llm_with_tools = llm.bind_tools(config.tools)
-
     messages = [
         SystemMessage(content=config.system_prompt),
         HumanMessage(content=task_description),
@@ -76,7 +70,12 @@ async def delegate_to_agent(agent_name: str, task_description: str) -> str:
 
     # Цикл выполнения инструментов (максимум 3 итерации)
     for _ in range(3):
-        response = await llm_with_tools.ainvoke(messages)
+        response = await llm_provider.ainvoke_with_retry(
+            messages=messages,
+            agent_name=agent_name_lower,
+            tools=config.tools if config.tools else None,
+            priority=Priority.NORMAL,
+        )
         messages.append(response)
 
         if not response.tool_calls:
