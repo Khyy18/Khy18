@@ -188,16 +188,17 @@ class ABTestEngine:
         # Обновить Beta-параметры для Thompson Sampling
         if event_type in ("click", "conversion"):
             is_conversion = event_type == "conversion"
-            channels = models.list_channels()
-            ts_engine = ThompsonSamplingEngine()
-            new_alpha, new_beta = ts_engine.update_arm(
-                source_tag, is_conversion, channels
-            )
-            models.update_beta_params(source_tag, new_alpha, new_beta)
+            # Direct O(1) lookup instead of loading all channels
+            alpha, beta = models.get_beta_params(source_tag)
+            if is_conversion:
+                alpha += 1.0
+            else:
+                beta += 1.0
+            models.update_beta_params(source_tag, alpha, beta)
             log.debug(
                 "thompson_params_updated",
                 source_tag=source_tag,
                 event_type=event_type,
-                alpha=new_alpha,
-                beta=new_beta,
+                alpha=alpha,
+                beta=beta,
             )

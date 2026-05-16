@@ -48,9 +48,13 @@ class AIResponder:
         items = portfolio_items or []
         budget_str = str(int(order.budget)) if order.budget else "договорный"
 
+        # Truncate user-controlled inputs to prevent prompt injection / token overflow
+        title = (order.title or "")[:200]
+        description = (order.description or "")[:1000]
+
         prompt = (
-            f"Analyze this job posting: {order.title}\n"
-            f"{order.description}\n"
+            f"Analyze this job posting: {title}\n"
+            f"{description}\n"
             f"Budget: {budget_str}\n"
             f"Platform: {platform}\n"
             f"Relevant portfolio: {items}\n"

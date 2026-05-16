@@ -98,11 +98,15 @@ class RedisSentinelCache:
         self._client = self._sentinel.master_for(self._master_name)
 
     async def close(self) -> None:
-        """Закрыть подключение."""
+        """Закрыть подключение к master и Sentinel."""
         if self._client:
             await self._client.aclose()
             self._client = None
-        self._sentinel = None
+        if self._sentinel:
+            # Close sentinel connections if the close method is available
+            if hasattr(self._sentinel, "close"):
+                await self._sentinel.close()
+            self._sentinel = None
 
     async def get(self, key: str, default: Any = None) -> Any:
         """Получить значение из кэша через master."""

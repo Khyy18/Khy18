@@ -71,9 +71,32 @@ async def generate_offer_task(
 
 async def content_generation_task(ctx: dict[str, Any]) -> str:
     """Задача ежедневной генерации контента."""
-    from content_generator.scheduler import content_generation_task as _task
+    import random
 
-    return await _task(ctx)
+    import aiohttp
+
+    from content_generator.generator import ContentGenerator
+
+    topics = [
+        "Автоматизация бизнес-процессов с помощью Telegram-ботов",
+        "Как ИИ помогает фрилансерам находить заказы",
+        "Тренды в разработке на Python в 2024 году",
+        "Преимущества микросервисной архитектуры",
+        "Как правильно оценивать стоимость IT-проекта",
+        "SEO-оптимизация для технических блогов",
+        "Парсинг данных: легальные способы и лучшие практики",
+        "Криптотрейдинг и автоматизация: с чего начать",
+    ]
+
+    topic = random.choice(topics)
+    generator = ContentGenerator()
+
+    async with aiohttp.ClientSession() as session:
+        post = await generator.generate_channel_post(session, topic)
+
+    if post:
+        return f"generated_post:topic={topic}"
+    return "content_generation_failed"
 
 
 async def viral_notification_task(

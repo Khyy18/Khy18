@@ -70,39 +70,69 @@ class ChurnPredictor:
     def compute_features(self, tg_id: int) -> dict[str, float]:
         """Compute features for a client from CRM data.
 
+        Uses real created_at/updated_at dates from CRM to compute
+        days_since_last_order more realistically.
+
         Args:
             tg_id: Telegram user ID.
 
         Returns:
             dict of feature values.
         """
+        from datetime import datetime, timezone
+
         from crm.models import get_client
 
         client = get_client(tg_id)
         if not client:
             return {name: 0.0 for name in FEATURE_NAMES}
 
-        # Default features (in real system these would come from order history)
+        # Compute days_since_last_order from updated_at (last stage transition)
+        days_since_last_order = 30.0
+        updated_at_str = client.get("updated_at")
+        if updated_at_str:
+            try:
+                updated_at = datetime.fromisoformat(str(updated_at_str))
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+                now = datetime.now(tz=timezone.utc)
+                days_since_last_order = max(0.0, (now - updated_at).total_seconds() / 86400.0)
+            except (ValueError, TypeError):
+                pass
+
+        # Compute account age in days from created_at
+        account_age_days = 1.0
+        created_at_str = client.get("created_at")
+        if created_at_str:
+            try:
+                created_at = datetime.fromisoformat(str(created_at_str))
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                now = datetime.now(tz=timezone.utc)
+                account_age_days = max(1.0, (now - created_at).total_seconds() / 86400.0)
+            except (ValueError, TypeError):
+                pass
+
+        # Base features with stage-based heuristics enhanced by real dates
         features: dict[str, float] = {
-            "days_since_last_order": 30.0,
+            "days_since_last_order": days_since_last_order,
             "order_frequency": 0.0,
             "avg_check": 0.0,
             "cancellation_rate": 0.0,
             "total_orders": 0.0,
         }
 
-        # Infer from stage
+        # Enrich based on stage
         stage = client.get("stage", "lead")
         if stage == "churned":
-            features["days_since_last_order"] = 90.0
             features["cancellation_rate"] = 0.5
         elif stage == "paid":
-            features["days_since_last_order"] = 7.0
-            features["order_frequency"] = 2.0
+            # Estimate order frequency from account age
+            estimated_orders = max(1.0, account_age_days / 14.0)
+            features["order_frequency"] = estimated_orders / (account_age_days / 30.0) if account_age_days > 0 else 0.0
             features["avg_check"] = 5000.0
-            features["total_orders"] = 5.0
+            features["total_orders"] = estimated_orders
         elif stage == "trial":
-            features["days_since_last_order"] = 14.0
             features["order_frequency"] = 0.5
             features["total_orders"] = 1.0
 

@@ -1,7 +1,6 @@
 """Тесты для payments/retry.py: WebhookRetryQueue, backoff, DLQ."""
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +11,7 @@ from payments.retry import (
     MAX_ATTEMPTS,
     WebhookPayload,
     WebhookRetryQueue,
+    get_dlq_items,
 )
 
 
@@ -49,9 +49,10 @@ def _make_error_session(error):
     return mock_session
 
 
-def test_enqueue():
+def test_enqueue(tmp_path):
     """enqueue добавляет элемент в очередь."""
-    queue = WebhookRetryQueue()
+    db_path = str(tmp_path / "dlq.db")
+    queue = WebhookRetryQueue(dlq_db_path=db_path)
     queue.enqueue({"event": "payment"}, "https://example.com/webhook")
 
     assert queue.pending_count == 1
@@ -70,9 +71,10 @@ def test_backoff_delays():
 
 
 @pytest.mark.asyncio
-async def test_process_one_success():
+async def test_process_one_success(tmp_path):
     """Успешная отправка с первой попытки."""
-    queue = WebhookRetryQueue()
+    db_path = str(tmp_path / "dlq.db")
+    queue = WebhookRetryQueue(dlq_db_path=db_path)
     item = WebhookPayload(
         payload={"event": "test"},
         callback_url="https://example.com/hook",
@@ -85,9 +87,10 @@ async def test_process_one_success():
 
 
 @pytest.mark.asyncio
-async def test_process_one_to_dlq():
+async def test_process_one_to_dlq(tmp_path):
     """После MAX_ATTEMPTS неудач - в DLQ."""
-    queue = WebhookRetryQueue()
+    db_path = str(tmp_path / "dlq.db")
+    queue = WebhookRetryQueue(dlq_db_path=db_path)
     item = WebhookPayload(
         payload={"event": "test"},
         callback_url="https://example.com/hook",
@@ -100,14 +103,16 @@ async def test_process_one_to_dlq():
 
     assert result is False
     assert queue.dlq_count == 1
-    assert queue.dead_letter_queue[0].callback_url == "https://example.com/hook"
+    dlq_items = get_dlq_items(db_path)
+    assert dlq_items[0]["callback_url"] == "https://example.com/hook"
     assert item.attempt == MAX_ATTEMPTS
 
 
 @pytest.mark.asyncio
-async def test_process_one_retry_then_success():
+async def test_process_one_retry_then_success(tmp_path):
     """Неудача на первой попытке, успех на второй."""
-    queue = WebhookRetryQueue()
+    db_path = str(tmp_path / "dlq.db")
+    queue = WebhookRetryQueue(dlq_db_path=db_path)
     item = WebhookPayload(
         payload={"event": "test"},
         callback_url="https://example.com/hook",
@@ -123,9 +128,10 @@ async def test_process_one_retry_then_success():
 
 
 @pytest.mark.asyncio
-async def test_process_all():
+async def test_process_all(tmp_path):
     """process_all обрабатывает всю очередь."""
-    queue = WebhookRetryQueue()
+    db_path = str(tmp_path / "dlq.db")
+    queue = WebhookRetryQueue(dlq_db_path=db_path)
     queue.enqueue({"event": "a"}, "https://example.com/a")
     queue.enqueue({"event": "b"}, "https://example.com/b")
 
@@ -138,11 +144,12 @@ async def test_process_all():
 
 
 @pytest.mark.asyncio
-async def test_network_error_retries():
+async def test_network_error_retries(tmp_path):
     """Сетевая ошибка обрабатывается как неудача."""
     import aiohttp
 
-    queue = WebhookRetryQueue()
+    db_path = str(tmp_path / "dlq.db")
+    queue = WebhookRetryQueue(dlq_db_path=db_path)
     item = WebhookPayload(
         payload={"event": "test"},
         callback_url="https://example.com/hook",

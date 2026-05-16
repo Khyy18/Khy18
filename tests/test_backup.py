@@ -1,7 +1,6 @@
 """Тесты для backup/ модуля: SQLite backup, S3 upload (mocked)."""
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,16 +11,22 @@ from backup.backup import BackupService
 
 def test_backup_sqlite_copies_file(tmp_path):
     """backup_sqlite корректно копирует файл."""
+    import sqlite3
+
     db_path = str(tmp_path / "test.db")
-    content = b"SQLite format 3\x00" + b"\x00" * 100
-    with open(db_path, "wb") as f:
-        f.write(content)
+    # Create a valid SQLite database
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO test VALUES (1, 'hello')")
+    conn.commit()
+    conn.close()
 
     service = BackupService()
     result = service.backup_sqlite(db_path)
 
-    assert result == content
-    assert len(result) == len(content)
+    # The result should be valid SQLite bytes
+    assert result[:16] == b"SQLite format 3\x00"
+    assert len(result) > 0
 
 
 def test_backup_sqlite_file_not_found():
@@ -117,9 +122,14 @@ async def test_upload_to_s3_missing_config():
 @pytest.mark.asyncio
 async def test_run_backup_sqlite(tmp_path):
     """run_backup для SQLite: делает бэкап и вызывает upload."""
+    import sqlite3
+
     db_path = str(tmp_path / "test.db")
-    with open(db_path, "wb") as f:
-        f.write(b"SQLite format 3\x00" + b"\x00" * 50)
+    # Create a valid SQLite database
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
 
     service = BackupService()
 

@@ -1540,10 +1540,15 @@ async def main() -> None:
             reply_markup=telegram_bot.set_keyboard(),
         )
 
+        # Start AlertManager background loop.
+        from monitoring.alerts import AlertManager
+        alert_manager = AlertManager()
+
         # Background tasks including shutdown waiter.
         tasks = [
             asyncio.create_task(trading_loop(state, session), name="trading_loop"),
             asyncio.create_task(telegram_bot.run_bot(state, session), name="telegram_bot"),
+            asyncio.create_task(alert_manager.run_loop(session), name="alert_manager"),
             asyncio.create_task(shutdown_event.wait(), name="shutdown_waiter"),
         ]
 

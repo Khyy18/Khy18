@@ -72,7 +72,9 @@ class TestRedisSentinelCacheConstruction:
         cache = RedisSentinelCache(sentinel_hosts=[("h", 26379)])
         mock_client = AsyncMock()
         cache._client = mock_client
-        cache._sentinel = MagicMock()
+        mock_sentinel = MagicMock()
+        mock_sentinel.close = AsyncMock()
+        cache._sentinel = mock_sentinel
 
         await cache.close()
         mock_client.aclose.assert_called_once()

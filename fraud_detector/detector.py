@@ -58,10 +58,13 @@ class FraudDetector:
     ) -> Optional[dict]:
         """Use LLM to analyze order for fraud."""
         budget_str = str(order.budget) if order.budget else "не указан"
+        # Truncate user-controlled inputs to prevent prompt injection / token overflow
+        title = (order.title or "")[:200]
+        description = (order.description or "")[:1000]
         prompt = (
             f"Analyze this freelance job posting for fraud indicators:\n"
-            f"Title: {order.title}\n"
-            f"Description: {order.description}\n"
+            f"Title: {title}\n"
+            f"Description: {description}\n"
             f"Budget: {budget_str}\n\n"
             f"Check for: unrealistic budgets, vague descriptions, "
             f"contact info in description (bypassing platform), "

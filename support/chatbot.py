@@ -27,6 +27,9 @@ class SupportChatbot:
         Returns:
             dict with {answer: str, confidence: float, escalate: bool}
         """
+        # Truncate input to prevent prompt injection / token overflow
+        user_question = (user_question or "")[:1000]
+
         results = self._kb.search(user_question, top_k=3)
 
         if not results:

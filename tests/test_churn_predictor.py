@@ -71,12 +71,24 @@ class TestChurnPredictor:
         assert all(v == 0.0 for v in features.values())
 
     def test_compute_features_paid_client(self):
+        from datetime import datetime, timedelta, timezone
+
         predictor = ChurnPredictor()
-        mock_client = {"tg_id": 123, "name": "Test", "stage": "paid"}
+        now = datetime.now(tz=timezone.utc)
+        # Client with updated_at 7 days ago, created_at 60 days ago
+        mock_client = {
+            "tg_id": 123,
+            "name": "Test",
+            "stage": "paid",
+            "updated_at": (now - timedelta(days=7)).isoformat(),
+            "created_at": (now - timedelta(days=60)).isoformat(),
+        }
         with patch("crm.models.get_client", return_value=mock_client):
             features = predictor.compute_features(123)
-        assert features["days_since_last_order"] == 7.0
-        assert features["order_frequency"] == 2.0
+        # days_since_last_order should be approximately 7
+        assert 6.5 <= features["days_since_last_order"] <= 7.5
+        # order_frequency should be positive for paid clients
+        assert features["order_frequency"] > 0
 
     def test_custom_weights(self):
         weights = {name: 0.0 for name in FEATURE_NAMES}

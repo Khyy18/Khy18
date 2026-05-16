@@ -63,8 +63,8 @@ class LeadScorer:
     ) -> Optional[dict[str, Any]]:
         """Попытка оценки через LLM."""
         prompt = _SCORING_PROMPT_TEMPLATE.format(
-            title=order.title,
-            description=order.description[:500],
+            title=(order.title or "")[:200],
+            description=(order.description or "")[:1000],
             budget=order.budget or "not specified",
             url=order.url,
         )

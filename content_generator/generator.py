@@ -28,9 +28,9 @@ class ContentGenerator:
         Returns:
             Текст кейса или пустая строка при ошибке.
         """
-        title = completed_order.get("title", "")
-        description = completed_order.get("description", "")
-        result = completed_order.get("result", "")
+        title = (completed_order.get("title", "") or "")[:200]
+        description = (completed_order.get("description", "") or "")[:1000]
+        result = (completed_order.get("result", "") or "")[:1000]
 
         prompt = (
             "Write a professional case study in Russian based on this completed project.\n"
@@ -62,7 +62,7 @@ class ContentGenerator:
         """
         prompt = (
             "Write an engaging Telegram channel post in Russian about this topic:\n"
-            f"Topic: {topic}\n\n"
+            f"Topic: {topic[:200]}\n\n"
             "Requirements:\n"
             "- Catchy opening\n"
             "- Useful information or insight\n"
@@ -91,7 +91,7 @@ class ContentGenerator:
         Returns:
             SEO-текст или пустая строка при ошибке.
         """
-        kw_str = ", ".join(keywords)
+        kw_str = ", ".join(k[:100] for k in keywords[:20])
         prompt = (
             f"Write an SEO-optimized text in Russian using these keywords: {kw_str}\n\n"
             f"Requirements:\n"

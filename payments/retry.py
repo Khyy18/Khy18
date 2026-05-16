@@ -1,12 +1,15 @@
-"""Webhook retry queue с экспоненциальным backoff и Dead Letter Queue.
+"""Webhook retry queue with exponential backoff and persistent Dead Letter Queue.
 
-Повторяет неудачные вебхук-вызовы до 5 раз с backoff: 1s, 2s, 4s, 8s, 16s.
-После исчерпания попыток перемещает в DLQ.
+Retries failed webhook calls up to 5 times with backoff: 1s, 2s, 4s, 8s, 16s.
+After exhausting attempts, moves to a SQLite-backed DLQ for later inspection.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -19,6 +22,66 @@ log = get_logger(__name__)
 
 MAX_ATTEMPTS = 5
 BASE_DELAY_SEC = 1.0  # 1, 2, 4, 8, 16
+
+DLQ_DB_PATH = os.getenv("WEBHOOK_DLQ_DB_PATH", "webhook_dlq.db")
+
+
+def _init_dlq_db(db_path: str = "") -> None:
+    """Create DLQ table if not exists."""
+    path = db_path or DLQ_DB_PATH
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dead_letter_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            payload_json TEXT NOT NULL,
+            callback_url TEXT NOT NULL,
+            last_error TEXT NOT NULL DEFAULT '',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            added_at REAL NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def _save_to_dlq(item: "WebhookPayload", db_path: str = "") -> None:
+    """Persist a failed webhook item to the DLQ SQLite table."""
+    path = db_path or DLQ_DB_PATH
+    _init_dlq_db(path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        INSERT INTO dead_letter_queue (payload_json, callback_url, last_error, attempts, created_at, added_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            json.dumps(item.payload, ensure_ascii=False, default=str),
+            item.callback_url,
+            item.last_error,
+            item.attempt,
+            item.created_at,
+            time.time(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_dlq_items(db_path: str = "", limit: int = 100) -> list[dict]:
+    """Retrieve items from the DLQ for inspection."""
+    path = db_path or DLQ_DB_PATH
+    _init_dlq_db(path)
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM dead_letter_queue ORDER BY added_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 @dataclass
@@ -35,9 +98,9 @@ class WebhookPayload:
 class WebhookRetryQueue:
     """Очередь повторных попыток для вебхук-уведомлений."""
 
-    def __init__(self) -> None:
+    def __init__(self, dlq_db_path: str = "") -> None:
         self._queue: list[WebhookPayload] = []
-        self.dead_letter_queue: list[WebhookPayload] = []
+        self._dlq_db_path = dlq_db_path or DLQ_DB_PATH
 
     def enqueue(self, payload: dict[str, Any], callback_url: str) -> None:
         """Добавить вебхук в очередь на отправку."""
@@ -100,8 +163,8 @@ class WebhookRetryQueue:
                 return True
             item.attempt += 1
 
-        # Исчерпаны все попытки - в DLQ.
-        self.dead_letter_queue.append(item)
+        # Exhausted all attempts - persist to SQLite DLQ.
+        _save_to_dlq(item, self._dlq_db_path)
         log.error(
             "webhook_to_dlq",
             url=item.callback_url,
@@ -129,5 +192,6 @@ class WebhookRetryQueue:
 
     @property
     def dlq_count(self) -> int:
-        """Количество элементов в DLQ."""
-        return len(self.dead_letter_queue)
+        """Количество элементов в persistent DLQ."""
+        items = get_dlq_items(self._dlq_db_path)
+        return len(items)
