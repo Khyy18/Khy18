@@ -1,9 +1,17 @@
+import asyncio
 import os
 
 import sentry_sdk
+from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
-from kindergarten_accountant_bot.config import BOT_TOKEN, SENTRY_DSN
+from kindergarten_accountant_bot.config import (
+    BOT_TOKEN,
+    SENTRY_DSN,
+    WEBHOOK_URL,
+    WEBHOOK_SECRET,
+    WEBHOOK_PORT,
+)
 from kindergarten_accountant_bot.models.database import init_db
 from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.handlers.start import start_command, main_menu_callback
@@ -29,7 +37,8 @@ async def post_init(application):
     await init_db()
 
 
-def main():
+def _build_application() -> Application:
+    """Build the Application and register all handlers."""
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(salary_conv_handler)
     app.add_handler(vacation_conv_handler)
@@ -54,7 +63,59 @@ def main():
     # AI free-text handler - placed last as fallback for unhandled text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_message_handler))
     setup_reminder_jobs(app)
-    app.run_polling()
+    return app
+
+
+async def _run_webhook(application: Application) -> None:
+    """Run the bot in webhook mode using aiohttp."""
+    from aiohttp import web
+
+    await application.initialize()
+    await application.bot.set_webhook(
+        url=f"{WEBHOOK_URL}/webhook/{BOT_TOKEN}",
+        secret_token=WEBHOOK_SECRET if WEBHOOK_SECRET else None,
+    )
+    await application.start()
+
+    async def handle_webhook(request: web.Request) -> web.Response:
+        """Handle incoming Telegram webhook update."""
+        # Validate secret token if configured
+        if WEBHOOK_SECRET:
+            header_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+            if header_token != WEBHOOK_SECRET:
+                return web.Response(status=403, text="Forbidden")
+
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return web.Response(status=200, text="OK")
+
+    webapp = web.Application()
+    webapp.router.add_post(f"/webhook/{BOT_TOKEN}", handle_webhook)
+
+    runner = web.AppRunner(webapp)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
+    await site.start()
+
+    # Keep running until interrupted
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await application.stop()
+        await application.shutdown()
+        await runner.cleanup()
+
+
+def main():
+    app = _build_application()
+
+    if WEBHOOK_URL:
+        # Webhook mode
+        asyncio.run(_run_webhook(app))
+    else:
+        # Polling mode (default, unchanged behavior)
+        app.run_polling()
 
 
 if __name__ == "__main__":

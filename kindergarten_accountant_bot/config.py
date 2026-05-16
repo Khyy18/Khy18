@@ -21,6 +21,11 @@ BACKEND_TOKEN = os.environ.get("BACKEND_TOKEN", "")
 # Telegram Mini App URL (empty = no WebApp button)
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "")
 
+# Webhook mode (if WEBHOOK_URL is set, bot uses webhook instead of polling)
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "8443"))
+
 # Role-based access control: comma-separated chat IDs
 BOT_ADMIN_IDS = os.environ.get("BOT_ADMIN_IDS", "")
 BOT_CASHIER_IDS = os.environ.get("BOT_CASHIER_IDS", "")
