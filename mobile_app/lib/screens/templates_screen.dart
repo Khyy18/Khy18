@@ -41,7 +41,7 @@ class TemplatesScreen extends StatelessWidget {
                 Text(
                   'Шаблоны кадровых приказов',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: AppColors.neutral,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                 ),
                 const SizedBox(height: 24),
@@ -141,16 +141,16 @@ class _TemplateCard extends StatelessWidget {
                     Text(
                       subtitle,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppColors.neutral,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                   ],
                 ),
               ),
-              const Icon(
+              Icon(
                 Icons.arrow_forward_ios,
                 size: 14,
-                color: AppColors.neutral,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ],
           ),
@@ -433,7 +433,7 @@ ${endDate.isNotEmpty ? 'Основание: $endDate' : 'Основание: п�
                           icon: const Icon(Icons.download_outlined, size: 18),
                           label: const Text('Скачать'),
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: AppColors.neutral,
+                            foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
                             side: BorderSide(color: Theme.of(context).colorScheme.outline),
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(

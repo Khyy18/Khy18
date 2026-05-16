@@ -59,7 +59,9 @@ class FloatingNavBar extends StatelessWidget {
                 children: [
                   Icon(
                     isSelected ? items[index].activeIcon : items[index].icon,
-                    color: isSelected ? AppColors.primary : AppColors.neutral,
+                    color: isSelected
+                        ? AppColors.primary
+                        : Theme.of(context).colorScheme.onSurfaceVariant,
                     size: 24,
                   ),
                   const SizedBox(height: 4),
@@ -69,7 +71,9 @@ class FloatingNavBar extends StatelessWidget {
                       fontSize: 10,
                       fontWeight:
                           isSelected ? FontWeight.w600 : FontWeight.w500,
-                      color: isSelected ? AppColors.primary : AppColors.neutral,
+                      color: isSelected
+                          ? AppColors.primary
+                          : Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                   if (isSelected) ...[

@@ -105,7 +105,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                                     .textTheme
                                     .bodyMedium
                                     ?.copyWith(
-                                      color: AppColors.neutral,
+                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                                     ),
                               ),
                             ],

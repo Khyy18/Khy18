@@ -41,7 +41,7 @@ class EmptyState extends StatelessWidget {
               message,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: AppColors.neutral,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
             ),
             if (actionLabel != null && onAction != null) ...[

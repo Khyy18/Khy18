@@ -133,7 +133,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   'v1.0.0',
                   style: GoogleFonts.manrope(
                     fontSize: 12,
-                    color: AppColors.neutral,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
               ),

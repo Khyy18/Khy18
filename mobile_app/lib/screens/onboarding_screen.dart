@@ -77,7 +77,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   child: Text(
                     'Пропустить',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          color: AppColors.neutral,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                   ),
                 ),
@@ -215,7 +215,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             page.subtitle,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: AppColors.neutral,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                   height: 1.5,
                 ),
           )

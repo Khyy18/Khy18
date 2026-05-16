@@ -86,11 +86,13 @@ class _KbkScreenState extends ConsumerState<KbkScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.search, size: 48,
-                            color: AppColors.neutral.withOpacity(0.4)),
+                            color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.4)),
                         const SizedBox(height: 16),
-                        const Text(
+                        Text(
                           'Введите запрос для поиска',
-                          style: TextStyle(color: AppColors.neutral),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),

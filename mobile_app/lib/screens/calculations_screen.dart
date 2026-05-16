@@ -41,7 +41,7 @@ class CalculationsScreen extends StatelessWidget {
                     Text(
                       'Выберите тип расчёта',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: AppColors.neutral,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                     const SizedBox(height: 24),
@@ -168,16 +168,16 @@ class _HubCard extends StatelessWidget {
                     Text(
                       subtitle,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppColors.neutral,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                   ],
                 ),
               ),
-              const Icon(
+              Icon(
                 Icons.arrow_forward_ios,
                 size: 16,
-                color: AppColors.neutral,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ],
           ),

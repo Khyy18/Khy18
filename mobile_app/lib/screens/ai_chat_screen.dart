@@ -131,10 +131,12 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                           style: Theme.of(context).textTheme.headlineSmall,
                         ),
                         const SizedBox(height: 8),
-                        const Text(
+                        Text(
                           'Я помогу с расчётами и\nбухгалтерскими вопросами',
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: AppColors.neutral),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),
@@ -270,7 +272,7 @@ class _TypingIndicator extends StatelessWidget {
               width: 8,
               height: 8,
               decoration: BoxDecoration(
-                color: AppColors.neutral.withOpacity(0.5),
+                color: Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.5),
                 shape: BoxShape.circle,
               ),
             )

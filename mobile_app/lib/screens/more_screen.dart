@@ -177,16 +177,16 @@ class _HubCard extends StatelessWidget {
                     Text(
                       subtitle,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppColors.neutral,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                     ),
                   ],
                 ),
               ),
-              const Icon(
+              Icon(
                 Icons.arrow_forward_ios,
                 size: 14,
-                color: AppColors.neutral,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ],
           ),

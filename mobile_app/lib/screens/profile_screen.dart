@@ -59,10 +59,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               'Администратор',
               style: TextStyle(
-                color: AppColors.neutral,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
                 fontSize: 14,
               ),
             ),
@@ -93,7 +93,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             _buildSettingsTile(
               icon: Icons.lock_outline,
               title: 'PIN-код / Биометрия',
-              trailing: const Icon(Icons.chevron_right, color: AppColors.neutral),
+              trailing: Icon(Icons.chevron_right,
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
               onTap: () => context.go('/pin_setup'),
             ),
             const SizedBox(height: 24),
@@ -103,9 +104,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             _buildSettingsTile(
               icon: Icons.info_outline,
               title: 'Версия',
-              trailing: const Text(
+              trailing: Text(
                 '1.0.0',
-                style: TextStyle(color: AppColors.neutral, fontSize: 14),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 14,
+                ),
               ),
             ),
             const SizedBox(height: 8),
@@ -153,7 +157,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         style: GoogleFonts.spaceGrotesk(
           fontSize: 16,
           fontWeight: FontWeight.w600,
-          color: AppColors.neutral,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );

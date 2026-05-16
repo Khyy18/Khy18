@@ -95,7 +95,7 @@ class _CompensationScreenState extends State<CompensationScreen> {
               Text(
                 'За неиспользованный отпуск',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.neutral,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
               ),
               const SizedBox(height: 32),

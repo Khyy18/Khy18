@@ -161,7 +161,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   _StatChip(
                     label: 'Выходных',
                     value: '${stats['weekend']}',
-                    color: AppColors.neutral,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 8),
                   _StatChip(
@@ -184,7 +184,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                 fontWeight: FontWeight.w600,
                                 color: day == 'Сб' || day == 'Вс'
                                     ? AppColors.expense.withOpacity(0.7)
-                                    : AppColors.neutral,
+                                    : Theme.of(context).colorScheme.onSurfaceVariant,
                               ),
                             ),
                           ),
@@ -230,8 +230,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
         bgColor = AppColors.expense.withOpacity(0.12);
         textColor = AppColors.expense;
       } else if (isWknd) {
-        bgColor = AppColors.neutral.withOpacity(0.08);
-        textColor = AppColors.neutral;
+        bgColor = Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.08);
+        textColor = Theme.of(context).colorScheme.onSurfaceVariant;
       } else {
         bgColor = Colors.transparent;
         textColor = Theme.of(context).colorScheme.onSurface;
@@ -286,7 +286,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           children: [
             _legendItem(AppColors.primary, 'Сегодня'),
             _legendItem(AppColors.expense.withOpacity(0.4), 'Праздник'),
-            _legendItem(AppColors.neutral.withOpacity(0.3), 'Выходной'),
+            _legendItem(Theme.of(context).colorScheme.onSurfaceVariant.withOpacity(0.3), 'Выходной'),
           ],
         ),
       ),

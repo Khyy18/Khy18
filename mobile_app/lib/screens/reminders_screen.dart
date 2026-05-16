@@ -86,8 +86,9 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
               height: 12,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color:
-                    reminder.enabled ? AppColors.success : AppColors.neutral,
+                color: reminder.enabled
+                    ? AppColors.success
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
             title: Text(reminder.title),
