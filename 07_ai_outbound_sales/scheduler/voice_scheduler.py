@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -110,7 +111,7 @@ class VoiceScheduler:
         }
 
         # Store metadata
-        await redis.set(f"voice:entry:{entry_id}", str(entry_data), ex=86400)
+        await redis.set(f"voice:entry:{entry_id}", json.dumps(entry_data), ex=86400)
 
         # Add to sorted set with priority as score (higher priority = higher score)
         await redis.zadd(queue_key, {entry_id: priority})
@@ -187,7 +188,7 @@ class VoiceScheduler:
             raw = await redis.get(f"voice:entry:{entry_id}")
             if raw:
                 try:
-                    entry_data = eval(raw)  # noqa: S307
+                    entry_data = json.loads(raw)
                     results.append(entry_data)
                 except Exception:
                     results.append({"entry_id": entry_id, "tenant_id": tenant_id})
@@ -254,7 +255,7 @@ class VoiceScheduler:
                 if await self._should_retry(entry):
                     entry["attempts"] = entry.get("attempts", 0) + 1
                     await redis.set(
-                        f"voice:entry:{entry_id}", str(entry), ex=86400
+                        f"voice:entry:{entry_id}", json.dumps(entry), ex=86400
                     )
                 else:
                     await redis.zrem(queue_key, entry_id)

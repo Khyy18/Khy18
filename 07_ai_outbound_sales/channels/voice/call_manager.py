@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import Call, CallStatus, CallOutcome
+from core.models import Call, CallStatus, CallOutcome, Lead
 
 logger = logging.getLogger(__name__)
 
@@ -72,12 +72,35 @@ class CallManager:
             "error": result.get("error"),
         }
 
-    async def handle_media_stream(self, websocket: Any, call_sid: str) -> None:
+    async def handle_media_stream(
+        self, websocket: Any, call_sid: str, stream_sid: str = ""
+    ) -> None:
         """Manage the bidirectional audio stream for a call.
 
         Receives audio from Twilio WebSocket, sends to STT, gets transcript,
         processes via LLM, and streams TTS audio back.
+
+        Enforces a maximum call duration timeout via voice_max_call_duration.
         """
+        timeout = getattr(self._settings, "voice_max_call_duration", 180)
+        try:
+            await asyncio.wait_for(
+                self._media_stream_loop(websocket, call_sid, stream_sid),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Call %s exceeded max duration (%ds), terminating", call_sid, timeout
+            )
+            try:
+                await self._twilio.end_call(call_sid)
+            except Exception:
+                pass
+
+    async def _media_stream_loop(
+        self, websocket: Any, call_sid: str, stream_sid: str = ""
+    ) -> None:
+        """Internal media stream loop, separated for timeout wrapping."""
         transcript_buffer: list[str] = []
 
         def on_transcript(result: dict[str, Any]) -> None:
@@ -92,7 +115,12 @@ class CallManager:
                     data = json.loads(message)
                     event = data.get("event")
 
-                    if event == "media":
+                    if event == "start":
+                        # Capture the stream SID from the start event if not provided
+                        if not stream_sid:
+                            stream_sid = data.get("start", {}).get("streamSid", "")
+
+                    elif event == "media":
                         payload = data.get("media", {}).get("payload", "")
                         audio_bytes = base64.b64decode(payload)
                         await self._stt.send_audio(audio_bytes)
@@ -101,7 +129,9 @@ class CallManager:
                         if self._stt.is_turn_end and transcript_buffer:
                             user_text = " ".join(transcript_buffer)
                             transcript_buffer.clear()
-                            await self._process_turn(websocket, call_sid, user_text)
+                            await self._process_turn(
+                                websocket, stream_sid or call_sid, user_text
+                            )
 
                     elif event == "stop":
                         break
@@ -164,11 +194,20 @@ class CallManager:
     ) -> dict[str, Any]:
         """Create a new Call record in the database."""
         call_id = uuid.uuid4()
+        to_number = ""
         async with self._session_factory() as session:
+            # Fetch the lead's phone number from enrichment_data
+            lead_uuid = uuid.UUID(str(lead_id))
+            stmt = select(Lead).where(Lead.id == lead_uuid)
+            result = await session.execute(stmt)
+            lead = result.scalar_one_or_none()
+            if lead and lead.enrichment_data:
+                to_number = lead.enrichment_data.get("phone", "")
+
             call = Call(
                 id=call_id,
                 tenant_id=uuid.UUID(str(tenant_id)),
-                lead_id=uuid.UUID(str(lead_id)),
+                lead_id=lead_uuid,
                 campaign_id=uuid.UUID(str(campaign_id)) if campaign_id else None,
                 script_id=uuid.UUID(str(script_id)) if script_id else None,
                 status=CallStatus.initiated,
@@ -176,7 +215,7 @@ class CallManager:
             session.add(call)
             await session.commit()
 
-        return {"id": str(call_id)}
+        return {"id": str(call_id), "to_number": to_number}
 
     async def _update_call_record(
         self,
@@ -194,7 +233,7 @@ class CallManager:
             await session.commit()
 
     async def _process_turn(
-        self, websocket: Any, call_sid: str, user_text: str
+        self, websocket: Any, stream_sid: str, user_text: str
     ) -> None:
         """Process a conversation turn: send to LLM and stream TTS response."""
         try:
@@ -203,9 +242,9 @@ class CallManager:
                 payload = base64.b64encode(audio_chunk).decode("utf-8")
                 media_message = json.dumps({
                     "event": "media",
-                    "streamSid": call_sid,
+                    "streamSid": stream_sid,
                     "media": {"payload": payload},
                 })
                 await websocket.send(media_message)
         except Exception as e:
-            logger.error("Error processing turn for call %s: %s", call_sid, e)
+            logger.error("Error processing turn for stream %s: %s", stream_sid, e)

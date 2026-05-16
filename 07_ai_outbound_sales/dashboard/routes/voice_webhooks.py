@@ -41,13 +41,13 @@ def _validate_twilio_signature(
     data = url + "".join(f"{k}{v}" for k, v in sorted_params)
 
     # Compute HMAC-SHA1
-    computed = hmac.new(
+    import base64
+
+    computed = hmac.HMAC(
         auth_token.encode("utf-8"),
         data.encode("utf-8"),
         hashlib.sha1,
     ).digest()
-
-    import base64
 
     expected = base64.b64encode(computed).decode("utf-8")
     return hmac.compare_digest(expected, signature)
@@ -94,17 +94,22 @@ async def twilio_status_callback(request: Request) -> JSONResponse:
 
     if settings.twilio_auth_token:
         signature = request.headers.get("X-Twilio-Signature", "")
-        if signature:
-            url = str(request.url)
-            params = dict(form_data)
-            if not _validate_twilio_signature(
-                url, params, signature, settings.twilio_auth_token
-            ):
-                logger.warning("Invalid Twilio signature for status callback")
-                return JSONResponse(
-                    content={"error": "Invalid signature"},
-                    status_code=403,
-                )
+        if not signature:
+            logger.warning("Missing X-Twilio-Signature header for status callback")
+            return JSONResponse(
+                content={"error": "Missing signature"},
+                status_code=403,
+            )
+        url = str(request.url)
+        params = dict(form_data)
+        if not _validate_twilio_signature(
+            url, params, signature, settings.twilio_auth_token
+        ):
+            logger.warning("Invalid Twilio signature for status callback")
+            return JSONResponse(
+                content={"error": "Invalid signature"},
+                status_code=403,
+            )
 
     duration = int(call_duration) if call_duration else None
 
@@ -140,8 +145,9 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
 
     import json
 
-    # Wait for the initial 'start' event to get the call SID
+    # Wait for the initial 'start' event to get the call SID and stream SID
     call_sid = ""
+    stream_sid = ""
     try:
         initial_msg = await websocket.receive_text()
         data = json.loads(initial_msg)
@@ -151,8 +157,10 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
             start_data = json.loads(start_msg)
             if start_data.get("event") == "start":
                 call_sid = start_data.get("start", {}).get("callSid", "")
+                stream_sid = start_data.get("start", {}).get("streamSid", "")
         elif data.get("event") == "start":
             call_sid = data.get("start", {}).get("callSid", "")
+            stream_sid = data.get("start", {}).get("streamSid", "")
     except Exception as exc:
         logger.error("Error receiving initial WebSocket message: %s", exc)
         await websocket.close(code=1011)
@@ -164,7 +172,7 @@ async def twilio_media_stream(websocket: WebSocket) -> None:
         return
 
     try:
-        await call_manager.handle_media_stream(websocket, call_sid)
+        await call_manager.handle_media_stream(websocket, call_sid, stream_sid=stream_sid)
     except Exception as exc:
         logger.error("Media stream error for call %s: %s", call_sid, exc)
     finally:
@@ -203,17 +211,22 @@ async def twilio_amd_callback(request: Request) -> JSONResponse:
 
     if settings.twilio_auth_token:
         signature = request.headers.get("X-Twilio-Signature", "")
-        if signature:
-            url = str(request.url)
-            params = dict(form_data)
-            if not _validate_twilio_signature(
-                url, params, signature, settings.twilio_auth_token
-            ):
-                logger.warning("Invalid Twilio signature for AMD callback")
-                return JSONResponse(
-                    content={"error": "Invalid signature"},
-                    status_code=403,
-                )
+        if not signature:
+            logger.warning("Missing X-Twilio-Signature header for AMD callback")
+            return JSONResponse(
+                content={"error": "Missing signature"},
+                status_code=403,
+            )
+        url = str(request.url)
+        params = dict(form_data)
+        if not _validate_twilio_signature(
+            url, params, signature, settings.twilio_auth_token
+        ):
+            logger.warning("Invalid Twilio signature for AMD callback")
+            return JSONResponse(
+                content={"error": "Invalid signature"},
+                status_code=403,
+            )
 
     try:
         await call_manager.handle_amd_result(
