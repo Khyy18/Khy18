@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Lead Detail - AI Outbound Agency{% endblock %}
+{% block page_title %}Lead Detail{% endblock %}
+
+{% block content %}
+<!-- Lead Info Card -->
+<div class="bg-white rounded-lg shadow p-6 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+            <h3 class="text-2xl font-bold text-gray-800" id="lead-name">Loading...</h3>
+            <p class="text-gray-500 mt-1" id="lead-email">--</p>
+        </div>
+        <div class="text-right">
+            <span id="lead-status" class="inline-block px-3 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">--</span>
+            <p class="text-sm text-gray-500 mt-2">Score: <span id="lead-score" class="font-semibold">0</span></p>
+        </div>
+    </div>
+    <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+            <span class="text-sm text-gray-500">Company</span>
+            <p class="font-medium text-gray-800" id="lead-company">--</p>
+        </div>
+        <div>
+            <span class="text-sm text-gray-500">Title</span>
+            <p class="font-medium text-gray-800" id="lead-title">--</p>
+        </div>
+        <div>
+            <span class="text-sm text-gray-500">Campaign</span>
+            <p class="font-medium text-gray-800" id="lead-campaign">--</p>
+        </div>
+    </div>
+</div>
+
+<!-- Message Timeline -->
+<div class="bg-white rounded-lg shadow p-6 mb-6">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">Message Timeline</h3>
+    <div id="message-timeline" class="space-y-4">
+        <p class="text-gray-500 text-sm">Loading messages...</p>
+    </div>
+</div>
+
+<!-- Status History -->
+<div class="bg-white rounded-lg shadow p-6">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">Status History</h3>
+    <div id="status-history" class="text-gray-500 text-sm">
+        <p>Status transitions will be displayed here.</p>
+    </div>
+</div>
+
+<script>
+async function loadLeadDetail() {
+    const response = await authFetch('/api/leads/{{ lead_id }}');
+    if (response.ok) {
+        const data = await response.json();
+        document.getElementById('lead-name').textContent = `${data.first_name || ''} ${data.last_name || ''}`.trim() || 'Unknown';
+        document.getElementById('lead-email').textContent = data.email;
+        document.getElementById('lead-company').textContent = data.company || '--';
+        document.getElementById('lead-title').textContent = data.title || '--';
+        document.getElementById('lead-score').textContent = data.score || 0;
+
+        const statusEl = document.getElementById('lead-status');
+        statusEl.textContent = data.status;
+        const colors = {
+            new: 'bg-blue-100 text-blue-800',
+            contacted: 'bg-indigo-100 text-indigo-800',
+            replied: 'bg-green-100 text-green-800',
+            qualified: 'bg-yellow-100 text-yellow-800',
+            booked: 'bg-emerald-100 text-emerald-800',
+            lost: 'bg-red-100 text-red-800'
+        };
+        statusEl.className = `inline-block px-3 py-1 text-xs font-semibold rounded-full ${colors[data.status] || 'bg-gray-100 text-gray-800'}`;
+
+        // Render messages
+        const timeline = document.getElementById('message-timeline');
+        if (data.messages && data.messages.length > 0) {
+            timeline.innerHTML = data.messages.map(msg => `
+                <div class="border-l-4 ${msg.direction === 'outbound' ? 'border-blue-400' : 'border-green-400'} pl-4 py-2">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium ${msg.direction === 'outbound' ? 'text-blue-600' : 'text-green-600'}">
+                            ${msg.direction === 'outbound' ? 'Sent' : 'Received'}
+                        </span>
+                        <span class="text-xs text-gray-400">${new Date(msg.created_at).toLocaleString()}</span>
+                    </div>
+                    <p class="text-sm text-gray-700 mt-1">${msg.subject || ''}</p>
+                    <p class="text-xs text-gray-500 mt-1">${msg.channel || 'email'}</p>
+                </div>
+            `).join('');
+        } else {
+            timeline.innerHTML = '<p class="text-gray-500 text-sm">No messages yet.</p>';
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadLeadDetail);
+</script>
+{% endblock %}

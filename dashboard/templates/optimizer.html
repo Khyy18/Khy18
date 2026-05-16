@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+
+{% block title %}A/B Test Optimizer - AI Outbound Agency{% endblock %}
+{% block page_title %}A/B Test Optimizer{% endblock %}
+
+{% block content %}
+<!-- Create New Test Section -->
+<div class="bg-white rounded-lg shadow p-6 mb-6">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">Create New A/B Test</h3>
+    <form id="create-test-form" class="space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Test Name</label>
+                <input type="text" id="test-name" name="name" required
+                    class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="e.g., Subject Line Test Q1">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Campaign ID</label>
+                <input type="text" id="test-campaign-id" name="campaign_id" required
+                    class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Campaign UUID">
+            </div>
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Min Sends Per Variant</label>
+            <input type="number" id="test-min-sends" name="min_sends_per_variant" value="100" min="10"
+                class="w-32 border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500">
+        </div>
+        <div id="variants-container">
+            <label class="block text-sm font-medium text-gray-700 mb-2">Variants</label>
+            <div class="space-y-3" id="variant-fields">
+                <div class="variant-row border border-gray-200 rounded-md p-3">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+                        <input type="text" name="variant_key" placeholder="Variant Key (e.g., A)"
+                            class="border border-gray-300 rounded px-2 py-1 text-sm">
+                        <input type="text" name="variant_subject" placeholder="Subject Line"
+                            class="border border-gray-300 rounded px-2 py-1 text-sm">
+                        <input type="text" name="variant_body" placeholder="Body Template"
+                            class="border border-gray-300 rounded px-2 py-1 text-sm">
+                    </div>
+                </div>
+            </div>
+            <button type="button" id="add-variant-btn"
+                class="mt-2 text-sm text-blue-600 hover:text-blue-800 font-medium">
+                + Add Variant
+            </button>
+        </div>
+        <button type="submit"
+            class="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-blue-700 transition-colors">
+            Create Test
+        </button>
+    </form>
+</div>
+
+<!-- Active Tests Section -->
+<div class="bg-white rounded-lg shadow p-6 mb-6">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">Active A/B Tests</h3>
+    <div id="tests-list" hx-get="/api/optimizer/tests" hx-trigger="load" hx-swap="innerHTML">
+        <p class="text-gray-500 text-sm">Loading tests...</p>
+    </div>
+</div>
+
+<!-- Test Results Section -->
+<div class="bg-white rounded-lg shadow p-6 mb-6">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">Test Results</h3>
+    <div id="test-results">
+        <p class="text-gray-500 text-sm">Select a test above to view results</p>
+    </div>
+</div>
+
+<!-- AI Suggestions Section -->
+<div class="bg-white rounded-lg shadow p-6">
+    <h3 class="text-lg font-semibold text-gray-800 mb-4">AI Optimization Suggestions</h3>
+    <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Campaign ID</label>
+        <div class="flex gap-2">
+            <input type="text" id="suggestions-campaign-id"
+                class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Enter Campaign UUID">
+            <button id="get-suggestions-btn"
+                class="bg-green-600 text-white px-4 py-2 rounded-md text-sm font-medium hover:bg-green-700 transition-colors">
+                Get Suggestions
+            </button>
+        </div>
+    </div>
+    <div id="suggestions-panel">
+        <p class="text-gray-500 text-sm">Enter a campaign ID to get AI-powered optimization suggestions</p>
+    </div>
+</div>
+
+<script>
+// Add variant row
+document.getElementById('add-variant-btn').addEventListener('click', function() {
+    const container = document.getElementById('variant-fields');
+    const row = document.createElement('div');
+    row.className = 'variant-row border border-gray-200 rounded-md p-3';
+    row.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <input type="text" name="variant_key" placeholder="Variant Key (e.g., B)"
+                class="border border-gray-300 rounded px-2 py-1 text-sm">
+            <input type="text" name="variant_subject" placeholder="Subject Line"
+                class="border border-gray-300 rounded px-2 py-1 text-sm">
+            <input type="text" name="variant_body" placeholder="Body Template"
+                class="border border-gray-300 rounded px-2 py-1 text-sm">
+        </div>
+    `;
+    container.appendChild(row);
+});
+
+// Create test form
+document.getElementById('create-test-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const rows = document.querySelectorAll('.variant-row');
+    const variants = [];
+    rows.forEach(row => {
+        const key = row.querySelector('[name="variant_key"]').value;
+        const subject = row.querySelector('[name="variant_subject"]').value;
+        const body = row.querySelector('[name="variant_body"]').value;
+        if (key) {
+            variants.push({ key, subject: subject || null, body: body || null });
+        }
+    });
+
+    const payload = {
+        campaign_id: document.getElementById('test-campaign-id').value,
+        name: document.getElementById('test-name').value,
+        min_sends_per_variant: parseInt(document.getElementById('test-min-sends').value) || 100,
+        variants: variants
+    };
+
+    const resp = await authFetch('/api/optimizer/tests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+
+    if (resp.ok) {
+        htmx.trigger('#tests-list', 'load');
+        document.getElementById('create-test-form').reset();
+    } else {
+        const err = await resp.json();
+        alert('Error: ' + (err.detail || 'Failed to create test'));
+    }
+});
+
+// Load tests
+async function loadTests() {
+    const resp = await authFetch('/api/optimizer/tests');
+    if (resp.ok) {
+        const data = await resp.json();
+        const container = document.getElementById('tests-list');
+        if (data.items && data.items.length > 0) {
+            container.innerHTML = data.items.map(test => `
+                <div class="border border-gray-200 rounded-md p-4 mb-3">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h4 class="font-medium text-gray-900">${test.name}</h4>
+                            <p class="text-sm text-gray-500">Status: <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${test.status === 'running' ? 'bg-green-100 text-green-800' : test.status === 'completed' ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800'}">${test.status}</span></p>
+                            <p class="text-xs text-gray-400 mt-1">Created: ${new Date(test.created_at).toLocaleDateString()}</p>
+                            ${test.winner_variant_key ? '<p class="text-xs text-green-600 mt-1">Winner: ' + test.winner_variant_key + '</p>' : ''}
+                        </div>
+                        <div class="space-x-2">
+                            <button onclick="viewResults('${test.id}')" class="text-sm text-blue-600 hover:text-blue-800">View Results</button>
+                            ${test.status === 'running' ? '<button onclick="promoteTest(\'' + test.id + '\')" class="text-sm text-orange-600 hover:text-orange-800">Promote Winner</button>' : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            container.innerHTML = '<p class="text-gray-500 text-sm">No A/B tests created yet</p>';
+        }
+    }
+}
+
+async function viewResults(testId) {
+    const resp = await authFetch('/api/optimizer/tests/' + testId + '/results');
+    if (resp.ok) {
+        const data = await resp.json();
+        const container = document.getElementById('test-results');
+        let html = '<div class="space-y-3">';
+        html += `<div class="flex items-center gap-3 mb-2">
+            <span class="text-sm font-medium">Statistical Significance:</span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${data.is_significant ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}">
+                ${data.is_significant ? 'Significant' : 'Not Significant'}
+            </span>
+            <span class="text-xs text-gray-500">p-value: ${data.p_value.toFixed(4)}</span>
+        </div>`;
+
+        if (data.variants && data.variants.length > 0) {
+            html += '<table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr>';
+            html += '<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Variant</th>';
+            html += '<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Sends</th>';
+            html += '<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Conversions</th>';
+            html += '<th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Rate</th>';
+            html += '</tr></thead><tbody class="divide-y divide-gray-200">';
+            data.variants.forEach(v => {
+                const isWinner = v.variant_key === data.winner_key;
+                html += `<tr class="${isWinner ? 'bg-green-50' : ''}">
+                    <td class="px-4 py-2 text-sm font-medium ${isWinner ? 'text-green-700' : 'text-gray-900'}">${v.variant_key} ${isWinner ? '(Winner)' : ''}</td>
+                    <td class="px-4 py-2 text-sm text-gray-500">${v.sends}</td>
+                    <td class="px-4 py-2 text-sm text-gray-500">${v.conversions}</td>
+                    <td class="px-4 py-2 text-sm text-gray-500">${(v.conversion_rate * 100).toFixed(2)}%</td>
+                </tr>`;
+            });
+            html += '</tbody></table>';
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    }
+}
+
+async function promoteTest(testId) {
+    if (!confirm('Are you sure you want to promote the winner and end this test?')) return;
+    const resp = await authFetch('/api/optimizer/tests/' + testId + '/promote', { method: 'POST' });
+    if (resp.ok) {
+        loadTests();
+        viewResults(testId);
+    } else {
+        const err = await resp.json();
+        alert('Error: ' + (err.detail || 'Failed to promote'));
+    }
+}
+
+// Get suggestions
+document.getElementById('get-suggestions-btn').addEventListener('click', async function() {
+    const campaignId = document.getElementById('suggestions-campaign-id').value;
+    if (!campaignId) { alert('Please enter a campaign ID'); return; }
+    const resp = await authFetch('/api/optimizer/suggestions/' + campaignId);
+    if (resp.ok) {
+        const data = await resp.json();
+        const panel = document.getElementById('suggestions-panel');
+        if (data.suggestions && data.suggestions.length > 0) {
+            panel.innerHTML = data.suggestions.map(s => `
+                <div class="border-l-4 border-blue-400 bg-blue-50 p-3 mb-2 rounded-r">
+                    ${s.category ? '<span class="text-xs font-medium text-blue-700 uppercase">' + s.category + '</span>' : ''}
+                    <p class="text-sm text-gray-700 mt-1">${s.suggestion}</p>
+                </div>
+            `).join('');
+        } else {
+            panel.innerHTML = '<p class="text-gray-500 text-sm">No suggestions available</p>';
+        }
+    }
+});
+
+document.addEventListener('DOMContentLoaded', loadTests);
+</script>
+{% endblock %}

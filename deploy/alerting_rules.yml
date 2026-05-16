@@ -1,0 +1,53 @@
+# Alerting Rules Configuration for AI Outbound Agency
+# Reference documentation for the AlertingEngine alert conditions.
+# These rules are defined in code (core/alerting.py) and this file
+# serves as the canonical documentation for ops teams.
+
+alert_rules:
+  - name: bounce_rate_high
+    threshold: 5.0
+    channels: [telegram, slack]
+    cooldown_seconds: 3600
+    description: "Email bounce rate exceeds 5% in the last hour"
+
+  - name: llm_error_rate_high
+    threshold: 10.0
+    channels: [telegram, slack]
+    cooldown_seconds: 3600
+    description: "LLM API error rate exceeds 10% of requests in the last hour"
+
+  - name: no_sends_business_hours
+    threshold: 0
+    channels: [telegram, slack, email]
+    cooldown_seconds: 3600
+    description: "Zero emails sent during business hours (9am-6pm) in the last hour"
+
+  - name: disk_usage_high
+    threshold: 85.0
+    channels: [telegram]
+    cooldown_seconds: 3600
+    description: "Disk usage exceeds 85%"
+
+  - name: memory_usage_high
+    threshold: 90.0
+    channels: [telegram]
+    cooldown_seconds: 3600
+    description: "Memory usage exceeds 90%"
+
+  - name: linkedin_session_failures
+    threshold: 3
+    channels: [telegram, slack]
+    cooldown_seconds: 3600
+    description: "More than 3 LinkedIn session failures in the last hour"
+
+  - name: mrr_drop
+    threshold: 10.0
+    channels: [telegram, slack, email]
+    cooldown_seconds: 3600
+    description: "Monthly Recurring Revenue dropped more than 10% day-over-day"
+
+  - name: db_pool_exhaustion
+    threshold: 80.0
+    channels: [telegram]
+    cooldown_seconds: 3600
+    description: "Database connection pool usage exceeds 80%"

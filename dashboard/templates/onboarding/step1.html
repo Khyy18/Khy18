@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onboarding - Step 1 of 3</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/static/app.js" defer></script>
+</head>
+<body class="bg-gray-50 min-h-screen flex items-center justify-center">
+    <div class="max-w-2xl w-full mx-auto p-8">
+        <!-- Step Indicator -->
+        <div class="flex items-center justify-center mb-8">
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center">
+                    <span class="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">1</span>
+                    <span class="ml-2 text-sm font-medium text-blue-600">Tell us about you</span>
+                </div>
+                <div class="w-12 h-0.5 bg-gray-300"></div>
+                <div class="flex items-center">
+                    <span class="w-8 h-8 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center text-sm font-bold">2</span>
+                    <span class="ml-2 text-sm text-gray-500">Preview</span>
+                </div>
+                <div class="w-12 h-0.5 bg-gray-300"></div>
+                <div class="flex items-center">
+                    <span class="w-8 h-8 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center text-sm font-bold">3</span>
+                    <span class="ml-2 text-sm text-gray-500">Launch</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-md p-8">
+            <h1 class="text-2xl font-bold text-gray-900 mb-2">Set Up Your First Campaign</h1>
+            <p class="text-gray-600 mb-6">Tell us about your business and ideal customers. We'll create a personalized outbound campaign for you.</p>
+
+            <form id="onboarding-form" class="space-y-5">
+                <div>
+                    <label for="company_description" class="block text-sm font-medium text-gray-700 mb-1">Company Description</label>
+                    <textarea id="company_description" name="company_description" rows="3" required
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="What does your company do?"></textarea>
+                </div>
+
+                <div>
+                    <label for="ideal_customer_industry" class="block text-sm font-medium text-gray-700 mb-1">Ideal Customer Industry</label>
+                    <input type="text" id="ideal_customer_industry" name="ideal_customer_industry" required
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g., SaaS, FinTech, Healthcare">
+                </div>
+
+                <div>
+                    <label for="ideal_customer_company_size" class="block text-sm font-medium text-gray-700 mb-1">Target Company Size</label>
+                    <select id="ideal_customer_company_size" name="ideal_customer_company_size" required
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">Select size range</option>
+                        <option value="1-10">1-10 employees</option>
+                        <option value="10-50">10-50 employees</option>
+                        <option value="50-200">50-200 employees</option>
+                        <option value="200-1000">200-1000 employees</option>
+                        <option value="1000+">1000+ employees</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="ideal_customer_titles" class="block text-sm font-medium text-gray-700 mb-1">Target Job Titles</label>
+                    <input type="text" id="ideal_customer_titles" name="ideal_customer_titles" required
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g., VP Sales, Head of Marketing, CTO (comma-separated)">
+                </div>
+
+                <div>
+                    <label for="problem_solved" class="block text-sm font-medium text-gray-700 mb-1">Problem You Solve</label>
+                    <textarea id="problem_solved" name="problem_solved" rows="2" required
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="What problem does your product/service solve for customers?"></textarea>
+                </div>
+
+                <div>
+                    <label for="differentiator" class="block text-sm font-medium text-gray-700 mb-1">Key Differentiator</label>
+                    <textarea id="differentiator" name="differentiator" rows="2" required
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="What makes you different from competitors?"></textarea>
+                </div>
+
+                <div>
+                    <label for="tone" class="block text-sm font-medium text-gray-700 mb-1">Email Tone</label>
+                    <select id="tone" name="tone" required
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">Select tone</option>
+                        <option value="professional">Professional</option>
+                        <option value="casual">Casual</option>
+                        <option value="technical">Technical</option>
+                        <option value="friendly">Friendly</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="website_url" class="block text-sm font-medium text-gray-700 mb-1">Website URL (optional)</label>
+                    <input type="url" id="website_url" name="website_url"
+                        class="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="https://yourcompany.com">
+                </div>
+
+                <div id="error-message" class="hidden text-red-600 text-sm"></div>
+
+                <button type="submit"
+                    class="w-full bg-blue-600 text-white py-3 px-4 rounded-md font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                    Continue to Preview
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('onboarding-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const btn = this.querySelector('button[type="submit"]');
+            const errorDiv = document.getElementById('error-message');
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+            errorDiv.classList.add('hidden');
+
+            const formData = {
+                company_description: document.getElementById('company_description').value,
+                ideal_customer_industry: document.getElementById('ideal_customer_industry').value,
+                ideal_customer_company_size: document.getElementById('ideal_customer_company_size').value,
+                ideal_customer_titles: document.getElementById('ideal_customer_titles').value,
+                problem_solved: document.getElementById('problem_solved').value,
+                differentiator: document.getElementById('differentiator').value,
+                tone: document.getElementById('tone').value,
+                website_url: document.getElementById('website_url').value || '',
+            };
+
+            try {
+                const token = localStorage.getItem('token');
+                const resp = await fetch('/api/onboarding/setup', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + (token || ''),
+                    },
+                    body: JSON.stringify(formData),
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.detail || 'Setup failed');
+                }
+
+                window.location.href = '/onboarding/preview';
+            } catch (err) {
+                errorDiv.textContent = err.message;
+                errorDiv.classList.remove('hidden');
+                btn.disabled = false;
+                btn.textContent = 'Continue to Preview';
+            }
+        });
+    </script>
+</body>
+</html>
