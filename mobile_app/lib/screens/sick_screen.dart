@@ -91,7 +91,7 @@ class _SickScreenState extends ConsumerState<SickScreen> {
                 const Spacer(),
                 Container(
                   decoration: BoxDecoration(
-                    border: Border.all(color: AppColors.borderLight),
+                    border: Border.all(color: Theme.of(context).colorScheme.outline),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(

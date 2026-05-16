@@ -91,7 +91,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.backgroundLight,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -127,7 +127,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 22,
                 fontWeight: FontWeight.w700,
-                color: AppColors.textPrimaryLight,
+                color: Theme.of(context).colorScheme.onSurface,
               ),
             ),
             const SizedBox(height: 8),
@@ -137,7 +137,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
                   : 'Введите 4 цифры для защиты',
               style: GoogleFonts.manrope(
                 fontSize: 14,
-                color: AppColors.textSecondaryLight,
+                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
               ),
             ),
             if (_isError) ...[
@@ -197,7 +197,7 @@ class _PinDotsSetup extends StatelessWidget {
                   ? AppColors.expense
                   : filled
                       ? AppColors.primary
-                      : AppColors.borderLight,
+                      : Theme.of(context).colorScheme.outline,
               width: 1.5,
             ),
           ),
@@ -222,11 +222,11 @@ class _PinPadSetup extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 48),
       child: Column(
         children: [
-          _buildRow(['1', '2', '3']),
+          _buildRow(context, ['1', '2', '3']),
           const SizedBox(height: 16),
-          _buildRow(['4', '5', '6']),
+          _buildRow(context, ['4', '5', '6']),
           const SizedBox(height: 16),
-          _buildRow(['7', '8', '9']),
+          _buildRow(context, ['7', '8', '9']),
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -238,7 +238,7 @@ class _PinPadSetup extends StatelessWidget {
                   style: GoogleFonts.spaceGrotesk(
                     fontSize: 24,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimaryLight,
+                    color: Theme.of(context).colorScheme.onSurface,
                   ),
                 ),
                 onTap: () => onDigitTap('0'),
@@ -246,7 +246,7 @@ class _PinPadSetup extends StatelessWidget {
               _PinButtonSetup(
                 child: Icon(
                   Icons.backspace_outlined,
-                  color: AppColors.textSecondaryLight,
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                   size: 24,
                 ),
                 onTap: onBackspace,
@@ -258,7 +258,7 @@ class _PinPadSetup extends StatelessWidget {
     );
   }
 
-  Widget _buildRow(List<String> digits) {
+  Widget _buildRow(BuildContext context, List<String> digits) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: digits.map((digit) {
@@ -268,7 +268,7 @@ class _PinPadSetup extends StatelessWidget {
             style: GoogleFonts.spaceGrotesk(
               fontSize: 24,
               fontWeight: FontWeight.w600,
-              color: AppColors.textPrimaryLight,
+              color: Theme.of(context).colorScheme.onSurface,
             ),
           ),
           onTap: () => onDigitTap(digit),
@@ -295,7 +295,7 @@ class _PinButtonSetup extends StatelessWidget {
           shape: BoxShape.circle,
           color: Colors.transparent,
           border: Border.all(
-            color: AppColors.borderLight,
+            color: Theme.of(context).colorScheme.outline,
             width: 1,
           ),
         ),

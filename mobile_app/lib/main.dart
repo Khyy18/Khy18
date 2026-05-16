@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'providers/auth_provider.dart';
+import 'providers/theme_provider.dart';
 import 'services/local_storage.dart';
 import 'services/notification_service.dart';
 import 'services/secure_storage_service.dart';
@@ -59,6 +60,7 @@ class KindergartenApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authProvider);
+    final currentThemeMode = ref.watch(themeProvider);
 
     final router = GoRouter(
       initialLocation: authState.isAuthenticated ? '/' : '/login',
@@ -315,7 +317,7 @@ class KindergartenApp extends ConsumerWidget {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
         darkTheme: AppTheme.dark,
-        themeMode: ThemeMode.light,
+        themeMode: currentThemeMode,
         routerConfig: router,
       ),
     );
@@ -353,7 +355,8 @@ class _AppLifecycleWrapperState extends State<AppLifecycleWrapper>
 
   Future<void> _checkInitialLock() async {
     final lockEnabled = await _storageService.isLockEnabled();
-    if (lockEnabled) {
+    final pin = await _storageService.getPin();
+    if (lockEnabled && pin != null && pin.isNotEmpty) {
       final lastAuth = await _storageService.getLastAuthTime();
       if (lastAuth == null ||
           DateTime.now().difference(lastAuth).inMinutes >= 2) {
@@ -377,6 +380,9 @@ class _AppLifecycleWrapperState extends State<AppLifecycleWrapper>
   Future<void> _checkReauthNeeded() async {
     final lockEnabled = await _storageService.isLockEnabled();
     if (!lockEnabled) return;
+
+    final pin = await _storageService.getPin();
+    if (pin == null || pin.isEmpty) return;
 
     final lastAuth = await _storageService.getLastAuthTime();
     if (lastAuth == null ||

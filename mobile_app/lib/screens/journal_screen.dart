@@ -89,13 +89,13 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
                   value: state.totalIncome,
                   color: AppColors.success,
                 ),
-                Container(width: 1, height: 40, color: AppColors.borderLight),
+                Container(width: 1, height: 40, color: Theme.of(context).colorScheme.outline),
                 _BalanceColumn(
                   label: 'Расход',
                   value: state.totalExpense,
                   color: AppColors.expense,
                 ),
-                Container(width: 1, height: 40, color: AppColors.borderLight),
+                Container(width: 1, height: 40, color: Theme.of(context).colorScheme.outline),
                 _BalanceColumn(
                   label: 'Баланс',
                   value: state.balance,

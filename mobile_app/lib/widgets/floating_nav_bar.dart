@@ -25,9 +25,9 @@ class FloatingNavBar extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
-        color: AppColors.surfaceLight,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: AppColors.borderLight, width: 1),
+        border: Border.all(color: Theme.of(context).colorScheme.outline, width: 1),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.06),

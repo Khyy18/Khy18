@@ -93,7 +93,7 @@ class _SalaryScreenState extends ConsumerState<SalaryScreen> {
                     if (states.contains(WidgetState.selected)) {
                       return Colors.white;
                     }
-                    return AppColors.textPrimaryLight;
+                    return Theme.of(context).colorScheme.onSurface;
                   }),
                   side: WidgetStatePropertyAll(
                     BorderSide(color: AppColors.primary.withOpacity(0.5)),

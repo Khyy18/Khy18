@@ -234,7 +234,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
         textColor = AppColors.neutral;
       } else {
         bgColor = Colors.transparent;
-        textColor = AppColors.textPrimaryLight;
+        textColor = Theme.of(context).colorScheme.onSurface;
       }
 
       cells.add(
@@ -246,7 +246,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             border: isToday
                 ? null
                 : Border.all(
-                    color: AppColors.borderLight.withOpacity(0.5),
+                    color: Theme.of(context).colorScheme.outline.withOpacity(0.5),
                     width: 0.5,
                   ),
           ),
@@ -277,7 +277,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: AppColors.borderLight, width: 1),
+        side: BorderSide(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -310,7 +310,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           label,
           style: GoogleFonts.manrope(
             fontSize: 12,
-            color: AppColors.textSecondaryLight,
+            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
           ),
         ),
       ],

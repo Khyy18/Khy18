@@ -100,7 +100,7 @@ class _TemplateCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: AppColors.borderLight, width: 1),
+        side: BorderSide(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
@@ -341,7 +341,7 @@ ${endDate.isNotEmpty ? 'Основание: $endDate' : 'Основание: п�
                 elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
-                  side: const BorderSide(color: AppColors.borderLight, width: 1),
+                  side: BorderSide(color: Theme.of(context).colorScheme.outline, width: 1),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.all(20),
@@ -378,16 +378,16 @@ ${endDate.isNotEmpty ? 'Основание: $endDate' : 'Основание: п�
                         width: double.infinity,
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: AppColors.backgroundLight,
+                          color: Theme.of(context).scaffoldBackgroundColor,
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: AppColors.borderLight),
+                          border: Border.all(color: Theme.of(context).colorScheme.outline),
                         ),
                         child: Text(
                           _previewText!,
                           style: GoogleFonts.manrope(
                             fontSize: 13,
                             height: 1.6,
-                            color: AppColors.textPrimaryLight,
+                            color: Theme.of(context).colorScheme.onSurface,
                           ),
                         ),
                       ),
@@ -434,7 +434,7 @@ ${endDate.isNotEmpty ? 'Основание: $endDate' : 'Основание: п�
                           label: const Text('Скачать'),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: AppColors.neutral,
-                            side: const BorderSide(color: AppColors.borderLight),
+                            side: BorderSide(color: Theme.of(context).colorScheme.outline),
                             padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -462,7 +462,7 @@ ${endDate.isNotEmpty ? 'Основание: $endDate' : 'Основание: п�
           style: GoogleFonts.manrope(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: AppColors.textSecondaryLight,
+            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
           ),
         ),
         const SizedBox(height: 8),
@@ -471,14 +471,14 @@ ${endDate.isNotEmpty ? 'Основание: $endDate' : 'Основание: п�
           decoration: InputDecoration(
             hintText: hint,
             filled: true,
-            fillColor: AppColors.surfaceLight,
+            fillColor: Theme.of(context).colorScheme.surface,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: AppColors.borderLight),
+              borderSide: BorderSide(color: Theme.of(context).colorScheme.outline),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: AppColors.borderLight),
+              borderSide: BorderSide(color: Theme.of(context).colorScheme.outline),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),

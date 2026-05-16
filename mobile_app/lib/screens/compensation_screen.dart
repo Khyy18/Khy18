@@ -160,7 +160,7 @@ class _CompensationScreenState extends State<CompensationScreen> {
           style: GoogleFonts.manrope(
             fontSize: 13,
             fontWeight: FontWeight.w600,
-            color: AppColors.textSecondaryLight,
+            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
           ),
         ),
         const SizedBox(height: 8),
@@ -174,14 +174,14 @@ class _CompensationScreenState extends State<CompensationScreen> {
             hintText: hint,
             suffixText: suffix,
             filled: true,
-            fillColor: AppColors.surfaceLight,
+            fillColor: Theme.of(context).colorScheme.surface,
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: AppColors.borderLight),
+              borderSide: BorderSide(color: Theme.of(context).colorScheme.outline),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: AppColors.borderLight),
+              borderSide: BorderSide(color: Theme.of(context).colorScheme.outline),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
@@ -200,7 +200,7 @@ class _CompensationScreenState extends State<CompensationScreen> {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: AppColors.borderLight, width: 1),
+        side: BorderSide(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -280,7 +280,7 @@ class _CompensationScreenState extends State<CompensationScreen> {
             label,
             style: GoogleFonts.manrope(
               fontSize: 14,
-              color: AppColors.textSecondaryLight,
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
             ),
           ),
         ),
@@ -290,7 +290,7 @@ class _CompensationScreenState extends State<CompensationScreen> {
           style: GoogleFonts.spaceGrotesk(
             fontSize: bold ? 18 : 15,
             fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
-            color: color ?? AppColors.textPrimaryLight,
+            color: color ?? Theme.of(context).colorScheme.onSurface,
           ),
         ),
       ],

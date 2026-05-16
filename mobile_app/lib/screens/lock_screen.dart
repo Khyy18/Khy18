@@ -136,7 +136,7 @@ class _LockScreenState extends State<LockScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.backgroundLight,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: SafeArea(
         child: Column(
           children: [
@@ -176,7 +176,7 @@ class _LockScreenState extends State<LockScreen> {
                 fontWeight: FontWeight.w700,
                 color: _requireBiometric || _isLocked
                     ? AppColors.expense
-                    : AppColors.textPrimaryLight,
+                    : Theme.of(context).colorScheme.onSurface,
               ),
             ),
             const SizedBox(height: 8),
@@ -190,7 +190,7 @@ class _LockScreenState extends State<LockScreen> {
                 fontSize: 14,
                 color: _requireBiometric || _isLocked
                     ? AppColors.expense
-                    : AppColors.textSecondaryLight,
+                    : Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
               ),
               textAlign: TextAlign.center,
             ),
@@ -244,7 +244,7 @@ class _PinDots extends StatelessWidget {
                   ? AppColors.expense
                   : filled
                       ? AppColors.primary
-                      : AppColors.borderLight,
+                      : Theme.of(context).colorScheme.outline,
               width: 1.5,
             ),
           ),
@@ -275,11 +275,11 @@ class _PinPad extends StatelessWidget {
         opacity: isDisabled ? 0.4 : 1.0,
         child: Column(
           children: [
-            _buildRow(['1', '2', '3']),
+            _buildRow(context, ['1', '2', '3']),
             const SizedBox(height: 16),
-            _buildRow(['4', '5', '6']),
+            _buildRow(context, ['4', '5', '6']),
             const SizedBox(height: 16),
-            _buildRow(['7', '8', '9']),
+            _buildRow(context, ['7', '8', '9']),
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -300,7 +300,7 @@ class _PinPad extends StatelessWidget {
                     style: GoogleFonts.spaceGrotesk(
                       fontSize: 24,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimaryLight,
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   onTap: isDisabled ? null : () => onDigitTap('0'),
@@ -308,7 +308,7 @@ class _PinPad extends StatelessWidget {
                 _PinButton(
                   child: Icon(
                     Icons.backspace_outlined,
-                    color: AppColors.textSecondaryLight,
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                     size: 24,
                   ),
                   onTap: isDisabled ? null : onBackspace,
@@ -321,7 +321,7 @@ class _PinPad extends StatelessWidget {
     );
   }
 
-  Widget _buildRow(List<String> digits) {
+  Widget _buildRow(BuildContext context, List<String> digits) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: digits.map((digit) {
@@ -331,7 +331,7 @@ class _PinPad extends StatelessWidget {
             style: GoogleFonts.spaceGrotesk(
               fontSize: 24,
               fontWeight: FontWeight.w600,
-              color: AppColors.textPrimaryLight,
+              color: Theme.of(context).colorScheme.onSurface,
             ),
           ),
           onTap: isDisabled ? null : () => onDigitTap(digit),
@@ -358,7 +358,7 @@ class _PinButton extends StatelessWidget {
           shape: BoxShape.circle,
           color: Colors.transparent,
           border: Border.all(
-            color: AppColors.borderLight,
+            color: Theme.of(context).colorScheme.outline,
             width: 1,
           ),
         ),

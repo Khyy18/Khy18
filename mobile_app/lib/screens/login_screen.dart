@@ -49,7 +49,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   fontWeight: FontWeight.w700,
                   height: 1.1,
                   letterSpacing: -2,
-                  color: AppColors.textPrimaryLight,
+                  color: Theme.of(context).colorScheme.onSurface,
                 ),
               )
                   .animate()
@@ -61,7 +61,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 style: GoogleFonts.manrope(
                   fontSize: 18,
                   fontWeight: FontWeight.w500,
-                  color: AppColors.textSecondaryLight,
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                   letterSpacing: 2,
                 ),
               )

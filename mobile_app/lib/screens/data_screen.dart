@@ -98,7 +98,7 @@ class _HubCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: AppColors.borderLight, width: 1),
+        side: BorderSide(color: Theme.of(context).colorScheme.outline, width: 1),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),

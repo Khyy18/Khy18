@@ -50,14 +50,19 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         children: [
           // Background gradient
           Container(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xFFFFFFFF),
-                  Color(0xFFF5F3FF),
-                ],
+                colors: Theme.of(context).brightness == Brightness.dark
+                    ? [
+                        Theme.of(context).scaffoldBackgroundColor,
+                        const Color(0xFF1a1625),
+                      ]
+                    : [
+                        const Color(0xFFFFFFFF),
+                        const Color(0xFFF5F3FF),
+                      ],
               ),
             ),
           ),

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../providers/auth_provider.dart';
+import '../providers/theme_provider.dart';
 import '../theme/app_colors.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
@@ -13,11 +14,11 @@ class ProfileScreen extends ConsumerStatefulWidget {
 }
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
-  bool _darkMode = false;
   bool _notifications = true;
 
   @override
   Widget build(BuildContext context) {
+    final isDarkMode = ref.watch(themeProvider) == ThemeMode.dark;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Профиль'),
@@ -73,8 +74,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               icon: Icons.dark_mode_outlined,
               title: 'Тёмная тема',
               trailing: Switch(
-                value: _darkMode,
-                onChanged: (v) => setState(() => _darkMode = v),
+                value: isDarkMode,
+                onChanged: (v) => ref.read(themeProvider.notifier).toggle(),
                 activeColor: AppColors.primary,
               ),
             ),
