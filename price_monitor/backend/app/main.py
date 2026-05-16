@@ -22,6 +22,7 @@ from app.routers import (
     content,
     deals,
     favorites,
+    onboarding,
     partners,
     payments,
     profile,
@@ -77,6 +78,7 @@ app.include_router(content.router)
 app.include_router(partners.router)
 app.include_router(websocket.router)
 app.include_router(support.router)
+app.include_router(onboarding.router)
 
 @app.get("/health", tags=["system"])
 async def health_check():

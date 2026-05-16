@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str = ""
     telegram_admin_id: int = 0
+    telegram_channel_id: int = 0
+
+    # Email (Resend/Mailgun)
+    email_api_key: str = ""
+    email_api_url: str = "https://api.resend.com"
+    email_from: str = "Price Monitor <noreply@your-domain.com>"
 
     # OpenAI-совместимый API
     openai_api_key: str = ""
