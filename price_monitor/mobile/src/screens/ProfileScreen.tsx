@@ -14,6 +14,7 @@ import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityI
 import {useTheme} from '../theme/ThemeContext';
 import {getProfile} from '../api/services';
 import {formatPrice} from '../utils/formatPrice';
+import RewardedAdButton from '../components/RewardedAdButton';
 import {RootStackParamList} from '../navigation/AppNavigator';
 
 type ProfileNavProp = NativeStackNavigationProp<RootStackParamList>;
@@ -125,6 +126,17 @@ const ProfileScreen: React.FC = () => {
           </Pressable>
         </View>
       </View>
+
+      {profile.subscription !== 'vip' && (
+        <View style={styles.rewardedSection}>
+          <RewardedAdButton
+            onReward={() => {
+              // В продакшене: активация временного VIP на 1 час через API
+              console.log('Rewarded: VIP на 1 час активирован');
+            }}
+          />
+        </View>
+      )}
 
       <Pressable
         onPress={() => navigation.navigate('Settings')}
@@ -248,6 +260,9 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     marginLeft: 12,
+  },
+  rewardedSection: {
+    marginBottom: 16,
   },
 });
 
