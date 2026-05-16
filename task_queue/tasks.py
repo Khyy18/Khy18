@@ -5,6 +5,36 @@ from __future__ import annotations
 from typing import Any
 
 
+async def retry_webhook_task(
+    ctx: dict[str, Any],
+    payload: dict[str, Any],
+    callback_url: str,
+) -> str:
+    """Задача повторной отправки вебхука через WebhookRetryQueue."""
+    import aiohttp
+
+    from payments.retry import WebhookPayload, WebhookRetryQueue
+
+    queue = WebhookRetryQueue()
+    item = WebhookPayload(payload=payload, callback_url=callback_url)
+
+    async with aiohttp.ClientSession() as session:
+        success = await queue.process_one(session, item)
+
+    if success:
+        return "webhook_delivered"
+    return f"webhook_failed_to_dlq:url={callback_url}"
+
+
+async def backup_task(ctx: dict[str, Any]) -> str:
+    """Задача выполнения бэкапа базы данных."""
+    from backup.backup import BackupService
+
+    service = BackupService()
+    success = await service.run_backup()
+    return "backup_completed" if success else "backup_failed"
+
+
 async def freelance_scan_task(ctx: dict[str, Any]) -> str:
     """Задача сканирования фриланс-площадок.
 

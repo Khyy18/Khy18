@@ -23,6 +23,18 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///trades.db")
 # URL Redis для кэширования. Пустая строка = кэш отключён.
 REDIS_URL = os.getenv("REDIS_URL", "")
 
+# --- CRM ---
+CRM_DB_PATH = os.getenv("CRM_DB_PATH", "crm.db")
+
+# --- Backup ---
+BACKUP_S3_BUCKET = os.getenv("BACKUP_S3_BUCKET", "")
+BACKUP_S3_KEY = os.getenv("BACKUP_S3_KEY", "")
+BACKUP_S3_SECRET = os.getenv("BACKUP_S3_SECRET", "")
+BACKUP_S3_ENDPOINT = os.getenv("BACKUP_S3_ENDPOINT", "")
+BACKUP_S3_REGION = os.getenv("BACKUP_S3_REGION", "us-east-1")
+BACKUP_RETENTION_DAYS = int(os.getenv("BACKUP_RETENTION_DAYS", "30"))
+BACKUP_SCHEDULE_HOUR = int(os.getenv("BACKUP_SCHEDULE_HOUR", "3"))
+
 # --- Observability ---
 # Sentry DSN для отправки ошибок. Пустая строка = Sentry отключён.
 SENTRY_DSN = os.getenv("SENTRY_DSN", "")
