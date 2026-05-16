@@ -8,6 +8,11 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot.config import settings
 from bot.db.models import init_db
+from bot.handlers.start import router as start_router
+from bot.handlers.alerts import router as alerts_router
+from bot.handlers.subscription import router as subscription_router
+from bot.handlers.seller import router as seller_router
+from bot.handlers.referral import router as referral_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -21,13 +26,12 @@ async def main() -> None:
     bot = Bot(token=settings.telegram_token, parse_mode="HTML")
     dp = Dispatcher()
 
-    # Регистрация роутеров (будут добавлены в следующих фичах)
-    # from bot.handlers import start, alerts, subscription, seller, referral
-    # dp.include_router(start.router)
-    # dp.include_router(alerts.router)
-    # dp.include_router(subscription.router)
-    # dp.include_router(seller.router)
-    # dp.include_router(referral.router)
+    # Регистрация роутеров
+    dp.include_router(start_router)
+    dp.include_router(alerts_router)
+    dp.include_router(subscription_router)
+    dp.include_router(seller_router)
+    dp.include_router(referral_router)
 
     # Планировщик задач
     scheduler = AsyncIOScheduler()

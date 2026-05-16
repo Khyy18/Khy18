@@ -272,6 +272,34 @@ async def get_user_monitors(user_id: int) -> list[dict[str, Any]]:
         await db.close()
 
 
+async def delete_seller_monitor(monitor_id: int) -> None:
+    """Удалить мониторинг конкурента."""
+    db = await _get_db()
+    try:
+        await db.execute(
+            "DELETE FROM seller_monitors WHERE id = ?", (monitor_id,)
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_top_referrers(limit: int = 5) -> list[dict[str, Any]]:
+    """Получить топ рефереров по количеству приглашений."""
+    db = await _get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT u.telegram_id, u.username, COUNT(r.id) as count "
+            "FROM users u JOIN users r ON r.referred_by = u.referral_code "
+            "GROUP BY u.id ORDER BY count DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
 # --- Posts ---
 
 
