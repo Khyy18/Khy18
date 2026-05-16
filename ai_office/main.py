@@ -16,6 +16,7 @@ from ai_office.core.proactive_tasks import (
     alice_daily_standup,
     eva_weekly_report,
     leo_overdue_alert,
+    memory_compaction_task,
     nova_health_check,
 )
 from ai_office.core.scheduler import scheduler
@@ -68,6 +69,12 @@ async def run_scheduler():
         name="nova_health_check",
         coro_factory=nova_health_check,
         interval_hours=settings.health_check_interval_hours,
+    )
+    scheduler.register_task(
+        name="memory_compaction",
+        coro_factory=memory_compaction_task,
+        hour=3,
+        minute=0,
     )
 
     await scheduler.start(shutdown_event=shutdown_event)

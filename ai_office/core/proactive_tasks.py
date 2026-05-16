@@ -4,6 +4,7 @@ Alice: daily standup summary
 Eva: weekly analytics report
 Leo: overdue task alerts
 Nova: hourly health check
+Memory: daily memory compaction
 """
 
 import logging
@@ -299,3 +300,15 @@ async def nova_health_check() -> None:
         await send_to_chat(message)
     else:
         logger.info("Nova health check: all systems OK")
+
+
+async def memory_compaction_task() -> None:
+    """Daily memory compaction: summarize expired memories via LLM."""
+    from ai_office.core.memory_compaction import run_memory_compaction
+
+    try:
+        results = await run_memory_compaction()
+        total = sum(results.values())
+        logger.info("Memory compaction task completed: %d entries compacted", total)
+    except Exception as e:
+        logger.error("Memory compaction task failed: %s", str(e))
