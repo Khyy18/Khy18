@@ -134,6 +134,88 @@ ai-outbound-agency/
 - **Alembic** - Database migrations
 - **Pydantic** - Data validation and settings
 
+## Voice AI Channel (Calls)
+
+AI-powered outbound voice calling capability that enables fully autonomous sales calls. The system initiates calls via Twilio, transcribes prospect speech in real-time using Deepgram, generates conversational responses through an LLM, and synthesizes natural-sounding voice replies with ElevenLabs TTS.
+
+### Architecture
+
+| Component | Role |
+|-----------|------|
+| **Twilio** | Telephony provider - initiates outbound calls, streams media via WebSocket |
+| **Deepgram** | Real-time speech-to-text (STT) via streaming WebSocket API |
+| **ElevenLabs** | Text-to-speech (TTS) synthesis with natural voice output |
+| **LLM (OpenAI/Anthropic)** | Conversation engine with FSM-based dialog states |
+| **CallManager** | Orchestrates the full call lifecycle and media stream |
+| **VoiceScheduler** | Priority queue with timezone/concurrency limits |
+
+### Call Flow
+
+1. **Initiate** - VoiceScheduler dispatches a queued call via Twilio REST API
+2. **Connect** - Twilio connects to the prospect, AMD detects voicemail vs. human
+3. **Media Stream** - Twilio opens a WebSocket, streaming raw audio (mu-law 8kHz)
+4. **STT Transcription** - Audio chunks are forwarded to Deepgram for real-time transcription
+5. **LLM Response** - Finalized transcript is sent to the LLM conversation agent
+6. **TTS Synthesis** - LLM response text is streamed through ElevenLabs for audio generation
+7. **Audio Playback** - Synthesized audio is sent back to Twilio via the media WebSocket
+8. **Loop** - Steps 4-7 repeat for each conversation turn until hangup or max duration
+
+### Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `TWILIO_ACCOUNT_SID` | Twilio Account SID | Yes (for voice) |
+| `TWILIO_AUTH_TOKEN` | Twilio Auth Token for API authentication | Yes (for voice) |
+| `TWILIO_PHONE_NUMBER` | Outbound caller ID phone number | Yes (for voice) |
+| `DEEPGRAM_API_KEY` | Deepgram API key for real-time STT | Yes (for voice) |
+| `ELEVENLABS_API_KEY` | ElevenLabs API key for TTS synthesis | Yes (for voice) |
+| `ELEVENLABS_VOICE_ID` | ElevenLabs voice ID (default: "default") | No |
+| `VOICE_MAX_CALL_DURATION` | Maximum call duration in seconds (default: 180) | No |
+| `VOICE_CONCURRENT_CALLS_LIMIT` | Max concurrent calls per tenant (default: 5) | No |
+| `VOICE_CALLING_HOURS_START` | Earliest hour (UTC) to place calls (default: 9) | No |
+| `VOICE_CALLING_HOURS_END` | Latest hour (UTC) to place calls (default: 20) | No |
+| `VOICE_AMD_ENABLED` | Enable answering machine detection (default: true) | No |
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/voice/calls` | List calls with filters (status, outcome, date range), paginated |
+| GET | `/api/voice/calls/{id}` | Get single call detail with transcript |
+| POST | `/api/voice/calls/{id}/replay` | Get recording URL for call playback |
+| GET | `/api/voice/stats` | Aggregated voice call statistics and conversion rate |
+| POST | `/api/voice/scripts` | Create a new call script |
+| GET | `/api/voice/scripts` | List all call scripts for the tenant |
+| PUT | `/api/voice/scripts/{id}` | Update a call script |
+| DELETE | `/api/voice/scripts/{id}` | Delete a call script |
+| POST | `/api/voice/test-call` | Initiate a test call to a phone number |
+| POST | `/api/voice/twilio/status` | Twilio status callback webhook |
+| POST | `/api/voice/twilio/amd` | Twilio answering machine detection callback |
+| WS | `/api/voice/twilio/stream` | Twilio media stream WebSocket endpoint |
+
+### Call Scripts
+
+Call scripts define the personality, greeting template, topics, and voice settings for outbound calls. Each script is stored as a JSON document:
+
+```json
+{
+  "greeting_template": "Hi {name}, this is {company}. Do you have a moment?",
+  "personality": {
+    "tone": "professional and friendly",
+    "pace": "moderate"
+  },
+  "topics": ["product demo", "pricing", "scheduling"],
+  "value_proposition": "We help companies increase sales efficiency by 40%",
+  "company_name": "Acme Corp"
+}
+```
+
+Scripts are assigned to campaigns or individual calls. The VoiceConversationAgent uses the script to guide dialog flow through states: greeting, qualification, offer, objection_handling, and closing.
+
+### Billing
+
+Voice calls are tracked per tenant with a `voice_calls_limit` on each billing plan. The Growth and Agency tiers include voice call allocations. Usage is enforced against plan limits, and exceeding the limit blocks new call scheduling until the next billing cycle or a plan upgrade.
+
 ## Stripe Billing
 
 Multi-tenant billing with three pricing tiers managed through Stripe.
