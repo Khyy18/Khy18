@@ -18,6 +18,12 @@ CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
+# --- Database ---
+# URL базы данных. По умолчанию SQLite (dev). Для prod: postgresql://...
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///trades.db")
+# URL Redis для кэширования. Пустая строка = кэш отключён.
+REDIS_URL = os.getenv("REDIS_URL", "")
+
 
 def _safe_int(value: str, default: int = 0) -> int:
     """Безопасное приведение строки к int (если пусто или битое значение,

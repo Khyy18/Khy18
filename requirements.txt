@@ -6,3 +6,7 @@ playwright
 fpdf2
 scipy
 pyyaml
+alembic
+asyncpg
+redis[hiredis]
+sqlalchemy

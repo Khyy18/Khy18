@@ -90,6 +90,27 @@ python3.11 main.py
 
 Production-развёртывание описано в `deploy/README.md` (systemd и Docker).
 
+## Миграции базы данных (Alembic)
+
+Для управления схемой БД используется Alembic:
+
+```bash
+# Применить все миграции (создать/обновить таблицы)
+alembic upgrade head
+
+# Создать новую автоматическую миграцию
+alembic revision --autogenerate -m "описание изменений"
+
+# Откатить последнюю миграцию
+alembic downgrade -1
+
+# Посмотреть текущую ревизию
+alembic current
+```
+
+По умолчанию используется `sqlite:///trades.db`. Для PostgreSQL задайте
+переменную окружения `DATABASE_URL=postgresql://user:pass@host/dbname`.
+
 ## Бэктестер
 
 Модуль `backtester/` работает полностью локально, без Bybit. Подойдёт для
