@@ -197,13 +197,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   case 0:
                     break; // Already on dashboard
                   case 1:
-                    context.go('/salary');
+                    context.go('/calculations');
                     break;
                   case 2:
-                    context.go('/children');
+                    context.go('/data');
                     break;
                   case 3:
-                    context.go('/profile');
+                    context.go('/more');
                     break;
                 }
               },

@@ -81,6 +81,21 @@ class _SalaryScreenState extends ConsumerState<SalaryScreen> {
                 selected: {_rate},
                 onSelectionChanged: (v) => setState(() => _rate = v.first),
                 style: ButtonStyle(
+                  backgroundColor: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.selected)) {
+                      return AppColors.primary;
+                    }
+                    return Colors.transparent;
+                  }),
+                  foregroundColor: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.selected)) {
+                      return Colors.white;
+                    }
+                    return AppColors.textPrimaryLight;
+                  }),
+                  side: WidgetStatePropertyAll(
+                    BorderSide(color: AppColors.primary.withOpacity(0.5)),
+                  ),
                   shape: WidgetStatePropertyAll(
                     RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12)),
@@ -181,28 +196,39 @@ class _SalaryScreenState extends ConsumerState<SalaryScreen> {
           children: [
             Text(label, style: Theme.of(context).textTheme.titleMedium),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.1),
+                color: AppColors.primary,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 '${value.toInt()}%',
                 style: const TextStyle(
                   fontWeight: FontWeight.w600,
-                  color: AppColors.primary,
+                  color: Colors.white,
+                  fontSize: 14,
                 ),
               ),
             ),
           ],
         ),
-        Slider(
-          value: value,
-          min: min,
-          max: max,
-          divisions: (max - min).toInt(),
-          onChanged: onChanged,
-          activeColor: AppColors.primary,
+        const SizedBox(height: 8),
+        SliderTheme(
+          data: SliderThemeData(
+            activeTrackColor: AppColors.primary,
+            inactiveTrackColor: AppColors.primary.withOpacity(0.15),
+            thumbColor: AppColors.primary,
+            overlayColor: AppColors.primary.withOpacity(0.1),
+            trackHeight: 6,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+          ),
+          child: Slider(
+            value: value,
+            min: min,
+            max: max,
+            divisions: (max - min).toInt(),
+            onChanged: onChanged,
+          ),
         ),
       ],
     );

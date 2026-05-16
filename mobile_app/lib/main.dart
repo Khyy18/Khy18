@@ -13,6 +13,9 @@ import 'theme/page_transitions.dart';
 
 import 'screens/login_screen.dart';
 import 'screens/dashboard_screen.dart';
+import 'screens/calculations_screen.dart';
+import 'screens/data_screen.dart';
+import 'screens/more_screen.dart';
 import 'screens/salary_screen.dart';
 import 'screens/vacation_screen.dart';
 import 'screens/sick_screen.dart';
@@ -68,6 +71,42 @@ class KindergartenApp extends ConsumerWidget {
         GoRoute(
           path: '/',
           builder: (context, state) => const DashboardScreen(),
+        ),
+        GoRoute(
+          path: '/calculations',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const CalculationsScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
+        ),
+        GoRoute(
+          path: '/data',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const DataScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
+        ),
+        GoRoute(
+          path: '/more',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const MoreScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
         ),
         GoRoute(
           path: '/salary',
