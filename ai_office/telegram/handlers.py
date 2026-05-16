@@ -579,6 +579,36 @@ async def handle_approval_callback(client: Client, callback_query) -> None:
         await callback_query.answer("Ошибка при обработке запроса")
 
 
+async def handle_upgrade(client: Client, message: Message) -> None:
+    """Обработка команды /upgrade - информация о подписке и варианты повышения.
+
+    Args:
+        client: Pyrogram клиент
+        message: Входящее сообщение
+    """
+    upgrade_text = (
+        "\U0001f4b3 **Тарифные планы AI Office:**\n\n"
+        "\U0001f7e2 **Free** - 100 сообщений/мес, 3 агента\n"
+        "\U0001f535 **Starter** (990 руб/мес) - 1000 сообщений, 5 агентов, приоритетная поддержка\n"
+        "\U0001f7e1 **Pro** (2990 руб/мес) - 5000 сообщений, все 8 агентов, аналитика, SLA\n"
+        "\U0001f534 **Enterprise** (по запросу) - безлимит, выделенная поддержка, кастомизация\n\n"
+        "\U0001f680 **Преимущества Pro:**\n"
+        "- Все 8 AI-агентов без ограничений\n"
+        "- Расширенная аналитика и отчёты\n"
+        "- Приоритетная обработка задач\n"
+        "- SLA гарантии\n"
+        "- Интеграции (Linear, Notion, GitHub)\n\n"
+        "Для повышения тарифа используйте Mini App или напишите @support."
+    )
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("\U0001f680 Перейти на Pro", callback_data="upgrade_pro")],
+        [InlineKeyboardButton("\U0001f4ac Узнать подробнее", callback_data="upgrade_info")],
+    ])
+
+    await message.reply(upgrade_text, reply_markup=buttons)
+
+
 async def handle_document_message(client: Client, message: Message) -> None:
     """Обработчик документов - парсинг и анализ файлов.
 

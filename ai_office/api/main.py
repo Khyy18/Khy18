@@ -33,6 +33,7 @@ from ai_office.api.routes.referral import router as referral_router
 from ai_office.api.routes.share import router as share_router
 from ai_office.api.routes.public import router as public_router
 from ai_office.api.routes.subscription import router as subscription_router
+from ai_office.api.routes.growth import router as growth_router
 from ai_office.api.middleware import TelegramAuthMiddleware
 from ai_office.api.observability import RequestLoggingMiddleware
 from ai_office.api.websocket import websocket_endpoint
@@ -106,6 +107,7 @@ app.include_router(referral_router)
 app.include_router(share_router)
 app.include_router(public_router)
 app.include_router(subscription_router)
+app.include_router(growth_router)
 
 
 @app.get("/api/health")

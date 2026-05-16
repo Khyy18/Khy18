@@ -298,6 +298,30 @@ class Referral(Base):
     )
 
 
+class WinbackLog(Base):
+    """Лог отправленных win-back сообщений."""
+
+    __tablename__ = "winback_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(Integer, ForeignKey("workspaces.id"))
+    level: Mapped[str] = mapped_column(String(20))  # 'nudge', 'update', 'discount'
+    sent_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    responded: Mapped[bool] = mapped_column(Boolean, server_default="0")
+
+
+class UpsellEvent(Base):
+    """Событие показа upsell-сообщения."""
+
+    __tablename__ = "upsell_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(Integer, ForeignKey("workspaces.id"))
+    trigger_type: Mapped[str] = mapped_column(String(50))
+    shown_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    converted: Mapped[bool] = mapped_column(Boolean, server_default="0")
+
+
 class AuditEntry(Base):
     """Запись аудита для compliance."""
 

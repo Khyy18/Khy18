@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     tts_model: str = Field(default="tts-1", description="Модель TTS для синтеза речи")
     voice_responses: bool = Field(default=False, description="Отвечать голосовыми сообщениями")
 
+    # Content Engine / Auto-posting
+    telegram_channel_id: str = Field(default="", description="ID Telegram-канала для авто-постинга")
+    auto_posting_enabled: bool = Field(default=True, description="Включить авто-постинг в канал")
+
     # Аутентификация
     skip_telegram_auth: bool = Field(
         default=True, description="Пропуск аутентификации Telegram (dev-режим)"

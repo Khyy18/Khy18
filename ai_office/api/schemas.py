@@ -429,3 +429,33 @@ class PublicActivityResponse(BaseModel):
     action_type: str
     action_description: str
     timestamp: Optional[datetime] = None
+
+
+class ChurnRiskResponse(BaseModel):
+    """Ответ с информацией о workspace, подверженном оттоку."""
+
+    workspace_id: int
+    workspace_name: str
+    days_inactive: int
+    last_activity: Optional[datetime] = None
+    recommended_action: str
+
+
+class UpsellStatsResponse(BaseModel):
+    """Ответ со статистикой upsell-конверсий."""
+
+    total_shown: int
+    total_converted: int
+    conversion_rate: float
+    by_trigger: dict
+
+
+class EngagementScoreResponse(BaseModel):
+    """Ответ с оценкой вовлечённости workspace."""
+
+    workspace_id: int
+    messages_per_day: float
+    tasks_created: int
+    tasks_completed: int
+    agents_used: int
+    score: float
