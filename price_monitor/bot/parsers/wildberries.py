@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,12 @@ class WildberriesParser:
         """Закрыть HTTP-клиент."""
         await self._client.aclose()
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=9),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
     async def fetch_product(self, article_id: str) -> dict[str, Any] | None:
         """Получить информацию о товаре по артикулу.
 
@@ -51,8 +58,14 @@ class WildberriesParser:
             return self._parse_product(item)
         except Exception as e:
             logger.error("Ошибка при получении товара WB %s: %s", article_id, e)
-            return None
+            raise
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=9),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
     async def search_products(
         self, query: str, limit: int = 20
     ) -> list[dict[str, Any]]:
@@ -84,7 +97,7 @@ class WildberriesParser:
             return result
         except Exception as e:
             logger.error("Ошибка при поиске WB '%s': %s", query, e)
-            return []
+            raise
 
     async def fetch_reviews(self, article_id: str) -> list[str]:
         """Получить отзывы на товар.

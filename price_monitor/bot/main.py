@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import signal
+from typing import Any
 
 from aiogram import Bot, Dispatcher
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -21,9 +23,23 @@ from bot.scheduler.tasks import cleanup_old_data_job, parse_prices_job, publish_
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+# Shutdown event for graceful termination
+_shutdown_event = asyncio.Event()
+
+
+def _signal_handler(sig: int, *args: Any) -> None:
+    """Handle SIGTERM/SIGINT for graceful shutdown."""
+    logger.info("Received signal %s, initiating graceful shutdown...", signal.Signals(sig).name)
+    _shutdown_event.set()
+
 
 async def main() -> None:
     """Инициализация и запуск бота."""
+    # Register signal handlers
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _signal_handler, sig)
+
     logger.info("Инициализация базы данных...")
     await init_db()
 
@@ -70,11 +86,28 @@ async def main() -> None:
 
     logger.info("Бот запущен, начинаю polling...")
     try:
-        await dp.start_polling(bot)
+        # Start polling in a task so we can also await shutdown_event
+        polling_task = asyncio.create_task(dp.start_polling(bot))
+        shutdown_task = asyncio.create_task(_shutdown_event.wait())
+
+        done, pending = await asyncio.wait(
+            [polling_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        # Cancel pending tasks
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     finally:
-        scheduler.shutdown()
+        logger.info("Shutting down gracefully...")
+        scheduler.shutdown(wait=False)
         await close_db()
         await bot.session.close()
+        logger.info("Shutdown complete.")
 
 
 if __name__ == "__main__":

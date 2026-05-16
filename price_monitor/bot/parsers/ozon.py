@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from bot.config import settings
 
@@ -36,6 +37,12 @@ class OzonParser:
         """Закрыть HTTP-клиент."""
         await self._client.aclose()
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=9),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
     async def fetch_product(self, product_id: str) -> dict[str, Any] | None:
         """Получить информацию о товаре по ID через публичный каталог.
 
@@ -64,8 +71,14 @@ class OzonParser:
             return None
         except Exception as e:
             logger.error("Ошибка при получении товара Ozon %s: %s", product_id, e)
-            return None
+            raise
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=9),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
     async def search_products(
         self, query: str, limit: int = 20
     ) -> list[dict[str, Any]]:
@@ -86,7 +99,7 @@ class OzonParser:
             return results
         except Exception as e:
             logger.error("Ошибка при поиске Ozon '%s': %s", query, e)
-            return []
+            raise
 
     async def fetch_reviews(self, product_id: str) -> list[str]:
         """Получить отзывы на товар через публичный эндпоинт.

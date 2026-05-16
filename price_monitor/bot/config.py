@@ -32,6 +32,8 @@ class Settings(BaseSettings):
 
     # База данных
     db_path: str = "data/bot.db"
+    database_url: str = "sqlite+aiosqlite:///./data/bot.db"
+    postgresql_url: str = "postgresql+asyncpg://price_monitor:price_monitor_secret@localhost:5432/price_monitor"
 
     # Интервалы парсинга (в минутах)
     parse_interval_minutes: int = 30
