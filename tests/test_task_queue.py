@@ -10,14 +10,20 @@ import pytest
 def test_task_functions_are_coroutines():
     """Проверяем что задачи - корутины (async функции)."""
     from task_queue.tasks import (
+        backup_task,
+        content_generation_task,
         freelance_scan_task,
         generate_offer_task,
+        retry_webhook_task,
         viral_notification_task,
     )
 
     assert inspect.iscoroutinefunction(freelance_scan_task)
     assert inspect.iscoroutinefunction(generate_offer_task)
     assert inspect.iscoroutinefunction(viral_notification_task)
+    assert inspect.iscoroutinefunction(backup_task)
+    assert inspect.iscoroutinefunction(content_generation_task)
+    assert inspect.iscoroutinefunction(retry_webhook_task)
 
 
 def test_worker_settings_has_functions():
@@ -28,7 +34,7 @@ def test_worker_settings_has_functions():
     assert hasattr(WorkerSettings, "job_timeout")
     assert hasattr(WorkerSettings, "max_jobs")
     assert hasattr(WorkerSettings, "queue_name")
-    assert len(WorkerSettings.functions) == 3
+    assert len(WorkerSettings.functions) == 6
 
 
 def test_enqueue_helpers_are_coroutines():

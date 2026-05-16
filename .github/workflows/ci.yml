@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python -c "import config; import memory; import freelance_automation; import viral; import ad_testing; import payments; import legal; import task_queue; import health; import rate_limiter; import monitoring; import db"
+      - run: python -c "import config; import memory; import freelance_automation; import viral; import ad_testing; import payments; import legal; import task_queue; import health; import rate_limiter; import monitoring; import db; import crm; import lead_scoring; import content_generator; import pricing; import support; import fraud_detector; import churn_predictor; import backup; from monitoring.alerts import AlertManager; from payments.retry import WebhookRetryQueue; from ad_testing.thompson import ThompsonSamplingEngine; from freelance_automation.ai_responder import AIResponder; from freelance_automation.portfolio import select_relevant"
 
   e2e:
     runs-on: ubuntu-latest
