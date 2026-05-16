@@ -78,6 +78,10 @@ export async function apiClient<T>(
   return response.json();
 }
 
+export async function getAccessToken(): Promise<string | null> {
+  return authenticate();
+}
+
 export function formatPrice(price: number): string {
   return price.toLocaleString('ru-RU').replace(/,/g, ' ') + ' \u0440';
 }

@@ -9,6 +9,17 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Module-level reusable HTTP client for LLM API calls
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Get or create a module-level httpx.AsyncClient."""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=30.0)
+    return _http_client
+
 SYSTEM_PROMPT = """Ты - AI-помощник сервиса мониторинга цен Price Monitor. Отвечай на вопросы пользователей кратко и по делу.
 
 FAQ:
@@ -31,26 +42,29 @@ class SupportBot:
         if not settings.openai_api_key:
             return "Извините, AI-помощник временно недоступен. Обратитесь в @price_monitor_support."
 
+        # Truncate user message to prevent excessive token usage
+        user_message = user_message[:2000]
+
         messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
         if history:
             messages.extend(history[-10:])  # Last 10 messages for context
         messages.append({"role": "user", "content": user_message})
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{settings.openai_base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-                    json={
-                        "model": "gpt-4o-mini",
-                        "messages": messages,
-                        "max_tokens": 500,
-                        "temperature": 0.7,
-                    },
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return data["choices"][0]["message"]["content"].strip()
+            client = _get_http_client()
+            resp = await client.post(
+                f"{settings.openai_base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": messages,
+                    "max_tokens": 500,
+                    "temperature": 0.7,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["choices"][0]["message"]["content"].strip()
         except Exception as e:
             logger.error("Support bot error: %s", e)
         return "Извините, произошла ошибка. Попробуйте позже или обратитесь в @price_monitor_support."

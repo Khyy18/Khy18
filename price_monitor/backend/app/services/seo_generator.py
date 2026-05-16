@@ -9,6 +9,17 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Module-level reusable HTTP client for OpenAI API calls
+_http_client: httpx.AsyncClient | None = None
+
+
+def _get_http_client() -> httpx.AsyncClient:
+    """Get or create a module-level httpx.AsyncClient."""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=30.0)
+    return _http_client
+
 
 class SEOGenerator:
     """Generates SEO-optimized meta tags for product pages."""
@@ -33,32 +44,32 @@ class SEOGenerator:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{settings.openai_base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-                    json={
-                        "model": "gpt-4o-mini",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 300,
-                        "temperature": 0.5,
-                    },
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    content = data["choices"][0]["message"]["content"].strip()
-                    # Try to parse JSON from response
-                    import json
+            client = _get_http_client()
+            resp = await client.post(
+                f"{settings.openai_base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                json={
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 300,
+                    "temperature": 0.5,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"].strip()
+                # Try to parse JSON from response
+                import json
 
-                    # Strip markdown code fences if present
-                    if content.startswith("```"):
-                        content = content.split("\n", 1)[1].rsplit("```", 1)[0]
-                    parsed = json.loads(content)
-                    return {
-                        "title": parsed.get("title", product_name),
-                        "description": parsed.get("description", ""),
-                        "keywords": parsed.get("keywords", category),
-                    }
+                # Strip markdown code fences if present
+                if content.startswith("```"):
+                    content = content.split("\n", 1)[1].rsplit("```", 1)[0]
+                parsed = json.loads(content)
+                return {
+                    "title": parsed.get("title", product_name),
+                    "description": parsed.get("description", ""),
+                    "keywords": parsed.get("keywords", category),
+                }
         except Exception as e:
             logger.error("SEO generation error: %s", e)
 

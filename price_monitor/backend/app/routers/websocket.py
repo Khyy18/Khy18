@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from pydantic import BaseModel
 from app.middleware.auth import verify_token
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,13 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+class PriceUpdateNotification(BaseModel):
+    product_id: int
+    old_price: float
+    new_price: float
+    discount_percent: float
+
+
 @router.websocket("/ws/prices")
 async def websocket_prices(websocket: WebSocket, token: str = Query("")):
     """WebSocket endpoint for live price updates.
@@ -55,6 +63,22 @@ async def websocket_prices(websocket: WebSocket, token: str = Query("")):
                 await websocket.send_text("pong")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+@router.post("/ws/notify-price-update")
+async def notify_price_update(data: PriceUpdateNotification):
+    """Internal endpoint for the bot/worker to notify about price changes.
+
+    The bot calls this after detecting a price update, which then
+    broadcasts the update to all connected WebSocket clients.
+    """
+    await broadcast_price_update(
+        product_id=data.product_id,
+        old_price=data.old_price,
+        new_price=data.new_price,
+        discount_percent=data.discount_percent,
+    )
+    return {"ok": True, "clients_count": len(manager.active_connections)}
 
 
 async def broadcast_price_update(

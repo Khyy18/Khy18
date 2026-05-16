@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import WebApp from '@twa-dev/sdk';
+import { getAccessToken } from '../api/client';
 
 interface PriceUpdateMessage {
   type: 'price_update';
@@ -8,14 +8,6 @@ interface PriceUpdateMessage {
   old_price: number;
   new_price: number;
   discount_percent: number;
-}
-
-function getToken(): string {
-  try {
-    return WebApp.initData || '';
-  } catch {
-    return '';
-  }
 }
 
 function getWsUrl(token: string): string {
@@ -55,10 +47,10 @@ export function useWebSocket() {
     [queryClient]
   );
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!mountedRef.current) return;
 
-    const token = getToken();
+    const token = await getAccessToken();
     if (!token) return;
 
     const url = getWsUrl(token);
