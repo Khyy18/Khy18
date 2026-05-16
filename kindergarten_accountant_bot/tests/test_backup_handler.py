@@ -2,6 +2,7 @@
 
 import datetime
 import os
+import sqlite3
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,9 +35,11 @@ class TestBackupCommand:
     @patch("kindergarten_accountant_bot.handlers.backup_handler.get_db_path")
     async def test_backup_sends_document(self, mock_db_path, tmp_path):
         """Backup command copies DB and sends as document."""
-        # Create a temporary DB file
+        # Create a temporary SQLite DB file
         db_file = tmp_path / "test.db"
-        db_file.write_text("test database content")
+        conn = sqlite3.connect(str(db_file))
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)")
+        conn.close()
         mock_db_path.return_value = str(db_file)
 
         update, context = _make_update_and_context(chat_id=12345)
@@ -66,7 +69,9 @@ class TestBackupCommand:
     async def test_backup_allowed_when_no_admins_configured(self, mock_db_path, tmp_path):
         """Backup command works when BOT_ADMIN_IDS is empty (no restriction)."""
         db_file = tmp_path / "test.db"
-        db_file.write_text("test database content")
+        conn = sqlite3.connect(str(db_file))
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)")
+        conn.close()
         mock_db_path.return_value = str(db_file)
 
         update, context = _make_update_and_context(chat_id=99999)
@@ -98,7 +103,9 @@ class TestAutoBackupJob:
     async def test_auto_backup_sends_to_all_ids(self, mock_db_path, tmp_path):
         """Auto-backup sends to all configured chat IDs."""
         db_file = tmp_path / "test.db"
-        db_file.write_text("test database content")
+        conn = sqlite3.connect(str(db_file))
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)")
+        conn.close()
         mock_db_path.return_value = str(db_file)
 
         context = MagicMock()
@@ -117,7 +124,9 @@ class TestAutoBackupJob:
     async def test_auto_backup_fallback_to_admin_ids(self, mock_db_path, tmp_path):
         """Auto-backup uses BOT_ADMIN_IDS when BACKUP_CHAT_IDS is empty."""
         db_file = tmp_path / "test.db"
-        db_file.write_text("test database content")
+        conn = sqlite3.connect(str(db_file))
+        conn.execute("CREATE TABLE test (id INTEGER PRIMARY KEY)")
+        conn.close()
         mock_db_path.return_value = str(db_file)
 
         context = MagicMock()

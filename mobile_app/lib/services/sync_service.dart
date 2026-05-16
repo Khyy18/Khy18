@@ -152,34 +152,28 @@ class SyncService {
           if (success) {
             await _box!.delete(entry.id);
           } else {
-            final newRetryCount = entry.retryCount + 1;
-            if (newRetryCount >= entry.maxRetries) {
-              // Move to dead_letter status - stop retrying
-              await _box!.put(
-                  entry.id,
-                  entry.copyWith(status: 'dead_letter', retryCount: newRetryCount).toMap());
-            } else {
-              await _box!.put(
-                  entry.id,
-                  entry.copyWith(status: 'failed', retryCount: newRetryCount).toMap());
-            }
+            await _handleFailure(entry);
           }
         } catch (e) {
-          final newRetryCount = entry.retryCount + 1;
-          if (newRetryCount >= entry.maxRetries) {
-            await _box!.put(
-                entry.id,
-                entry.copyWith(status: 'dead_letter', retryCount: newRetryCount).toMap());
-          } else {
-            await _box!.put(
-                entry.id,
-                entry.copyWith(status: 'failed', retryCount: newRetryCount).toMap());
-          }
+          await _handleFailure(entry);
         }
         _notifyPendingCount();
       }
     } finally {
       _isProcessing = false;
+    }
+  }
+
+  Future<void> _handleFailure(SyncQueueEntry entry) async {
+    final newRetryCount = entry.retryCount + 1;
+    if (newRetryCount >= entry.maxRetries) {
+      await _box!.put(
+          entry.id,
+          entry.copyWith(status: 'dead_letter', retryCount: newRetryCount).toMap());
+    } else {
+      await _box!.put(
+          entry.id,
+          entry.copyWith(status: 'failed', retryCount: newRetryCount).toMap());
     }
   }
 

@@ -2,7 +2,7 @@
 
 import datetime
 import logging
-import shutil
+import sqlite3
 import tempfile
 
 from telegram import Update
@@ -36,14 +36,29 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def _send_backup(bot, chat_id: int) -> None:
     """Copy the DB file and send it as a document to the specified chat."""
+    import os
+
     db_path = get_db_path()
     today = datetime.date.today().strftime("%Y-%m-%d")
     filename = f"backup_{today}.db"
 
+    if not os.path.exists(db_path):
+        await bot.send_message(
+            chat_id=chat_id,
+            text="Файл базы данных не найден.",
+        )
+        return
+
     try:
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-            shutil.copy2(db_path, tmp.name)
             tmp_path = tmp.name
+
+        # Use sqlite3 online backup API for a consistent snapshot
+        src = sqlite3.connect(db_path)
+        dst = sqlite3.connect(tmp_path)
+        src.backup(dst)
+        dst.close()
+        src.close()
 
         with open(tmp_path, "rb") as f:
             await bot.send_document(
@@ -52,11 +67,6 @@ async def _send_backup(bot, chat_id: int) -> None:
                 filename=filename,
                 caption=f"Резервная копия базы данных ({today})",
             )
-    except FileNotFoundError:
-        await bot.send_message(
-            chat_id=chat_id,
-            text="Файл базы данных не найден.",
-        )
     except Exception as e:
         logger.error(f"Backup error: {e}")
         await bot.send_message(

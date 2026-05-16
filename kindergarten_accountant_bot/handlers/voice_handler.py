@@ -24,8 +24,16 @@ async def voice_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     processing_msg = await update.message.reply_text("Распознаю голос...")
 
     try:
-        # Download voice file
+        # Check file size before downloading (max 5 MB)
         voice = update.message.voice
+        max_size = 5 * 1024 * 1024  # 5 MB
+        if voice.file_size and voice.file_size > max_size:
+            await processing_msg.edit_text(
+                "Голосовое сообщение слишком большое (максимум 5 МБ)"
+            )
+            return
+
+        # Download voice file
         file = await voice.get_file()
         audio_bytes = await file.download_as_bytearray()
 

@@ -16,6 +16,7 @@ from backend.database import get_db
 from backend.models.employee import Employee
 from backend.models.timesheet import TimesheetMark
 from backend.schemas.timesheet import TimesheetMarkCreate, TimesheetMarkResponse
+from backend.security.encryption import decrypt_value
 
 router = APIRouter(prefix="/timesheet", tags=["timesheet"])
 
@@ -164,7 +165,7 @@ async def export_t13(
         ws.cell(row=row_idx, column=1).border = thin_border
         ws.cell(row=row_idx, column=1).alignment = center_align
 
-        ws.cell(row=row_idx, column=2, value=emp.fio).font = data_font
+        ws.cell(row=row_idx, column=2, value=decrypt_value(emp.fio)).font = data_font
         ws.cell(row=row_idx, column=2).border = thin_border
 
         ws.cell(row=row_idx, column=3, value=emp.position).font = data_font

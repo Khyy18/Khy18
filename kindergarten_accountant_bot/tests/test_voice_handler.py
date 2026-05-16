@@ -12,6 +12,7 @@ def _make_voice_update_and_context():
     update.message = MagicMock()
     update.message.reply_text = AsyncMock()
     update.message.voice = MagicMock()
+    update.message.voice.file_size = 1024  # 1 KB - well under 5 MB limit
     update.effective_chat = MagicMock()
     update.effective_chat.id = 12345
 
@@ -158,3 +159,20 @@ class TestVoiceHandler:
 
         processing_msg.edit_text.assert_called_once()
         assert "Ошибка" in processing_msg.edit_text.call_args[0][0]
+
+    @pytest.mark.asyncio
+    @patch("kindergarten_accountant_bot.handlers.voice_handler.GROQ_API_KEY", "test-key")
+    async def test_rejects_oversized_voice(self):
+        """Handler rejects voice messages exceeding 5 MB."""
+        update, context = _make_voice_update_and_context()
+        update.message.voice.file_size = 6 * 1024 * 1024  # 6 MB
+
+        processing_msg = MagicMock()
+        processing_msg.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=processing_msg)
+
+        await voice_message_handler(update, context)
+
+        processing_msg.edit_text.assert_called_once()
+        assert "слишком большое" in processing_msg.edit_text.call_args[0][0]
+        assert "5 МБ" in processing_msg.edit_text.call_args[0][0]

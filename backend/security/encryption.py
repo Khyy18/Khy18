@@ -65,8 +65,11 @@ def decrypt_field(encrypted: str, key: bytes, aad: Optional[bytes] = None) -> st
 
     Expects base64(nonce + ciphertext + tag).
     If aad is provided, it must match the AAD used during encryption.
-    For backward compatibility, if decryption with AAD fails, retries without AAD.
+    For backward compatibility, if decryption with AAD fails due to InvalidTag,
+    retries without AAD (for data encrypted before AAD was added).
     """
+    from cryptography.exceptions import InvalidTag
+
     raw = base64.b64decode(encrypted)
     nonce = raw[:12]
     ct = raw[12:]
@@ -75,8 +78,12 @@ def decrypt_field(encrypted: str, key: bytes, aad: Optional[bytes] = None) -> st
         try:
             plaintext = aesgcm.decrypt(nonce, ct, aad)
             return plaintext.decode("utf-8")
-        except Exception:
+        except InvalidTag:
             # Backward compatibility: retry without AAD for data encrypted before AAD was added
+            import logging
+            logging.getLogger(__name__).warning(
+                "Decryption with AAD failed (InvalidTag), retrying without AAD for backward compatibility"
+            )
             plaintext = aesgcm.decrypt(nonce, ct, None)
             return plaintext.decode("utf-8")
     plaintext = aesgcm.decrypt(nonce, ct, None)

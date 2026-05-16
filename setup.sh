@@ -99,6 +99,7 @@ WEBAPP_URL=
 EOF
 
 echo -e "${GREEN}Файл .env создан успешно!${NC}"
+chmod 600 .env
 echo ""
 
 # --- Docker Compose ---
