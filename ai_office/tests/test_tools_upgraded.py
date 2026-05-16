@@ -433,3 +433,75 @@ async def test_suggest_ux_improvements_no_issues():
         })
 
     assert "0" in result or "не обнаружено" in result.lower()
+
+
+# === Тесты robustness ===
+
+
+@pytest.mark.asyncio
+async def test_verify_fix_invalid_bug_id():
+    """Тест: verify_fix обрабатывает нечисловой bug_id без краша."""
+    from ai_office.tools.qa_tools import verify_fix
+
+    mock_session_factory, mock_session = _make_mock_session()
+
+    with patch("ai_office.tools.qa_tools.async_session", mock_session_factory):
+        result = await verify_fix.ainvoke({"bug_id": "BUG-42"})
+
+    assert "Некорректный ID задачи" in result
+
+
+@pytest.mark.asyncio
+async def test_verify_fix_empty_bug_id():
+    """Тест: verify_fix обрабатывает пустую строку bug_id."""
+    from ai_office.tools.qa_tools import verify_fix
+
+    mock_session_factory, mock_session = _make_mock_session()
+
+    with patch("ai_office.tools.qa_tools.async_session", mock_session_factory):
+        result = await verify_fix.ainvoke({"bug_id": ""})
+
+    assert "Некорректный ID задачи" in result
+
+
+@pytest.mark.asyncio
+async def test_report_bug_db_error_handling():
+    """Тест: report_bug обрабатывает ошибку БД без краша."""
+    from ai_office.tools.qa_tools import report_bug
+
+    mock_session_factory, mock_session = _make_mock_session()
+    mock_session.commit = AsyncMock(side_effect=Exception("connection lost"))
+
+    with patch("ai_office.tools.qa_tools.async_session", mock_session_factory):
+        result = await report_bug.ainvoke({
+            "title": "Test bug",
+            "steps": "steps",
+            "expected": "expected",
+            "actual": "actual",
+            "severity": "minor",
+        })
+
+    assert "Ошибка при создании задачи" in result
+    assert "connection lost" in result
+
+
+@pytest.mark.asyncio
+async def test_create_test_plan_unknown_feature_fallback():
+    """Тест: create_test_plan для неизвестной фичи без совпадений по ключевым словам возвращает валидный план."""
+    from ai_office.tools.qa_tools import create_test_plan
+
+    mock_session_factory, mock_session = _make_mock_session()
+
+    with patch("ai_office.tools.qa_tools.async_session", mock_session_factory):
+        result = await create_test_plan.ainvoke({"feature": "Интеграция с внешним сервисом оплаты"})
+
+    # Should still have all structured sections
+    assert "Позитивные сценарии" in result
+    assert "Негативные сценарии" in result
+    assert "Граничные случаи" in result
+    assert "Производительность" in result
+    # Should have at least the generic scenarios
+    assert "Основной сценарий выполняется успешно" in result
+    assert "Обработка пустых входных данных" in result
+    assert "Предельные значения параметров" in result
+    assert "Время отклика в пределах допустимого" in result

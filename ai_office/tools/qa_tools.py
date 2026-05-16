@@ -186,9 +186,12 @@ async def report_bug(title: str, steps: str, expected: str, actual: str, severit
             status="open",
             priority=priority,
         )
-        session.add(task)
-        await session.commit()
-        await session.refresh(task)
+        try:
+            session.add(task)
+            await session.commit()
+            await session.refresh(task)
+        except Exception as e:
+            return f"Ошибка при создании задачи: {str(e)}"
         task_id = task.id
 
     report = (
@@ -217,10 +220,15 @@ async def verify_fix(bug_id: str) -> str:
     Returns:
         Результат верификации с чеклистом
     """
+    try:
+        task_id_int = int(bug_id)
+    except (ValueError, TypeError):
+        return "Некорректный ID задачи: ожидается числовой идентификатор"
+
     task = None
     async with async_session() as session:
         result = await session.execute(
-            select(Task).where(Task.id == int(bug_id))
+            select(Task).where(Task.id == task_id_int)
         )
         task = result.scalar_one_or_none()
 
