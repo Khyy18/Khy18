@@ -260,7 +260,7 @@ class _SourceButton extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 label,
-                style: TextStyle(
+                style: const TextStyle(
                   fontWeight: FontWeight.w600,
                   color: AppColors.primary,
                 ),

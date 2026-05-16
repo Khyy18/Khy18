@@ -45,7 +45,7 @@ class TemplatesScreen extends StatelessWidget {
                       ),
                 ),
                 const SizedBox(height: 24),
-                _TemplateCard(
+                const _TemplateCard(
                   icon: Icons.flight_takeoff_outlined,
                   title: 'Приказ на отпуск',
                   subtitle: 'Ежегодный оплачиваемый отпуск',
@@ -53,7 +53,7 @@ class TemplatesScreen extends StatelessWidget {
                   delay: 0,
                 ),
                 const SizedBox(height: 12),
-                _TemplateCard(
+                const _TemplateCard(
                   icon: Icons.person_add_outlined,
                   title: 'Приказ о приёме',
                   subtitle: 'Приём на работу нового сотрудника',
@@ -61,7 +61,7 @@ class TemplatesScreen extends StatelessWidget {
                   delay: 100,
                 ),
                 const SizedBox(height: 12),
-                _TemplateCard(
+                const _TemplateCard(
                   icon: Icons.person_remove_outlined,
                   title: 'Приказ об увольнении',
                   subtitle: 'Расторжение трудового договора',

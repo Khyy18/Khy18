@@ -53,7 +53,7 @@ class _SyncIndicatorState extends ConsumerState<SyncIndicator> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
+            const Icon(
               Icons.check_circle_outline,
               size: 16,
               color: AppColors.success,
@@ -85,7 +85,7 @@ class _SyncIndicatorState extends ConsumerState<SyncIndicator> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
+          const Icon(
             Icons.sync,
             size: 16,
             color: AppColors.warning,

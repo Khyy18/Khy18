@@ -131,7 +131,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     ],
                   ),
                   const SizedBox(height: 28),
-                  Row(
+                  const Row(
                     children: [
                       Expanded(
                         child: StatCard(
@@ -141,7 +141,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           animationDelay: 100,
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      SizedBox(width: 12),
                       Expanded(
                         child: StatCard(
                           icon: Icons.child_care_outlined,
@@ -151,7 +151,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           animationDelay: 200,
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      SizedBox(width: 12),
                       Expanded(
                         child: StatCard(
                           icon: Icons.notifications_outlined,
@@ -216,55 +216,55 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
   List<Widget> _buildMenuItems(BuildContext context, UserRole role) {
     final allItems = <_MenuItem>[
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.calculate_outlined,
         label: 'Зарплата',
         route: '/salary',
         roles: [UserRole.admin, UserRole.cashier],
       ),
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.beach_access_outlined,
         label: 'Отпуск',
         route: '/vacation',
         roles: [UserRole.admin, UserRole.cashier, UserRole.director],
       ),
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.local_hospital_outlined,
         label: 'Больничный',
         route: '/sick',
         roles: [UserRole.admin, UserRole.cashier, UserRole.director],
       ),
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.calendar_month_outlined,
         label: 'Табель',
         route: '/timesheet',
         roles: [UserRole.admin, UserRole.director],
       ),
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.child_care_outlined,
         label: 'Дети',
         route: '/children',
         roles: [UserRole.admin, UserRole.director],
       ),
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.book_outlined,
         label: 'Журнал',
         route: '/journal',
         roles: [UserRole.admin, UserRole.cashier],
       ),
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.document_scanner_outlined,
         label: 'Скан',
         route: '/scan',
         roles: [UserRole.admin, UserRole.cashier, UserRole.director],
       ),
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.search,
         label: 'КБК',
         route: '/kbk',
         roles: [UserRole.admin, UserRole.cashier, UserRole.director],
       ),
-      _MenuItem(
+      const _MenuItem(
         icon: Icons.notifications_outlined,
         label: 'Дедлайны',
         route: '/reminders',

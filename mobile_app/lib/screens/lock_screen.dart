@@ -285,16 +285,17 @@ class _PinPad extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 _PinButton(
+                  onTap: onBiometric,
                   child: onBiometric != null
-                      ? Icon(
+                      ? const Icon(
                           Icons.fingerprint_rounded,
                           color: AppColors.primary,
                           size: 28,
                         )
                       : const SizedBox.shrink(),
-                  onTap: onBiometric,
                 ),
                 _PinButton(
+                  onTap: isDisabled ? null : () => onDigitTap('0'),
                   child: Text(
                     '0',
                     style: GoogleFonts.spaceGrotesk(
@@ -303,15 +304,14 @@ class _PinPad extends StatelessWidget {
                       color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
-                  onTap: isDisabled ? null : () => onDigitTap('0'),
                 ),
                 _PinButton(
+                  onTap: isDisabled ? null : onBackspace,
                   child: Icon(
                     Icons.backspace_outlined,
                     color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                     size: 24,
                   ),
-                  onTap: isDisabled ? null : onBackspace,
                 ),
               ],
             ),
@@ -326,6 +326,7 @@ class _PinPad extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: digits.map((digit) {
         return _PinButton(
+          onTap: isDisabled ? null : () => onDigitTap(digit),
           child: Text(
             digit,
             style: GoogleFonts.spaceGrotesk(
@@ -334,7 +335,6 @@ class _PinPad extends StatelessWidget {
               color: Theme.of(context).colorScheme.onSurface,
             ),
           ),
-          onTap: isDisabled ? null : () => onDigitTap(digit),
         );
       }).toList(),
     );

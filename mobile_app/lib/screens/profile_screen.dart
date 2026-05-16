@@ -59,7 +59,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
             ),
             const SizedBox(height: 4),
-            Text(
+            const Text(
               'Администратор',
               style: TextStyle(
                 color: AppColors.neutral,
@@ -103,7 +103,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             _buildSettingsTile(
               icon: Icons.info_outline,
               title: 'Версия',
-              trailing: Text(
+              trailing: const Text(
                 '1.0.0',
                 style: TextStyle(color: AppColors.neutral, fontSize: 14),
               ),

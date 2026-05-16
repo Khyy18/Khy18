@@ -131,7 +131,7 @@ class _AiChatScreenState extends ConsumerState<AiChatScreen> {
                           style: Theme.of(context).textTheme.headlineSmall,
                         ),
                         const SizedBox(height: 8),
-                        Text(
+                        const Text(
                           'Я помогу с расчётами и\nбухгалтерскими вопросами',
                           textAlign: TextAlign.center,
                           style: TextStyle(color: AppColors.neutral),

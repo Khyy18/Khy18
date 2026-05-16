@@ -244,12 +244,12 @@ class _PinPadSetup extends StatelessWidget {
                 onTap: () => onDigitTap('0'),
               ),
               _PinButtonSetup(
+                onTap: onBackspace,
                 child: Icon(
                   Icons.backspace_outlined,
                   color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
                   size: 24,
                 ),
-                onTap: onBackspace,
               ),
             ],
           ),

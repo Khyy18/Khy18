@@ -88,7 +88,7 @@ class _KbkScreenState extends ConsumerState<KbkScreen> {
                         Icon(Icons.search, size: 48,
                             color: AppColors.neutral.withOpacity(0.4)),
                         const SizedBox(height: 16),
-                        Text(
+                        const Text(
                           'Введите запрос для поиска',
                           style: TextStyle(color: AppColors.neutral),
                         ),
