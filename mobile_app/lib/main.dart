@@ -25,6 +25,7 @@ import 'screens/payment_screen.dart';
 import 'screens/ai_chat_screen.dart';
 import 'screens/lock_screen.dart';
 import 'screens/pin_setup_screen.dart';
+import 'screens/onboarding_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -58,6 +59,10 @@ class KindergartenApp extends ConsumerWidget {
         GoRoute(
           path: '/login',
           builder: (context, state) => const LoginScreen(),
+        ),
+        GoRoute(
+          path: '/onboarding',
+          builder: (context, state) => const OnboardingScreen(),
         ),
         GoRoute(
           path: '/',
@@ -199,9 +204,20 @@ class KindergartenApp extends ConsumerWidget {
       redirect: (context, state) {
         final isLoggedIn = authState.isAuthenticated;
         final isLoginRoute = state.matchedLocation == '/login';
+        final isOnboardingRoute = state.matchedLocation == '/onboarding';
 
         if (!isLoggedIn && !isLoginRoute) return '/login';
-        if (isLoggedIn && isLoginRoute) return '/';
+        if (isLoggedIn && isLoginRoute) {
+          final box = Hive.box<String>('settings');
+          final onboardingDone = box.get('onboarding_complete');
+          if (onboardingDone != 'true') return '/onboarding';
+          return '/';
+        }
+        if (isLoggedIn && state.matchedLocation == '/' ) {
+          final box = Hive.box<String>('settings');
+          final onboardingDone = box.get('onboarding_complete');
+          if (onboardingDone != 'true') return '/onboarding';
+        }
         return null;
       },
     );
