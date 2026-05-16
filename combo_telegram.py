@@ -1,10 +1,10 @@
-"""Telegram-терминал КОМБО-бота (funding + grid + momentum).
+"""Telegram-терминал КОМБО-бота (funding + grid).
 
-Единый интерфейс управления всеми тремя стратегиями.
+Единый интерфейс управления двумя стратегиями.
 Long polling через aiohttp. HTML-парсинг. Русский UI.
 
 Кнопки:
-  [▪ Статус] [📡 Funding] [▪ Grid] [📈 Momentum]
+  [▪ Статус] [📡 Funding] [▪ Grid]
   [⚙️ Allocate] [🛡 Kill] [! PANIC ALL]
 """
 
@@ -21,7 +21,6 @@ import combo_config as cfg
 import config
 import global_kill_switch
 import grid_engine
-import momentum_engine
 
 
 # ─── Константы UI ─────────────────────────────────────────────────────
@@ -35,7 +34,6 @@ _THIN_SPACE = "\u202f"  # узкий неразрывный пробел для 
 CB_STATUS = "cb:status"
 CB_FUNDING = "cb:funding"
 CB_GRID = "cb:grid"
-CB_MOMENTUM = "cb:momentum"
 CB_ALLOCATE = "cb:alloc"
 CB_KILL = "cb:kill"
 CB_PANIC_ALL = "cb:panic"
@@ -46,8 +44,6 @@ CB_KILL_RESUME_OK = "cb:kill_res_ok"
 CB_KILL_RESUME_NO = "cb:kill_res_no"
 CB_GRID_START = "cb:grid_on"
 CB_GRID_STOP = "cb:grid_off"
-CB_MOM_START = "cb:mom_on"
-CB_MOM_STOP = "cb:mom_off"
 
 
 # ─── Helper: _card ────────────────────────────────────────────────────
@@ -138,7 +134,6 @@ def combo_keyboard() -> dict[str, Any]:
             ],
             [
                 {"text": "▪ Grid", "callback_data": CB_GRID},
-                {"text": "\U0001f4c8 Momentum", "callback_data": CB_MOMENTUM},
             ],
             [
                 {"text": "\u2699\ufe0f Allocate", "callback_data": CB_ALLOCATE},
@@ -240,7 +235,6 @@ async def _handle_status(
     # Статус-индикаторы
     kill_icon = "\U0001f534" if ks["active"] else "\U0001f7e2"
     grid_icon = "\U0001f7e2" if state.get("grid", {}).get("enabled") else "\u26aa"
-    mom_icon = "\U0001f7e2" if state.get("momentum", {}).get("enabled") else "\u26aa"
     fund_icon = "\U0001f7e2" if state.get("global", {}).get("bot_running", True) else "\u26aa"
 
     equity = summary["current_equity"]
@@ -273,7 +267,6 @@ async def _handle_status(
     for name, icon, label in [
         ("funding", fund_icon, "Funding-арб"),
         ("grid", grid_icon, "Grid"),
-        ("momentum", mom_icon, "Momentum"),
     ]:
         s = summary["strategies"][name]
         pnl = s["pnl"]
@@ -289,15 +282,6 @@ async def _handle_status(
     total_arrow = "\u25b2+" if total_pnl >= 0 else "\u25bc\u2212"
     body.append("")
     body.append(f"Итого PnL: {total_arrow}{abs(total_pnl):.2f} USDT")
-
-    # Sparkline PnL (из signals_history momentum)
-    mom_state = state.get("momentum", {})
-    signals = mom_state.get("signals_history", [])
-    if signals:
-        pnl_values = [float(s.get("price", 0)) for s in signals[-8:]]
-        spark = _sparkline(pnl_values)
-        if spark:
-            body.append(f"Trend:     {spark}")
 
     return _card("Комбо-статус", "\U0001f4ca", body)
 
@@ -334,7 +318,7 @@ async def _handle_grid(
     body = [
         f"Состояние: {enabled_icon} {'активен' if status['enabled'] else 'выкл'}",
         f"Биржа: {status['exchange'].upper()}",
-        f"Уровней: {status['levels_per_side']} × 2 стороны",
+        f"Уровней: {status['levels_per_side']} x 2 стороны",
         f"Шаг: {status['step_pct']*100:.2f}%{actual_step}",
         f"Плечо: {status['leverage']}x",
         "",
@@ -371,68 +355,6 @@ async def _handle_grid(
     return text, kb
 
 
-async def _handle_momentum(
-    session: aiohttp.ClientSession, state: dict[str, Any]
-) -> tuple[str, dict[str, Any]]:
-    """Статус momentum-стратегии."""
-    status = momentum_engine.get_momentum_status(state)
-
-    enabled_icon = "\U0001f7e2" if status["enabled"] else "\U0001f534"
-    body = [
-        f"Состояние: {enabled_icon} {'активен' if status['enabled'] else 'выкл'}",
-        f"Биржа: {status['exchange'].upper()}",
-        f"EMA: {status['ema_fast']}/{status['ema_slow']} ({status['timeframe']}m)",
-        f"Плечо: {status['leverage']}x",
-        f"Макс позиций: {status['max_positions']}",
-        "",
-        f"Сделок: {status['total_trades']}",
-        f"Profit: {status['total_profit_usdt']:+.4f} USDT",
-    ]
-
-    # Открытые позиции
-    open_pos = status["open_positions"]
-    if open_pos:
-        body.append("")
-        body.append("── Открытые ──")
-        for p in open_pos:
-            side = p["side"]
-            sym = p["symbol"].replace("USDT", "")
-            entry = float(p["entry_price"])
-            direction = "LONG \u2197" if side == "LONG" else "SHORT \u2198"
-            held_h = (time.time() - float(p.get("opened_epoch", 0))) / 3600
-            body.append(
-                f"  {sym} {direction} @{entry:.2f} ({held_h:.1f}ч)"
-            )
-    else:
-        body.append("")
-        body.append("Открытых позиций нет.")
-
-    # Последние сигналы
-    signals = status.get("signals_history", [])[-5:]
-    if signals:
-        body.append("")
-        body.append("── Сигналы ──")
-        for s in reversed(signals):
-            sym = s["symbol"].replace("USDT", "")
-            sig = s["signal"]
-            price = s["price"]
-            arrow = "\u2197" if sig == "LONG" else "\u2198"
-            body.append(f"  {sym} {sig} {arrow} @{price:.2f}")
-
-    text = _card("Momentum", "\U0001f4c8", body)
-
-    if status["enabled"]:
-        kb = {"inline_keyboard": [
-            [{"text": "\u23f8 Стоп Momentum", "callback_data": CB_MOM_STOP}],
-        ]}
-    else:
-        kb = {"inline_keyboard": [
-            [{"text": "\u25b6\ufe0f Старт Momentum", "callback_data": CB_MOM_START}],
-        ]}
-
-    return text, kb
-
-
 async def _handle_allocate(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> str:
@@ -443,14 +365,13 @@ async def _handle_allocate(
     body = [
         f"Общий equity: ${_fmt_num(equity)}",
         "",
-        "── Распределение ──",
+        "-- Распределение --",
         "",
     ]
 
     for name, label in [
         ("funding", "Funding"),
         ("grid", "Grid"),
-        ("momentum", "Momentum"),
     ]:
         s = summary["strategies"][name]
         pct = s["alloc_pct"] * 100
@@ -460,8 +381,8 @@ async def _handle_allocate(
 
     body.append("")
     body.append("Изменить: отправьте команду")
-    body.append("/alloc 50 30 20")
-    body.append("(funding grid momentum, в %)")
+    body.append("/alloc 75 25")
+    body.append("(funding grid, в %)")
 
     return _card("Аллокация", "\u2699\ufe0f", body)
 
@@ -498,12 +419,11 @@ async def _handle_kill(
 async def _handle_panic_all(
     session: aiohttp.ClientSession, state: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
-    """PANIC ALL — подтверждение."""
+    """PANIC ALL -- подтверждение."""
     body = [
         "ВСЕ стратегии будут остановлены:",
         "  - Funding: close всех арб-пар",
         "  - Grid: отмена всех ордеров",
-        "  - Momentum: close всех позиций",
         "",
         "Kill-switch будет активирован.",
         "Подтвердите действие.",
@@ -533,21 +453,14 @@ async def _handle_panic_confirm(
         msg = await grid_engine.stop_grid(session, state)
         results.append(f"Grid: {msg}")
     except Exception as exc:  # noqa: BLE001
-        results.append(f"Grid: ошибка — {exc}")
+        results.append(f"Grid: ошибка -- {exc}")
 
-    # 3. Стоп momentum
-    try:
-        msg = await momentum_engine.stop_momentum(session, state)
-        results.append(f"Momentum: {msg}")
-    except Exception as exc:  # noqa: BLE001
-        results.append(f"Momentum: ошибка — {exc}")
-
-    # 4. Стоп funding (через оригинальный бот)
+    # 3. Стоп funding
     try:
         state.setdefault("global", {})["bot_running"] = False
         results.append("Funding: сканер остановлен")
     except Exception as exc:  # noqa: BLE001
-        results.append(f"Funding: ошибка — {exc}")
+        results.append(f"Funding: ошибка -- {exc}")
 
     return _card("PANIC ALL выполнен", "\U0001f6a8", results,
                  footer="Для возобновления снимите kill-switch.")
@@ -610,20 +523,6 @@ async def _handle_grid_stop(
     return _card("Grid", "\u23f8", [msg])
 
 
-async def _handle_mom_start(
-    session: aiohttp.ClientSession, state: dict[str, Any]
-) -> str:
-    msg = await momentum_engine.start_momentum(state)
-    return _card("Momentum", "\u25b6\ufe0f", [msg])
-
-
-async def _handle_mom_stop(
-    session: aiohttp.ClientSession, state: dict[str, Any]
-) -> str:
-    msg = await momentum_engine.stop_momentum(session, state)
-    return _card("Momentum", "\u23f8", [msg])
-
-
 
 # ─── Обработка текстовых команд ───────────────────────────────────────
 
@@ -632,40 +531,38 @@ async def _handle_text_command(
     state: dict[str, Any],
     text: str,
 ) -> Optional[str]:
-    """Обработать текстовую команду (например /alloc 50 30 20)."""
+    """Обработать текстовую команду (например /alloc 75 25)."""
     text = text.strip()
 
     if text.startswith("/alloc"):
         parts = text.split()
-        if len(parts) != 4:
+        if len(parts) != 3:
             return _card("Ошибка", "\u26a0\ufe0f", [
-                "Формат: /alloc F G M",
-                "Пример: /alloc 50 30 20",
-                "(funding grid momentum в %)",
+                "Формат: /alloc F G",
+                "Пример: /alloc 75 25",
+                "(funding grid в %)",
             ])
         try:
             f_pct = float(parts[1]) / 100
             g_pct = float(parts[2]) / 100
-            m_pct = float(parts[3]) / 100
         except ValueError:
             return _card("Ошибка", "\u26a0\ufe0f", ["Значения должны быть числами."])
 
-        err = capital_allocator.set_allocation(state, f_pct, g_pct, m_pct)
+        err = capital_allocator.set_allocation(state, f_pct, g_pct)
         if err:
             return _card("Ошибка", "\u26a0\ufe0f", [err])
 
         return _card("Аллокация обновлена", "\u2705", [
             f"Funding:  {f_pct*100:.0f}%",
             f"Grid:     {g_pct*100:.0f}%",
-            f"Momentum: {m_pct*100:.0f}%",
         ])
 
     if text in ("/start", "/help", "/menu"):
         return _card("Комбо-бот", "\U0001f916", [
-            "Funding-арб + Grid + Momentum",
+            "Funding-арб + Grid",
             "",
             "Используйте кнопки ниже.",
-            "Команды: /alloc F G M",
+            "Команды: /alloc F G",
         ])
 
     return None
@@ -682,13 +579,10 @@ _SIMPLE_HANDLERS = {
     CB_KILL_RESUME_NO: _handle_kill_resume_no,
     CB_GRID_START: _handle_grid_start,
     CB_GRID_STOP: _handle_grid_stop,
-    CB_MOM_START: _handle_mom_start,
-    CB_MOM_STOP: _handle_mom_stop,
 }
 
 _TUPLE_HANDLERS = {
     CB_GRID: _handle_grid,
-    CB_MOMENTUM: _handle_momentum,
     CB_ALLOCATE: _handle_allocate,
     CB_KILL: _handle_kill,
     CB_PANIC_ALL: _handle_panic_all,
@@ -719,7 +613,7 @@ async def process_update(
                 reply_markup=combo_keyboard(),
             )
         else:
-            # Любое сообщение — показываем меню
+            # Любое сообщение -- показываем меню
             await send_message(
                 session,
                 _card("Комбо-бот", "\U0001f916", ["Используйте кнопки ниже."]),

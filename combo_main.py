@@ -1,13 +1,12 @@
-"""Точка входа КОМБО-бота: funding-арб + grid + momentum.
+"""Точка входа КОМБО-бота: funding-арб + grid.
 
-Один процесс, один Telegram, три стратегии параллельно.
+Один процесс, один Telegram, две стратегии параллельно.
 asyncio event loop с тиками каждой стратегии.
 
 Архитектура:
   - Funding-арб: оригинальный движок из main.py (scan + executor).
   - Grid: grid_engine.grid_tick() раз в GRID_REBALANCE_INTERVAL_SEC.
-  - Momentum: momentum_engine.momentum_tick() раз в MOMENTUM_TICK_INTERVAL_SEC.
-  - Telegram: combo_telegram.polling_loop() — long polling.
+  - Telegram: combo_telegram.polling_loop() -- long polling.
   - Global kill-switch: проверяется каждый тик.
 
 Принципы:
@@ -35,7 +34,6 @@ import combo_telegram
 import config
 import global_kill_switch
 import grid_engine
-import momentum_engine
 import state_persistence
 
 
@@ -90,9 +88,6 @@ def _init_state() -> dict[str, Any]:
 
     # Grid
     grid_engine.init_grid_state(state)
-
-    # Momentum
-    momentum_engine.init_momentum_state(state)
 
     return state
 
@@ -176,7 +171,7 @@ async def _funding_executor_tick(
         closed = await arb_executor.monitor_and_maybe_close(
             session, _FUNDING_ADAPTERS, snapshots, None
         )
-        # #3: Sync funding PnL в capital_allocator
+        # Sync funding PnL в capital_allocator
         if closed:
             try:
                 recent = arb_storage.get_recent_closed(limit=5)
@@ -263,15 +258,11 @@ async def _main_loop(
                         [reason, "", "Все стратегии остановлены."],
                     ),
                 )
-                # Стопим всё
+                # Стопим grid
                 try:
                     await grid_engine.stop_grid(session, state)
                 except Exception as exc:  # noqa: BLE001
                     print(f"[COMBO] grid stop on kill: {exc}")
-                try:
-                    await momentum_engine.stop_momentum(session, state)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[COMBO] momentum stop on kill: {exc}")
 
             # 2. Funding-тики (только если kill не активен)
             if not global_kill_switch.is_kill_active(state):
@@ -317,26 +308,10 @@ async def _main_loop(
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMBO] grid_tick exception: {exc}")
 
-            # 4. Momentum-тик
-            try:
-                mom_result = await momentum_engine.momentum_tick(session, state)
-                if mom_result.get("errors"):
-                    for err in mom_result["errors"]:
-                        print(f"[COMBO] momentum error: {err}")
-                # Нотификации об открытии/закрытии momentum
-                processed = mom_result.get("processed", [])
-                for msg in processed:
-                    if "ОТКРЫТО" in msg or "ЗАКРЫТО" in msg:
-                        await _notify(session, combo_telegram._card(
-                            "Momentum", "\U0001f4c8", [msg]
-                        ))
-            except Exception as exc:  # noqa: BLE001
-                print(f"[COMBO] momentum_tick exception: {exc}")
-
-            # 5. Обновляем HWM
+            # 4. Обновляем HWM
             capital_allocator.update_hwm(state)
 
-            # 5.5: Grid unrealized loss check
+            # 4.5: Grid unrealized loss check
             try:
                 import runtime_state as _rs
                 # Собираем текущие цены по grid-символам
@@ -347,7 +322,7 @@ async def _main_loop(
                     if mp > 0:
                         grid_prices[sym] = mp
                 if grid_prices and _rs.should_force_close_grid(state, grid_prices):
-                    print("[COMBO] Grid unrealized loss limit exceeded — force close")
+                    print("[COMBO] Grid unrealized loss limit exceeded -- force close")
                     try:
                         msg = await grid_engine.stop_grid(session, state)
                         await _notify(session, combo_telegram._card(
@@ -363,7 +338,7 @@ async def _main_loop(
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMBO] grid unrealized check: {exc}")
 
-            # 5.6: Performance monitoring (rolling winrate alert)
+            # 4.6: Performance monitoring (rolling winrate alert)
             try:
                 import runtime_state as _rs
                 perf_alert = _rs.check_performance_degradation(state)
@@ -374,7 +349,7 @@ async def _main_loop(
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMBO] perf monitoring: {exc}")
 
-            # 5.7: Announcement monitor (every 10 min)
+            # 4.7: Announcement monitor (every 10 min)
             try:
                 import announcement_monitor
                 g = state.get("global", {})
@@ -391,10 +366,10 @@ async def _main_loop(
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMBO] announcement monitor: {exc}")
 
-            # 6. Persist state
+            # 5. Persist state
             await _persist_tick(state)
 
-            # #9: Heartbeat в Telegram (раз в HEARTBEAT_INTERVAL_SEC)
+            # Heartbeat в Telegram (раз в HEARTBEAT_INTERVAL_SEC)
             g = state.get("global", {})
             last_hb = float(g.get("last_heartbeat_epoch", 0))
             if (time.time() - last_hb) >= cfg.HEARTBEAT_INTERVAL_SEC:
@@ -406,11 +381,10 @@ async def _main_loop(
                     "Heartbeat", "\U0001f49a", [
                         f"Equity: ${eq:.2f}  |  DD: {dd*100:.1f}%",
                         f"Grid cycles: {state.get('grid', {}).get('total_cycles', 0)}",
-                        f"Mom trades: {state.get('momentum', {}).get('total_trades', 0)}",
                     ]
                 ))
 
-            # #7: Сброс daily PnL counters на границе UTC-суток
+            # Сброс daily PnL counters на границе UTC-суток
             from datetime import datetime, timezone
             now_dt = datetime.now(tz=timezone.utc)
             last_day = g.get("_daily_reset_day", "")
@@ -418,7 +392,6 @@ async def _main_loop(
             if today != last_day:
                 g["_daily_reset_day"] = today
                 g["daily_pnl_grid"] = 0.0
-                g["daily_pnl_momentum"] = 0.0
                 g["daily_pnl_funding"] = 0.0
 
         except Exception as exc:  # noqa: BLE001
@@ -469,7 +442,7 @@ async def main() -> None:
         print("[COMBO] Ошибки конфигурации:")
         for err in errors:
             print(f"  - {err}")
-        print("[COMBO] Запуск с ошибками — проверьте .env")
+        print("[COMBO] Запуск с ошибками -- проверьте .env")
 
     # Инициализация
     state = _init_state()
@@ -478,8 +451,7 @@ async def main() -> None:
     _init_funding_adapters()
 
     print(f"[COMBO] Стратегии: funding={cfg.ALLOC_FUNDING_PCT*100:.0f}% "
-          f"grid={cfg.ALLOC_GRID_PCT*100:.0f}% "
-          f"momentum={cfg.ALLOC_MOMENTUM_PCT*100:.0f}%")
+          f"grid={cfg.ALLOC_GRID_PCT*100:.0f}%")
     print(f"[COMBO] Капитал: ${cfg.TOTAL_CAPITAL_USDT}")
     print(f"[COMBO] Kill порог: {cfg.GLOBAL_MAX_DRAWDOWN_PCT*100:.0f}%")
 
@@ -493,7 +465,6 @@ async def main() -> None:
                 f"Капитал: ${cfg.TOTAL_CAPITAL_USDT:.0f}",
                 f"Funding: {cfg.ALLOC_FUNDING_PCT*100:.0f}%",
                 f"Grid: {cfg.ALLOC_GRID_PCT*100:.0f}%",
-                f"Momentum: {cfg.ALLOC_MOMENTUM_PCT*100:.0f}%",
                 f"Kill порог: {cfg.GLOBAL_MAX_DRAWDOWN_PCT*100:.0f}%",
             ]),
         )

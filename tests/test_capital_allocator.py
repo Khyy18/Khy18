@@ -21,23 +21,19 @@ def test_init_allocator_state():
     assert "capital_allocation" in g
     assert "strategy_pnl" in g
     assert "hwm_equity" in g
-    assert g["capital_allocation"]["funding"] == 0.70
+    assert g["capital_allocation"]["funding"] == 0.75
     assert g["capital_allocation"]["grid"] == 0.25
-    assert g["capital_allocation"]["momentum"] == 0.05
 
 
 def test_get_strategy_capital():
     """Правильно считает долю капитала."""
     state = _make_state()
-    # total_capital = 550, funding = 70%
+    # total_capital = 550, funding = 75%
     cap = capital_allocator.get_strategy_capital(state, "funding")
-    assert abs(cap - 385.0) < 0.01
+    assert abs(cap - 412.5) < 0.01
 
     cap_grid = capital_allocator.get_strategy_capital(state, "grid")
     assert abs(cap_grid - 137.5) < 0.01
-
-    cap_mom = capital_allocator.get_strategy_capital(state, "momentum")
-    assert abs(cap_mom - 27.5) < 0.01
 
 
 def test_get_current_equity():
@@ -85,19 +81,19 @@ def test_set_allocation():
     state = _make_state()
 
     # Нормальный случай
-    err = capital_allocator.set_allocation(state, 0.40, 0.40, 0.20)
+    err = capital_allocator.set_allocation(state, 0.60, 0.40)
     assert err is None
     alloc = state["global"]["capital_allocation"]
-    assert alloc["funding"] == 0.40
+    assert alloc["funding"] == 0.60
     assert alloc["grid"] == 0.40
 
     # Сумма > 1
-    err = capital_allocator.set_allocation(state, 0.60, 0.40, 0.20)
+    err = capital_allocator.set_allocation(state, 0.60, 0.50)
     assert err is not None
     assert "1.0" in err
 
     # Отрицательная доля
-    err = capital_allocator.set_allocation(state, -0.1, 0.5, 0.5)
+    err = capital_allocator.set_allocation(state, -0.1, 0.5)
     assert err is not None
 
 

@@ -6,7 +6,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import capital_allocator
 import grid_engine
-import momentum_engine
 import combo_telegram
 
 
@@ -14,7 +13,6 @@ def _make_state() -> dict:
     state: dict = {}
     capital_allocator.init_allocator_state(state)
     grid_engine.init_grid_state(state)
-    momentum_engine.init_momentum_state(state)
     state["global"]["bot_running"] = True
     return state
 
@@ -36,7 +34,7 @@ def test_card_with_footer():
 
 
 def test_card_without_footer():
-    """_card без footer — нет <i> тега."""
+    """_card без footer -- нет <i> тега."""
     result = combo_telegram._card("T", "X", ["body"])
     assert "<i>" not in result
 
@@ -84,14 +82,24 @@ def test_combo_keyboard():
     assert any("Статус" in t for t in texts)
     assert any("Funding" in t for t in texts)
     assert any("Grid" in t for t in texts)
-    assert any("Momentum" in t for t in texts)
     assert any("Allocate" in t for t in texts)
     assert any("Kill" in t for t in texts)
     assert any("PANIC" in t for t in texts)
 
 
+def test_no_momentum_in_keyboard():
+    """Клавиатура НЕ содержит кнопку Momentum."""
+    kb = combo_telegram.combo_keyboard()
+    rows = kb["inline_keyboard"]
+    texts = []
+    for row in rows:
+        for btn in row:
+            texts.append(btn["text"])
+    assert not any("Momentum" in t for t in texts)
+
+
 def test_is_authorized_no_token():
-    """Нет chat_id — не авторизован."""
+    """Нет chat_id -- не авторизован."""
     import config
     old = config.TELEGRAM_CHAT_ID
     config.TELEGRAM_CHAT_ID = 0
@@ -101,7 +109,7 @@ def test_is_authorized_no_token():
 
 
 def test_is_authorized_correct():
-    """Правильный chat_id — авторизован."""
+    """Правильный chat_id -- авторизован."""
     import config
     old = config.TELEGRAM_CHAT_ID
     config.TELEGRAM_CHAT_ID = 999
@@ -111,7 +119,7 @@ def test_is_authorized_correct():
 
 
 def test_is_authorized_wrong():
-    """Чужой chat_id — не авторизован."""
+    """Чужой chat_id -- не авторизован."""
     import config
     old = config.TELEGRAM_CHAT_ID
     config.TELEGRAM_CHAT_ID = 999
@@ -128,4 +136,3 @@ def test_handler_dispatch_tables():
     assert combo_telegram.CB_FUNDING in all_cbs
     assert combo_telegram.CB_PANIC_CONFIRM in all_cbs
     assert combo_telegram.CB_GRID in all_cbs or combo_telegram.CB_GRID in combo_telegram._TUPLE_HANDLERS
-    assert combo_telegram.CB_MOMENTUM in all_cbs or combo_telegram.CB_MOMENTUM in combo_telegram._TUPLE_HANDLERS

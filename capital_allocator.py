@@ -1,7 +1,7 @@
 """Аллокатор капитала между стратегиями.
 
 Отвечает за:
-  - Распределение общего equity по стратегиям (funding/grid/momentum).
+  - Распределение общего equity по стратегиям (funding/grid).
   - Пересчёт при изменении аллокаций через Telegram.
   - Учёт PnL каждой стратегии отдельно и совокупно.
   - Вычисление drawdown для глобального kill-switch.
@@ -19,7 +19,7 @@ import combo_config as cfg
 def init_allocator_state(state: dict[str, Any]) -> None:
     """Инициализировать секцию аллокатора в state["global"].
 
-    Вызывается один раз при старте. Если секция уже есть — не трогаем
+    Вызывается один раз при старте. Если секция уже есть -- не трогаем
     (перезапуск не сбрасывает PnL).
     """
     g = state.setdefault("global", {})
@@ -32,13 +32,11 @@ def init_allocator_state(state: dict[str, Any]) -> None:
     alloc = g.setdefault("capital_allocation", {})
     alloc.setdefault("funding", cfg.ALLOC_FUNDING_PCT)
     alloc.setdefault("grid", cfg.ALLOC_GRID_PCT)
-    alloc.setdefault("momentum", cfg.ALLOC_MOMENTUM_PCT)
 
     # PnL по стратегиям (накопительный)
     pnl = g.setdefault("strategy_pnl", {})
     pnl.setdefault("funding", 0.0)
     pnl.setdefault("grid", 0.0)
-    pnl.setdefault("momentum", 0.0)
 
     # High-water mark для drawdown
     if "hwm_equity" not in g:
@@ -57,7 +55,7 @@ def get_strategy_capital(state: dict[str, Any], strategy: str) -> float:
     Использует get_current_equity() (capital + PnL), а не константу
     total_capital. Так при росте/падении equity стратегии масштабируются.
 
-    strategy: "funding" | "grid" | "momentum"
+    strategy: "funding" | "grid"
     """
     equity = get_current_equity(state)
     g = state.get("global", {})
@@ -108,7 +106,7 @@ def update_hwm(state: dict[str, Any]) -> None:
 def record_pnl(state: dict[str, Any], strategy: str, amount: float) -> None:
     """Записать PnL для стратегии (инкрементально).
 
-    strategy: "funding" | "grid" | "momentum"
+    strategy: "funding" | "grid"
     amount: может быть отрицательным (убыток).
     """
     g = state.setdefault("global", {})
@@ -124,19 +122,17 @@ def set_allocation(
     state: dict[str, Any],
     funding: float,
     grid: float,
-    momentum: float,
 ) -> str | None:
     """Изменить аллокации. Возвращает None при успехе, строку ошибки иначе."""
-    total = funding + grid + momentum
+    total = funding + grid
     if total > 1.01:
         return f"Сумма долей ({total:.2f}) > 1.0"
-    if any(x < 0 for x in (funding, grid, momentum)):
+    if any(x < 0 for x in (funding, grid)):
         return "Доли не могут быть отрицательными"
     g = state.setdefault("global", {})
     alloc = g.setdefault("capital_allocation", {})
     alloc["funding"] = funding
     alloc["grid"] = grid
-    alloc["momentum"] = momentum
     return None
 
 
@@ -160,6 +156,6 @@ def get_allocation_summary(state: dict[str, Any]) -> dict[str, Any]:
                 "alloc_usdt": equity * float(alloc.get(name, 0.0)),
                 "pnl": float(pnl.get(name, 0.0)),
             }
-            for name in ("funding", "grid", "momentum")
+            for name in ("funding", "grid")
         },
     }

@@ -318,7 +318,7 @@ async def _process_symbol(
         if cfg.GRID_ATR_MULTIPLIER > 0:
             klines = await adapter.get_klines(session, symbol, "15", limit=20)
             if klines and len(klines) > 15:
-                from momentum_engine import calc_atr
+                from utils.indicators import calc_atr
                 atr = calc_atr(klines, period=14)
                 if mid_price > 0 and atr > 0:
                     atr_step = (atr / mid_price) * cfg.GRID_ATR_MULTIPLIER
@@ -331,7 +331,7 @@ async def _process_symbol(
         if cfg.GRID_TREND_BIAS_LEVELS > 0:
             klines_4h = await adapter.get_klines(session, symbol, "240", limit=60)
             if klines_4h and len(klines_4h) >= 50:
-                from momentum_engine import calc_ema
+                from utils.indicators import calc_ema
                 closes_4h = [float(k["close"]) for k in klines_4h]
                 ema50 = calc_ema(closes_4h, 50)
                 if ema50 and mid_price > ema50[-1]:

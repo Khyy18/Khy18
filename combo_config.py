@@ -1,7 +1,7 @@
-"""Конфигурация КОМБО-бота (funding + grid + momentum).
+"""Конфигурация КОМБО-бота (funding + grid).
 
-Расширяет config.py дополнительными параметрами для grid и momentum
-стратегий. Глобальные параметры (Telegram, биржи) берутся из config.py.
+Расширяет config.py дополнительными параметрами для grid-стратегии.
+Глобальные параметры (Telegram, биржи) берутся из config.py.
 """
 
 from __future__ import annotations
@@ -12,15 +12,10 @@ import config  # noqa: F401 — base config, все ключи доступны 
 
 
 # ─── Аллокация капитала ───────────────────────────────────────────────
-# Funding-арб 70%: delta-neutral, 15-30% APR, стабильный доход.
+# Funding-арб 75%: delta-neutral, 15-30% APR, стабильный доход.
 # Grid 25%: зарабатывает в боковике (70-80% времени).
-# Momentum 5%: спекулятивный модуль, ОТКЛЮЧЁН по умолчанию.
-# Бэктест 180 дней показал: MR убыточна. Включать только если
-# подтверждено на testnet. Equity curve protection ставит на паузу
-# при losing streak автоматически.
-ALLOC_FUNDING_PCT = float(os.getenv("ALLOC_FUNDING_PCT", "0.70") or 0.70)
+ALLOC_FUNDING_PCT = float(os.getenv("ALLOC_FUNDING_PCT", "0.75") or 0.75)
 ALLOC_GRID_PCT = float(os.getenv("ALLOC_GRID_PCT", "0.25") or 0.25)
-ALLOC_MOMENTUM_PCT = float(os.getenv("ALLOC_MOMENTUM_PCT", "0.05") or 0.05)
 
 # Стартовый капитал (USDT). Если 0 — берётся из суммы балансов на биржах.
 TOTAL_CAPITAL_USDT = float(os.getenv("TOTAL_CAPITAL_USDT", "550") or 550)
@@ -66,57 +61,6 @@ GRID_ENABLED = os.getenv("GRID_ENABLED", "true").strip().lower() in (
 )
 
 
-# ─── Momentum-стратегия ───────────────────────────────────────────────
-# Символы для momentum.
-MOMENTUM_SYMBOLS: list[str] = [
-    s.strip() for s in os.getenv("MOMENTUM_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT,DOGEUSDT").split(",") if s.strip()
-]
-
-# Биржа для momentum.
-MOMENTUM_EXCHANGE = os.getenv("MOMENTUM_EXCHANGE", "bybit").strip().lower()
-
-# EMA параметры.
-MOMENTUM_EMA_FAST = int(os.getenv("MOMENTUM_EMA_FAST", "9") or 9)
-MOMENTUM_EMA_SLOW = int(os.getenv("MOMENTUM_EMA_SLOW", "21") or 21)
-
-# Плечо.
-MOMENTUM_LEVERAGE = int(os.getenv("MOMENTUM_LEVERAGE", "5") or 5)
-
-# Таймфрейм для свечей.
-MOMENTUM_TIMEFRAME = os.getenv("MOMENTUM_TIMEFRAME", "15").strip()  # минуты
-
-# Стоп-лосс в процентах от входа.
-# 2.5% — оптимально для BTC 15m (не выбивает на шуме, ниже ATR*3)
-MOMENTUM_STOP_LOSS_PCT = float(os.getenv("MOMENTUM_STOP_LOSS_PCT", "0.025") or 0.025)
-
-# Тейк-профит в процентах от входа.
-# 0 = без TP, прибыль фиксируется trailing stop (позволяет тренду бежать)
-MOMENTUM_TAKE_PROFIT_PCT = float(os.getenv("MOMENTUM_TAKE_PROFIT_PCT", "0.0") or 0.0)
-
-# Период проверки сигналов (секунды).
-MOMENTUM_TICK_INTERVAL_SEC = float(os.getenv("MOMENTUM_TICK_INTERVAL_SEC", "60") or 60)
-
-# Максимум одновременных позиций по momentum.
-MOMENTUM_MAX_POSITIONS = int(os.getenv("MOMENTUM_MAX_POSITIONS", "2") or 2)
-
-# Включена ли momentum-стратегия.
-MOMENTUM_ENABLED = os.getenv("MOMENTUM_ENABLED", "false").strip().lower() in (
-    "1", "true", "yes", "on",
-)
-
-# Минимальная волатильность (ATR/price) для входа. Фильтрует боковик.
-# 0.4% ATR от цены — если меньше, не входим (слишком спокойно).
-MOMENTUM_MIN_ATR_PCT = float(os.getenv("MOMENTUM_MIN_ATR_PCT", "0.004") or 0.004)
-
-# Trailing stop: после достижения TRAIL_ACTIVATE_PCT прибыли — SL
-# подтягивается на расстоянии TRAIL_DISTANCE_PCT от текущей цены.
-# 0 = trailing отключён.
-# 1.2% — агрессивный trailing для быстрой фиксации
-MOMENTUM_TRAIL_ACTIVATE_PCT = float(os.getenv("MOMENTUM_TRAIL_ACTIVATE_PCT", "0.012") or 0.012)
-# 0.8% — расстояние от цены до trailing SL
-MOMENTUM_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_TRAIL_DISTANCE_PCT", "0.008") or 0.008)
-
-
 # ─── Grid: защита от unrealized loss ───────────────────────────────────
 # Если суммарный unrealized loss по grid (все filled buy без matched sell)
 # превышает этот % от equity → force close all grid + rebuild.
@@ -126,16 +70,6 @@ GRID_MAX_UNREALIZED_LOSS_PCT = float(os.getenv("GRID_MAX_UNREALIZED_LOSS_PCT", "
 # Если spread (ask - bid) / mid > порога → не размещать ордера (ликвидность
 # испарилась, maintenance, flash crash). 0.005 = 0.5%.
 MAX_SPREAD_PCT = float(os.getenv("MAX_SPREAD_PCT", "0.005") or 0.005)
-
-# ─── Correlation guard ─────────────────────────────────────────────────
-# Максимальное суммарное количество OPEN позиций momentum по коррелированным
-# символам (BTC+ETH считаются одной группой). 0 = выключено.
-CORRELATION_MAX_SAME_DIRECTION = int(os.getenv("CORRELATION_MAX_SAME_DIRECTION", "1") or 1)
-
-# Группы коррелированных символов (одна группа = одно направление макс.)
-CORRELATION_GROUPS: list[list[str]] = [
-    ["BTCUSDT", "ETHUSDT"],
-]
 
 # ─── Performance monitoring ────────────────────────────────────────────
 # Rolling window (количество сделок) для расчёта winrate.
@@ -154,38 +88,10 @@ GRID_ATR_MULTIPLIER = float(os.getenv("GRID_ATR_MULTIPLIER", "1.5") or 1.5)
 GRID_TREND_BIAS_LEVELS = int(os.getenv("GRID_TREND_BIAS_LEVELS", "2") or 2)
 
 
-# ─── Momentum: confirmation bar ───────────────────────────────────────
-# Если True — вход не на свече кросса, а на следующей (если цена всё ещё
-# подтверждает направление).
-# false — тесты показывают +4.5% без vs -1.4% с confirmation
-MOMENTUM_CONFIRMATION_BAR = os.getenv("MOMENTUM_CONFIRMATION_BAR", "false").strip().lower() in (
-    "1", "true", "yes", "on",
-)
-
-
-# ─── Momentum: Equity curve protection ────────────────────────────────
-# If True, pause trading after losing streak (last 3 trades negative AND cumulative last 10 negative)
-MOMENTUM_EQUITY_CURVE_PROTECTION = os.getenv("MOMENTUM_EQUITY_CURVE_PROTECTION", "true").strip().lower() in ("1", "true", "yes", "on")
-
-# ─── Momentum: адаптивные стопы и фильтры ─────────────────────────────
-# ATR-based SL/TP: если True — SL и TP рассчитываются из ATR * multiplier.
-MOMENTUM_USE_ATR_STOPS = os.getenv("MOMENTUM_USE_ATR_STOPS", "true").strip().lower() in ("1", "true", "yes", "on")
-MOMENTUM_ATR_SL_MULT = float(os.getenv("MOMENTUM_ATR_SL_MULT", "2.0") or 2.0)
-MOMENTUM_ATR_TP_MULT = float(os.getenv("MOMENTUM_ATR_TP_MULT", "3.0") or 3.0)
-
-# Минимальный ADX для входа (нет тренда = нет входа).
-MOMENTUM_MIN_ADX = float(os.getenv("MOMENTUM_MIN_ADX", "20.0") or 20.0)
-
-# RSI фильтр: не входить в LONG если RSI > overbought, не SHORT если RSI < oversold.
-MOMENTUM_RSI_OVERBOUGHT = float(os.getenv("MOMENTUM_RSI_OVERBOUGHT", "70.0") or 70.0)
-MOMENTUM_RSI_OVERSOLD = float(os.getenv("MOMENTUM_RSI_OVERSOLD", "30.0") or 30.0)
-
-
 # ─── Риск-менеджмент ──────────────────────────────────────────────────
 # Per-strategy daily loss limit (доля от equity). 0 = выключено.
 # Если стратегия потеряла больше лимита за UTC-сутки — пауза до завтра.
 RISK_DAILY_LOSS_GRID_PCT = float(os.getenv("RISK_DAILY_LOSS_GRID_PCT", "0.02") or 0.02)
-RISK_DAILY_LOSS_MOMENTUM_PCT = float(os.getenv("RISK_DAILY_LOSS_MOMENTUM_PCT", "0.03") or 0.03)
 
 # Max exposure per symbol: суммарная нетто-позиция по одному символу
 # не должна превышать этот процент от equity (все стратегии вместе).
@@ -203,55 +109,9 @@ MACRO_BLACKOUT_BEFORE_MIN = int(os.getenv("MACRO_BLACKOUT_BEFORE_MIN", "30") or 
 MACRO_BLACKOUT_AFTER_MIN = int(os.getenv("MACRO_BLACKOUT_AFTER_MIN", "60") or 60)
 MACRO_CALENDAR_ENABLED = os.getenv("MACRO_CALENDAR_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 
-# --- Momentum: Multi-timeframe ---
-MOMENTUM_MTF_ENABLED = os.getenv("MOMENTUM_MTF_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
-MOMENTUM_MTF_TIMEFRAME = os.getenv("MOMENTUM_MTF_TIMEFRAME", "60").strip()
-
-# --- Momentum: Partial close ---
-MOMENTUM_PARTIAL_CLOSE_ENABLED = os.getenv("MOMENTUM_PARTIAL_CLOSE_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
-MOMENTUM_PARTIAL_CLOSE_PCT = float(os.getenv("MOMENTUM_PARTIAL_CLOSE_PCT", "0.5") or 0.5)
-
-# --- Momentum: Session filter ---
-MOMENTUM_SESSION_FILTER_ENABLED = os.getenv("MOMENTUM_SESSION_FILTER_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
-MOMENTUM_SESSION_START_UTC = int(os.getenv("MOMENTUM_SESSION_START_UTC", "8") or 8)
-MOMENTUM_SESSION_END_UTC = int(os.getenv("MOMENTUM_SESSION_END_UTC", "22") or 22)
-
 # --- Grid: Profit reinvestment ---
 GRID_REINVEST_ENABLED = os.getenv("GRID_REINVEST_ENABLED", "true").strip().lower() in ("1", "true", "yes", "on")
 GRID_REINVEST_PCT = float(os.getenv("GRID_REINVEST_PCT", "0.7") or 0.7)
-
-# --- Momentum: Regime-adaptive parameters ---
-
-# Mean-Reversion RSI thresholds (used when ADX < ADX_RANGE_THRESHOLD)
-MOMENTUM_MR_RSI_OVERSOLD = float(os.getenv("MOMENTUM_MR_RSI_OVERSOLD", "25") or 25)
-# 75 = backtest +3.7% vs +1.3% with 78
-MOMENTUM_MR_RSI_OVERBOUGHT = float(os.getenv("MOMENTUM_MR_RSI_OVERBOUGHT", "75") or 75)
-MOMENTUM_MR_SL_PCT = float(os.getenv("MOMENTUM_MR_SL_PCT", "0.015") or 0.015)
-MOMENTUM_MR_TP_RSI_EXIT = float(os.getenv("MOMENTUM_MR_TP_RSI_EXIT", "55") or 55)
-MOMENTUM_MR_MAX_HOLD_BARS = int(os.getenv("MOMENTUM_MR_MAX_HOLD_BARS", "20") or 20)
-
-# 0 = отключён. Volume filter срезает прибыльные сделки больше чем убыточные. Включить если нужна max safety (1.2).
-MOMENTUM_MR_MIN_VOL_RATIO = float(os.getenv("MOMENTUM_MR_MIN_VOL_RATIO", "0") or 0)
-# 0 = отключён. При > 0 фильтрует входы с широким BB. Рекомендуется 0.08-0.10 для max safety.
-MOMENTUM_MR_MAX_BB_WIDTH = float(os.getenv("MOMENTUM_MR_MAX_BB_WIDTH", "0") or 0)
-
-# RSI momentum filter: не входить если delta RSI за 3 бара > порога (breakdown detection)
-# -15 = мягкий (пропускает только сильный breakdown). -10 = жёсткий.
-MOMENTUM_MR_RSI_DELTA_THRESHOLD = float(os.getenv("MOMENTUM_MR_RSI_DELTA_THRESHOLD", "20") or 20)
-
-# Breakout parameters (used when ADX >= ADX_TREND_THRESHOLD)
-MOMENTUM_BO_LOOKBACK = int(os.getenv("MOMENTUM_BO_LOOKBACK", "20") or 20)
-MOMENTUM_BO_MIN_VOL_RATIO = float(os.getenv("MOMENTUM_BO_MIN_VOL_RATIO", "1.5") or 1.5)
-MOMENTUM_BO_SL_PCT = float(os.getenv("MOMENTUM_BO_SL_PCT", "0.02") or 0.02)
-MOMENTUM_BO_TRAIL_ACTIVATE_PCT = float(os.getenv("MOMENTUM_BO_TRAIL_ACTIVATE_PCT", "0.015") or 0.015)
-MOMENTUM_BO_TRAIL_DISTANCE_PCT = float(os.getenv("MOMENTUM_BO_TRAIL_DISTANCE_PCT", "0.01") or 0.01)
-MOMENTUM_BO_MAX_HOLD_BARS = int(os.getenv("MOMENTUM_BO_MAX_HOLD_BARS", "96") or 96)
-
-# ADX thresholds for regime routing
-# ADX < 25: mean-reversion (бэктест: +3.7% за 60д, 65% WR)
-MOMENTUM_ADX_RANGE_THRESHOLD = float(os.getenv("MOMENTUM_ADX_RANGE_THRESHOLD", "25") or 25)
-# ADX >= 50: breakout (отключён по умолчанию — ложные пробои убыточны на choppy рынке)
-MOMENTUM_ADX_TREND_THRESHOLD = float(os.getenv("MOMENTUM_ADX_TREND_THRESHOLD", "50") or 50)
 
 
 # ─── Валидация ────────────────────────────────────────────────────────
@@ -265,7 +125,7 @@ def validate_combo_config() -> list[str]:
     errors.extend(base_errors)
 
     # Проверка аллокации
-    total_alloc = ALLOC_FUNDING_PCT + ALLOC_GRID_PCT + ALLOC_MOMENTUM_PCT
+    total_alloc = ALLOC_FUNDING_PCT + ALLOC_GRID_PCT
     if total_alloc > 1.01:
         errors.append(
             f"Сумма аллокаций ({total_alloc:.2f}) превышает 100%"
@@ -279,14 +139,5 @@ def validate_combo_config() -> list[str]:
             errors.append("GRID_LEVELS должен быть >= 2")
         if GRID_STEP_PCT <= 0 or GRID_STEP_PCT > 0.05:
             errors.append("GRID_STEP_PCT должен быть в (0, 0.05]")
-
-    # Проверка momentum
-    if MOMENTUM_ENABLED:
-        if not MOMENTUM_SYMBOLS:
-            errors.append("MOMENTUM_SYMBOLS пусто, но MOMENTUM_ENABLED=true")
-        if MOMENTUM_EMA_FAST >= MOMENTUM_EMA_SLOW:
-            errors.append("MOMENTUM_EMA_FAST должен быть < MOMENTUM_EMA_SLOW")
-        if MOMENTUM_LEVERAGE < 1 or MOMENTUM_LEVERAGE > 10:
-            errors.append("MOMENTUM_LEVERAGE должен быть в [1, 10]")
 
     return errors

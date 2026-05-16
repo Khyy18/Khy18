@@ -173,7 +173,7 @@ def classify_regime(
             "confidence": float (0-1),
         }
     """
-    from momentum_engine import calc_atr
+    from utils.indicators import calc_atr
 
     closes = [float(k["close"]) for k in klines]
     current_price = closes[-1] if closes else 0.0

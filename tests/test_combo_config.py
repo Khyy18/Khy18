@@ -8,15 +8,14 @@ import combo_config as cfg
 
 
 def test_default_allocations():
-    """Дефолтные аллокации = 70/25/5."""
-    assert cfg.ALLOC_FUNDING_PCT == 0.70
+    """Дефолтные аллокации = 75/25."""
+    assert cfg.ALLOC_FUNDING_PCT == 0.75
     assert cfg.ALLOC_GRID_PCT == 0.25
-    assert cfg.ALLOC_MOMENTUM_PCT == 0.05
 
 
 def test_allocations_sum_to_one():
     """Сумма аллокаций = 1.0."""
-    total = cfg.ALLOC_FUNDING_PCT + cfg.ALLOC_GRID_PCT + cfg.ALLOC_MOMENTUM_PCT
+    total = cfg.ALLOC_FUNDING_PCT + cfg.ALLOC_GRID_PCT
     assert abs(total - 1.0) < 0.001
 
 
@@ -41,33 +40,17 @@ def test_grid_defaults():
     assert cfg.GRID_LEVERAGE >= 1
 
 
-def test_momentum_defaults():
-    """Momentum: дефолтные параметры."""
-    assert "BTCUSDT" in cfg.MOMENTUM_SYMBOLS
-    assert cfg.MOMENTUM_EMA_FAST < cfg.MOMENTUM_EMA_SLOW
-    assert cfg.MOMENTUM_LEVERAGE == 5
-    assert cfg.MOMENTUM_STOP_LOSS_PCT > 0
-    assert cfg.MOMENTUM_MAX_POSITIONS >= 1
-
-
 def test_validate_combo_config_ok():
-    """Валидация с дефолтными значениями (без .env) — только Telegram ошибки."""
+    """Валидация с дефолтными значениями (без .env) -- только Telegram ошибки."""
     errors = cfg.validate_combo_config()
-    # Без TELEGRAM_TOKEN будет ошибка — это OK
-    # Не должно быть ошибок от grid/momentum/alloc
+    # Без TELEGRAM_TOKEN будет ошибка -- это OK
+    # Не должно быть ошибок от grid/alloc
     alloc_errors = [e for e in errors if "аллокац" in e.lower()]
     grid_errors = [e for e in errors if "grid" in e.lower()]
-    mom_errors = [e for e in errors if "momentum" in e.lower()]
     assert alloc_errors == []
     assert grid_errors == []
-    assert mom_errors == []
 
 
 def test_grid_exchange_default():
-    """Биржа для grid по умолчанию — bybit."""
+    """Биржа для grid по умолчанию -- bybit."""
     assert cfg.GRID_EXCHANGE == "bybit"
-
-
-def test_momentum_exchange_default():
-    """Биржа для momentum по умолчанию — bybit."""
-    assert cfg.MOMENTUM_EXCHANGE == "bybit"
