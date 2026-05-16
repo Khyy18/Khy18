@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Users, ListTodo, Activity, GitBranch, Clock, Settings, BarChart3 } from 'lucide-react'
+import { Users, ListTodo, Activity, GitBranch, Clock, Settings, BarChart3, UserPlus } from 'lucide-react'
 import AgentCard from './components/AgentCard'
 import TaskCard from './components/TaskCard'
 import ActivityLog from './components/ActivityLog'
@@ -11,6 +11,9 @@ import AgentDetailView from './components/AgentDetailView'
 import AdminPanel from './components/AdminPanel'
 import AnalyticsTab from './components/AnalyticsTab'
 import Skeleton from './components/Skeleton'
+import InviteSection from './components/InviteSection'
+import SubscriptionBadge from './components/SubscriptionBadge'
+import PublicDemo from './components/PublicDemo'
 import { ToastContainer, showToast } from './components/Toast'
 import { useApi } from './hooks/useApi'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -31,14 +34,23 @@ export default function App() {
   const [taskView, setTaskView] = useState('kanban')
   const [pullDistance, setPullDistance] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [subscriptionTier, setSubscriptionTier] = useState(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(true)
   const touchStartY = useRef(0)
   const mainRef = useRef(null)
+
+  // Агенты, доступные бесплатно
+  const FREE_AGENTS = ['Alice', 'Sam']
 
   // Инициализация Telegram Web App и определение роли
   useEffect(() => {
     if (window.Telegram?.WebApp) {
       window.Telegram.WebApp.ready()
       window.Telegram.WebApp.expand()
+      setIsAuthenticated(true)
+    } else {
+      // Нет Telegram WebApp - проверяем через API
+      setIsAuthenticated(false)
     }
 
     // Theme sync
@@ -55,10 +67,28 @@ export default function App() {
 
     // Получаем роль из /api/status
     fetch('/api/status')
-      .then(res => res.ok ? res.json() : null)
+      .then(res => {
+        if (!res.ok) throw new Error('not ok')
+        return res.json()
+      })
       .then(data => {
         if (data && data.user_role) {
           setUserRole(data.user_role)
+        }
+        setIsAuthenticated(true)
+      })
+      .catch(() => {
+        if (!window.Telegram?.WebApp) {
+          setIsAuthenticated(false)
+        }
+      })
+
+    // Получаем статус подписки
+    fetch('/api/subscription/status')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && data.tier) {
+          setSubscriptionTier(data.tier)
         }
       })
       .catch(() => {})
@@ -203,10 +233,16 @@ export default function App() {
     { id: 'tasks', label: 'Tasks', icon: ListTodo },
     { id: 'activity', label: 'Activity', icon: Activity },
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+    { id: 'invite', label: 'Invite', icon: UserPlus },
     { id: 'graph', label: 'Graph', icon: GitBranch },
     { id: 'timeline', label: 'Timeline', icon: Clock },
     ...(userRole === 'owner' ? [{ id: 'admin', label: 'Admin', icon: Settings }] : []),
   ]
+
+  // Показываем PublicDemo если нет аутентификации
+  if (!isAuthenticated) {
+    return <PublicDemo />
+  }
 
   return (
     <div className="min-h-screen bg-background text-white flex flex-col">
@@ -223,6 +259,10 @@ export default function App() {
               {connected ? 'Online' : wsError ? 'Offline' : 'Connecting...'}
             </span>
           </div>
+        </div>
+        {/* Бейдж подписки */}
+        <div className="mt-2">
+          <SubscriptionBadge />
         </div>
       </header>
 
@@ -256,6 +296,7 @@ export default function App() {
                       key={agent.id || agent.name}
                       agent={agent}
                       onSelect={setSelectedAgent}
+                      isLocked={subscriptionTier === 'free' && !FREE_AGENTS.includes(agent.name)}
                       streamingText={
                         Object.values(streamingMessages).find(
                           m => m.agent === agent.name && !m.isComplete
@@ -326,6 +367,10 @@ export default function App() {
 
             {activeTab === 'analytics' && (
               <AnalyticsTab />
+            )}
+
+            {activeTab === 'invite' && (
+              <InviteSection />
             )}
 
             {activeTab === 'graph' && (

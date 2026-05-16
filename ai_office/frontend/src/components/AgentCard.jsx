@@ -1,4 +1,4 @@
-import { Activity, Cpu, Pause } from 'lucide-react'
+import { Activity, Cpu, Pause, Lock } from 'lucide-react'
 import TypingIndicator from './TypingIndicator'
 import StreamingMessage from './StreamingMessage'
 import avatarMap from './avatars'
@@ -7,8 +7,9 @@ import AvatarRing from './AvatarRing'
 /**
  * Карточка агента с glass-morphism эффектом
  * Отображает: аватар, имя, роль, статус, текущую задачу
+ * isLocked - если true, показывает blur overlay с бейджем Pro
  */
-export default function AgentCard({ agent, onSelect, streamingText }) {
+export default function AgentCard({ agent, onSelect, streamingText, isLocked }) {
   // Получаем инициалы из имени агента
   const initials = agent.name
     .split(' ')
@@ -51,11 +52,21 @@ export default function AgentCard({ agent, onSelect, streamingText }) {
 
   return (
     <div
-      className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 animate-slide-up cursor-pointer hover:bg-white/10 transition-colors"
+      className={`bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 animate-slide-up cursor-pointer hover:bg-white/10 transition-colors relative overflow-hidden ${isLocked ? 'pointer-events-auto' : ''}`}
       onClick={() => onSelect && onSelect(agent)}
       role="button"
       tabIndex={0}
     >
+      {/* Locked overlay для Pro агентов */}
+      {isLocked && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center backdrop-blur-sm bg-black/30 rounded-2xl">
+          <span className="absolute top-2 right-2 px-2 py-0.5 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-xs font-semibold rounded-full">
+            Pro
+          </span>
+          <Lock className="w-5 h-5 text-white/70 mb-1" />
+          <span className="text-white/80 text-xs font-medium">Разблокировать</span>
+        </div>
+      )}
       <div className="flex items-center gap-3">
         {/* Аватар с кольцом статуса */}
         {(() => {
