@@ -45,7 +45,12 @@ async def upgrade_subscription(
     body: UpgradeRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """Повысить тарифный план workspace."""
+    """Повысить тарифный план workspace.
+
+    TODO: В production интегрировать с платежной системой (Stripe/YooKassa).
+    Сейчас это placeholder-эндпоинт для MVP/демо - смена тарифа без оплаты.
+    Перед запуском: добавить верификацию payment intent или ограничить admin-only.
+    """
     if body.tier not in TIERS:
         raise HTTPException(status_code=400, detail=f"Unknown tier: {body.tier}")
 

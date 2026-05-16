@@ -21,6 +21,7 @@ class TelegramAuthMiddleware(BaseHTTPMiddleware):
     """Валидация Telegram Mini App initData через HMAC-SHA256 + проверка ролей."""
 
     SKIP_PATHS = {"/api/health", "/api/ws", "/api/metrics", "/docs", "/openapi.json"}
+    SKIP_PREFIXES = ("/api/public/",)
 
     # Методы записи, запрещённые для viewer
     WRITE_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
@@ -34,6 +35,10 @@ class TelegramAuthMiddleware(BaseHTTPMiddleware):
         # Пропускаем не-API маршруты и исключенные пути
         path = request.url.path
         if not path.startswith("/api/") or path in self.SKIP_PATHS:
+            return await call_next(request)
+
+        # Пропускаем публичные маршруты (доступны без аутентификации)
+        if any(path.startswith(prefix) for prefix in self.SKIP_PREFIXES):
             return await call_next(request)
 
         # Извлекаем initData из заголовка или query-параметра

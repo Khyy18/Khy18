@@ -8,12 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_office.core.models import ActivityLog, Agent, Task
 
-# Schedule constants
-WEEKLY_DIGEST_DAY = "monday"
+# Schedule constants (weekday integers: 0=Monday, 1=Tuesday, ... 6=Sunday)
+WEEKLY_DIGEST_DAY = 0  # Monday
 WEEKLY_DIGEST_HOUR = 11
-TIPS_DAYS = ["tuesday", "thursday"]
+TIPS_DAYS = [1, 3]  # Tuesday, Thursday
 TIPS_HOUR = 14
-CASE_STUDY_DAY = "friday"
+CASE_STUDY_DAY = 4  # Friday
 CASE_STUDY_HOUR = 16
 
 # Predefined tips in Russian

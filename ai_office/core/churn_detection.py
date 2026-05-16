@@ -101,19 +101,24 @@ async def detect_churning_workspaces(session: AsyncSession) -> list[dict]:
     now = datetime.now(timezone.utc)
     threshold = now - timedelta(days=3)
 
+    # Единый запрос: последняя активность по каждому workspace
+    last_activities_result = await session.execute(
+        select(
+            ActivityLog.workspace_id,
+            func.max(ActivityLog.timestamp).label("last_ts"),
+        ).group_by(ActivityLog.workspace_id)
+    )
+    last_activity_map = {
+        row.workspace_id: row.last_ts for row in last_activities_result
+    }
+
     # Get all workspaces
     ws_result = await session.execute(select(Workspace))
     workspaces = ws_result.scalars().all()
 
     at_risk = []
     for ws in workspaces:
-        # Find last activity
-        last_activity_result = await session.execute(
-            select(func.max(ActivityLog.timestamp)).where(
-                ActivityLog.workspace_id == ws.id
-            )
-        )
-        last_activity = last_activity_result.scalar()
+        last_activity = last_activity_map.get(ws.id)
 
         if last_activity is None:
             # No activity ever - use created_at

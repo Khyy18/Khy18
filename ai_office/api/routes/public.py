@@ -27,6 +27,9 @@ async def get_public_agents(
             detail="Workspace not found or not public",
         )
 
+    # DEMO: Возвращаем всех агентов системы, а не только привязанных к workspace.
+    # Это демо-эндпоинт для PublicDemo landing page - показывает полный каталог
+    # агентов "карманной компании". В production фильтровать по workspace_id.
     agents_result = await session.execute(select(Agent))
     agents = agents_result.scalars().all()
     return [

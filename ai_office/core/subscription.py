@@ -72,8 +72,11 @@ async def check_message_limit(workspace_id: int, session: AsyncSession) -> dict:
     if limit is None:
         return {"remaining": None, "limit": None, "used": used}
     else:
-        remaining = max(0, limit - used)
-        return {"remaining": remaining, "limit": limit, "used": used}
+        # Включаем бонусные сообщения от реферальной системы
+        bonus = workspace.referral_bonus_messages or 0
+        effective_limit = limit + bonus
+        remaining = max(0, effective_limit - used)
+        return {"remaining": remaining, "limit": effective_limit, "used": used}
 
 
 async def increment_message_count(workspace_id: int, session: AsyncSession) -> None:
@@ -122,13 +125,17 @@ async def get_subscription_status(workspace_id: int, session: AsyncSession) -> d
 
     if limit is None:
         remaining = None
+        effective_limit = None
     else:
-        remaining = max(0, limit - used)
+        # Включаем бонусные сообщения от реферальной системы
+        bonus = workspace.referral_bonus_messages or 0
+        effective_limit = limit + bonus
+        remaining = max(0, effective_limit - used)
 
     return {
         "tier": tier,
         "messages_remaining": remaining,
-        "messages_limit": limit,
+        "messages_limit": effective_limit,
         "messages_used": used,
         "agents_available": tier_config["allowed_agents"],
     }

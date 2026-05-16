@@ -22,6 +22,7 @@ class Workspace(Base):
     settings_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     subscription_tier: Mapped[str] = mapped_column(String(20), server_default="free")
     messages_used_this_month: Mapped[int] = mapped_column(Integer, server_default="0")
+    referral_bonus_messages: Mapped[int] = mapped_column(Integer, server_default="0")
     is_public: Mapped[bool] = mapped_column(Boolean, server_default="0")
 
 

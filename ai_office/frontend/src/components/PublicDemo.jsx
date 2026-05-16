@@ -11,6 +11,8 @@ export default function PublicDemo() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    // DEMO: workspace_id=1 - демонстрационный workspace для landing page.
+    // В production заменить на конфигурируемый ID или lookup по домену.
     fetch('/api/public/1/agents')
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)

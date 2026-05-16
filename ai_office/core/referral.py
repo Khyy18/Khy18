@@ -6,7 +6,7 @@ import string
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_office.core.models import Referral
+from ai_office.core.models import Referral, Workspace
 
 
 def _generate_code() -> str:
@@ -39,15 +39,18 @@ async def generate_referral_code(
         return existing.referral_code
 
     # Генерируем уникальный код
+    code = None
     for _ in range(10):
-        code = _generate_code()
+        candidate = _generate_code()
         check = await session.execute(
-            select(Referral).where(Referral.referral_code == code)
+            select(Referral).where(Referral.referral_code == candidate)
         )
         if check.scalar_one_or_none() is None:
+            code = candidate
             break
-    else:
-        code = _generate_code()
+
+    if code is None:
+        raise RuntimeError("Не удалось сгенерировать уникальный реферальный код после 10 попыток")
 
     referral = Referral(
         referrer_telegram_id=user_telegram_id,
@@ -153,11 +156,37 @@ async def apply_referral(
 
     await session.commit()
 
+    # Начисляем бонусные сообщения на workspace реферера
+    await _credit_referral_bonus(referral.referrer_telegram_id, 100, session)
+    if l2_referral is not None:
+        await _credit_referral_bonus(l2_referral.referrer_telegram_id, 50, session)
+        if l3_referral is not None:
+            await _credit_referral_bonus(l3_referral.referrer_telegram_id, 25, session)
+
     return {
         "success": True,
         "message": "Реферальный код применен! Бонус начислен.",
         "bonus_granted": total_bonus,
     }
+
+
+async def _credit_referral_bonus(
+    telegram_id: int, bonus: int, session: AsyncSession
+) -> None:
+    """Начисляет бонусные сообщения на workspace владельца по telegram_id.
+
+    Args:
+        telegram_id: Telegram ID владельца workspace
+        bonus: Количество бонусных сообщений
+        session: Асинхронная сессия БД
+    """
+    ws_result = await session.execute(
+        select(Workspace).where(Workspace.owner_telegram_id == telegram_id).limit(1)
+    )
+    workspace = ws_result.scalar_one_or_none()
+    if workspace is not None:
+        workspace.referral_bonus_messages = (workspace.referral_bonus_messages or 0) + bonus
+        await session.commit()
 
 
 async def get_referral_stats(
