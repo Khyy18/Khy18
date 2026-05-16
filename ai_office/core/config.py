@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", description="Токен Telegram бота")
     target_chat_id: int = Field(default=0, description="ID целевого чата")
 
+    # GitHub
+    github_token: str = Field(default="", description="GitHub Personal Access Token")
+
     # Аутентификация
     skip_telegram_auth: bool = Field(
         default=True, description="Пропуск аутентификации Telegram (dev-режим)"

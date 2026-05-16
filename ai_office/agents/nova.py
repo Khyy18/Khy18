@@ -2,6 +2,7 @@
 
 from ai_office.agents.base import AgentConfig
 from ai_office.tools.devops_tools import check_deployment_status, run_health_check, analyze_logs
+from ai_office.tools.github_tools import create_github_issue, list_github_issues, create_pull_request_comment
 from ai_office.tools.task_tools import update_task_status, get_active_tasks
 from ai_office.tools.delegation import delegate_to_agent
 
@@ -26,5 +27,5 @@ nova_config = AgentConfig(
     name="nova",
     role="DevOps / SRE",
     system_prompt=NOVA_SYSTEM_PROMPT,
-    tools=[check_deployment_status, run_health_check, analyze_logs, update_task_status, get_active_tasks, delegate_to_agent],
+    tools=[check_deployment_status, run_health_check, analyze_logs, create_github_issue, list_github_issues, create_pull_request_comment, update_task_status, get_active_tasks, delegate_to_agent],
 )

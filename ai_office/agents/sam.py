@@ -2,7 +2,8 @@
 
 from ai_office.agents.base import AgentConfig
 from ai_office.tools.task_tools import update_task_status, get_active_tasks
-from ai_office.tools.code_tools import execute_code, review_code, search_docs
+from ai_office.tools.code_tools import execute_python_code, review_code, search_docs
+from ai_office.tools.search_tools import web_search
 from ai_office.tools.delegation import delegate_to_agent
 
 SAM_SYSTEM_PROMPT = """Ты - Sam, Senior Developer в AI Office.
@@ -27,5 +28,5 @@ sam_config = AgentConfig(
     name="sam",
     role="Senior Developer",
     system_prompt=SAM_SYSTEM_PROMPT,
-    tools=[execute_code, review_code, search_docs, update_task_status, get_active_tasks, delegate_to_agent],
+    tools=[execute_python_code, review_code, search_docs, web_search, update_task_status, get_active_tasks, delegate_to_agent],
 )

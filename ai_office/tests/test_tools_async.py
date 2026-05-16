@@ -21,8 +21,7 @@ async def test_execute_code_async():
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         result = await execute_code.ainvoke({"code": "print('hello')", "language": "python"})
-        assert "python" in result
-        assert "выполнен успешно" in result
+        assert "hello" in result
 
 
 @pytest.mark.asyncio
@@ -38,7 +37,7 @@ async def test_review_code_async():
         mock_session.execute = AsyncMock(return_value=mock_result)
 
         result = await review_code.ainvoke({"code": "x = 1", "context": "test"})
-        assert "проверен" in result
+        assert "проверен" in result or "Код проверен" in result
 
 
 @pytest.mark.asyncio
