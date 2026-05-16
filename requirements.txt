@@ -1,1 +1,8 @@
 aiohttp>=3.9
+pytest
+pytest-asyncio
+ruff
+playwright
+fpdf2
+scipy
+pyyaml
