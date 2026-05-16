@@ -30,6 +30,17 @@ class Settings(BaseSettings):
     agent_rpm_limit: int = Field(default=20, description="Лимит запросов/мин на агента")
     enable_rate_limiter: bool = Field(default=True, description="Включить rate limiter")
 
+    # Proactive Scheduler
+    enable_proactive: bool = Field(default=True, description="Включить проактивные задачи")
+    standup_hour: int = Field(default=9, description="Час ежедневного стендапа (UTC)")
+    weekly_report_day: str = Field(default="monday", description="День недельного отчёта")
+    overdue_check_interval_hours: int = Field(
+        default=4, description="Интервал проверки просроченных задач (часы)"
+    )
+    health_check_interval_hours: int = Field(
+        default=1, description="Интервал проверки здоровья системы (часы)"
+    )
+
     # Telegram
     telegram_api_id: int = Field(default=0, description="Telegram API ID")
     telegram_api_hash: str = Field(default="", description="Telegram API Hash")
