@@ -6,6 +6,7 @@ from backend.models.child import Child
 from backend.models.payment import ParentPayment
 from backend.models.journal import JournalEntry
 from backend.models.reminder import Reminder
+from backend.models.audit_log import AuditLog
 
 __all__ = [
     "Employee",
@@ -14,4 +15,5 @@ __all__ = [
     "ParentPayment",
     "JournalEntry",
     "Reminder",
+    "AuditLog",
 ]

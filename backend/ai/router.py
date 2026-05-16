@@ -4,8 +4,10 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from backend.ai.intents import Intent, classify_intent
 from backend.ai.groq_client import chat_completion
@@ -14,6 +16,9 @@ from backend.ai.knowledge import get_knowledge_context
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+
+# Rate limiter for AI endpoints
+_ai_limiter = Limiter(key_func=get_remote_address)
 
 # Conversation history storage (in-memory, per chat_id)
 _conversation_history: dict = {}
@@ -37,7 +42,8 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def ai_chat(request: ChatRequest) -> ChatResponse:
+@_ai_limiter.limit("10/minute")
+async def ai_chat(request: Request, data: ChatRequest) -> ChatResponse:
     """Process a natural language message through the AI pipeline.
 
     Flow:
@@ -48,9 +54,9 @@ async def ai_chat(request: ChatRequest) -> ChatResponse:
     5. Store conversation history
     """
     # Retrieve conversation history
-    history = _get_history(request.chat_id)
+    history = _get_history(data.chat_id)
 
-    intent, params, confidence = await classify_intent(request.message, history=history)
+    intent, params, confidence = await classify_intent(data.message, history=history)
 
     if intent is None or confidence < 0.3:
         response = ChatResponse(
@@ -59,12 +65,12 @@ async def ai_chat(request: ChatRequest) -> ChatResponse:
             intent="unknown",
             params=params,
         )
-        _update_history(request.chat_id, request.message, response.response)
+        _update_history(data.chat_id, data.message, response.response)
         return response
 
     # Execute the intent
-    result = await _execute_intent(intent, params, request.message, history=history)
-    _update_history(request.chat_id, request.message, result.response)
+    result = await _execute_intent(intent, params, data.message, history=history)
+    _update_history(data.chat_id, data.message, result.response)
     return result
 
 

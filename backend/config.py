@@ -23,6 +23,11 @@ class Settings:
     CORS_ORIGINS: List[str] = _parse_cors_origins()
     GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
 
+    # Security settings
+    ENCRYPTION_KEY: str = os.environ.get("ENCRYPTION_KEY", "")
+    SENTRY_DSN: str = os.environ.get("SENTRY_DSN", "")
+    EXCEL_PASSWORD: str = os.environ.get("EXCEL_PASSWORD", "kindergarten2024")
+
     # Salary calculation constants (same as bot)
     NDFL_RATE: float = 0.13
     PFR_RATE: float = 0.22

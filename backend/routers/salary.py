@@ -145,6 +145,10 @@ async def export_excel(data: PayrollRequest):
         totals["na_ruki"],
     ])
 
+    # Password-protect the sheet
+    ws.protection.sheet = True
+    ws.protection.password = settings.EXCEL_PASSWORD
+
     buffer = io.BytesIO()
     wb.save(buffer)
     buffer.seek(0)
