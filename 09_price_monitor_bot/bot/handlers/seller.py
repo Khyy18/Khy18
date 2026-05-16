@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from bot.db.queries import add_seller_monitor, delete_seller_monitor, get_user, get_user_monitors
+from bot.db.queries import add_seller_monitor, delete_seller_monitor, get_seller_monitor_by_id, get_user, get_user_monitors
 from bot.ui.cards import card, sparkline
 
 router = Router()
@@ -173,8 +173,25 @@ async def cb_seller_marketplace(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.callback_query(lambda c: c.data and c.data.startswith("seller:delete:"))
 async def cb_seller_delete(callback: CallbackQuery) -> None:
-    """Удалить конкретный монитор."""
+    """Удалить конкретный монитор (с проверкой владельца)."""
     monitor_id = int(callback.data.split(":")[2])  # type: ignore[union-attr]
+
+    # Проверка принадлежности монитора текущему пользователю
+    telegram_id = callback.from_user.id
+    user = await get_user(telegram_id)
+    if user is None:
+        await callback.answer("Сначала нажмите /start", show_alert=True)
+        return
+
+    monitor = await get_seller_monitor_by_id(monitor_id)
+    if monitor is None:
+        await callback.answer("\u274c Монитор не найден", show_alert=True)
+        return
+
+    if monitor["user_id"] != user["id"]:
+        await callback.answer("\u274c Нет доступа к этому монитору", show_alert=True)
+        return
+
     await delete_seller_monitor(monitor_id)
     await callback.answer("\u2705 Монитор удален")
     # Показать обновленный список

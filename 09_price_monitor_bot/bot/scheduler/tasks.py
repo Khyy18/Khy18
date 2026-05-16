@@ -4,14 +4,14 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-import aiosqlite
+from aiogram import Bot
 
 from bot.config import settings
 from bot.db.queries import (
     add_price_record,
-    get_price_history,
-    get_product_by_external_id,
     add_post,
+    get_db,
+    get_price_history,
 )
 from bot.parsers.wildberries import WildberriesParser
 from bot.parsers.ozon import OzonParser
@@ -19,6 +19,8 @@ from bot.ai.antifraud import AntifraudDetector
 from bot.ai.ranker import ProductRanker
 from bot.ai.post_generator import PostGenerator
 from bot.ai.reviews_summary import ReviewsSummarizer
+from bot.publisher.channel_publisher import ChannelPublisher
+from bot.ui.cards import card, format_number
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,7 @@ logger = logging.getLogger(__name__)
 _MIN_DISCOUNT_FOR_PUBLISH = 15
 
 
-async def parse_prices_job() -> None:
+async def parse_prices_job(bot: Bot) -> None:
     """Парсинг цен для всех отслеживаемых товаров.
 
     - Получает цены с WB и Ozon
@@ -42,6 +44,7 @@ async def parse_prices_job() -> None:
     ranker = ProductRanker()
     post_gen = PostGenerator()
     reviews_summarizer = ReviewsSummarizer()
+    publisher = ChannelPublisher(bot)
 
     try:
         # Получаем все отслеживаемые товары из БД
@@ -117,15 +120,21 @@ async def parse_prices_job() -> None:
                         item, discount_info, review_summary
                     )
 
+                    # Публикуем в канал
+                    await publisher.publish_to_channel(
+                        channel_id=settings.telegram_channel_id,
+                        post_text=post_text,
+                    )
+
                     # Сохраняем пост в БД
                     await add_post(
                         product_id=item.get("product_db_id", 0),
                         channel_id=settings.telegram_channel_id,
                         text=post_text,
                     )
-                    logger.info("Сгенерирован пост для товара: %s", item.get("name", ""))
+                    logger.info("Опубликован пост для товара: %s", item.get("name", ""))
                 except Exception as e:
-                    logger.error("Ошибка генерации поста: %s", e)
+                    logger.error("Ошибка генерации/публикации поста: %s", e)
 
         logger.info("Парсинг завершен. Обработано %d товаров.", len(products))
     finally:
@@ -133,25 +142,68 @@ async def parse_prices_job() -> None:
         await ozon_parser.close()
 
 
-async def publish_digests_job() -> None:
+async def publish_digests_job(bot: Bot) -> None:
     """Публикация дайджестов: 'Top-10 падений цен', 'Исторические минимумы'.
 
-    Запускается раз в день.
+    Запускается раз в день. Форматирует данные в HTML-карточки
+    и публикует в канал через ChannelPublisher.
     """
     logger.info("Запуск задачи публикации дайджестов...")
 
-    post_gen = PostGenerator()
+    publisher = ChannelPublisher(bot)
 
     try:
         # Получаем товары с наибольшим снижением цены за день
         top_drops = await _get_top_price_drops(limit=10)
         if top_drops:
             logger.info("Найдено %d товаров для дайджеста 'Top-10'", len(top_drops))
+            # Формируем пост дайджеста скидок
+            lines: list[str] = []
+            for i, item in enumerate(top_drops, 1):
+                name = item.get("name", "Товар")[:40]
+                price = item.get("price", 0)
+                discount_pct = item.get("discount_percent", 0)
+                lines.append(
+                    f"{i}. <b>{name}</b>"
+                )
+                lines.append(
+                    f"   \U0001f4b0 {format_number(price)} \u20bd | -{discount_pct:.0f}%"
+                )
+                lines.append("")
+            digest_text = card(
+                title="Top-10 падений цен за день",
+                emoji="\U0001f4c9",
+                body_lines=lines,
+            )
+            await publisher.publish_to_channel(
+                channel_id=settings.telegram_channel_id,
+                post_text=digest_text,
+            )
 
         # Исторические минимумы
         historical_mins = await _get_historical_minimums(limit=10)
         if historical_mins:
             logger.info("Найдено %d товаров с историческими минимумами", len(historical_mins))
+            lines = []
+            for i, item in enumerate(historical_mins, 1):
+                name = item.get("name", "Товар")[:40]
+                current_price = item.get("current_price", 0)
+                lines.append(
+                    f"{i}. <b>{name}</b>"
+                )
+                lines.append(
+                    f"   \U0001f3af Мин. цена: {format_number(current_price)} \u20bd"
+                )
+                lines.append("")
+            mins_text = card(
+                title="Исторические минимумы",
+                emoji="\U0001f3af",
+                body_lines=lines,
+            )
+            await publisher.publish_to_channel(
+                channel_id=settings.telegram_channel_id,
+                post_text=mins_text,
+            )
 
     except Exception as e:
         logger.error("Ошибка публикации дайджеста: %s", e)
@@ -167,16 +219,13 @@ async def cleanup_old_data_job() -> None:
     cutoff_date = (datetime.now() - timedelta(days=90)).isoformat()
 
     try:
-        db = await aiosqlite.connect(settings.db_path)
-        try:
-            await db.execute(
-                "DELETE FROM price_history WHERE timestamp < ?",
-                (cutoff_date,),
-            )
-            await db.commit()
-            logger.info("Очистка записей старше %s завершена", cutoff_date)
-        finally:
-            await db.close()
+        db = await get_db()
+        await db.execute(
+            "DELETE FROM price_history WHERE timestamp < ?",
+            (cutoff_date,),
+        )
+        await db.commit()
+        logger.info("Очистка записей старше %s завершена", cutoff_date)
     except Exception as e:
         logger.error("Ошибка очистки данных: %s", e)
 
@@ -187,14 +236,10 @@ async def cleanup_old_data_job() -> None:
 async def _get_tracked_products() -> list[dict[str, Any]]:
     """Получить все отслеживаемые товары из БД."""
     try:
-        db = await aiosqlite.connect(settings.db_path)
-        db.row_factory = aiosqlite.Row
-        try:
-            cursor = await db.execute("SELECT * FROM products")
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            await db.close()
+        db = await get_db()
+        cursor = await db.execute("SELECT * FROM products")
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
     except Exception as e:
         logger.error("Ошибка получения товаров: %s", e)
         return []
@@ -204,24 +249,20 @@ async def _get_top_price_drops(limit: int = 10) -> list[dict[str, Any]]:
     """Получить товары с наибольшим снижением цены за последние 24 часа."""
     cutoff = (datetime.now() - timedelta(days=1)).isoformat()
     try:
-        db = await aiosqlite.connect(settings.db_path)
-        db.row_factory = aiosqlite.Row
-        try:
-            cursor = await db.execute(
-                """
-                SELECT p.*, ph.price, ph.old_price, ph.discount_percent
-                FROM price_history ph
-                JOIN products p ON p.id = ph.product_id
-                WHERE ph.timestamp > ? AND ph.is_fraud = 0 AND ph.discount_percent > 0
-                ORDER BY ph.discount_percent DESC
-                LIMIT ?
-                """,
-                (cutoff, limit),
-            )
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            await db.close()
+        db = await get_db()
+        cursor = await db.execute(
+            """
+            SELECT p.*, ph.price, ph.old_price, ph.discount_percent
+            FROM price_history ph
+            JOIN products p ON p.id = ph.product_id
+            WHERE ph.timestamp > ? AND ph.is_fraud = 0 AND ph.discount_percent > 0
+            ORDER BY ph.discount_percent DESC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
     except Exception as e:
         logger.error("Ошибка получения top drops: %s", e)
         return []
@@ -230,25 +271,21 @@ async def _get_top_price_drops(limit: int = 10) -> list[dict[str, Any]]:
 async def _get_historical_minimums(limit: int = 10) -> list[dict[str, Any]]:
     """Получить товары, достигшие исторического минимума цены."""
     try:
-        db = await aiosqlite.connect(settings.db_path)
-        db.row_factory = aiosqlite.Row
-        try:
-            cursor = await db.execute(
-                """
-                SELECT p.*, ph.price as current_price,
-                       (SELECT MIN(ph2.price) FROM price_history ph2 WHERE ph2.product_id = p.id) as min_price
-                FROM products p
-                JOIN price_history ph ON ph.product_id = p.id
-                WHERE ph.id = (SELECT MAX(ph3.id) FROM price_history ph3 WHERE ph3.product_id = p.id)
-                HAVING current_price <= min_price
-                LIMIT ?
-                """,
-                (limit,),
-            )
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
-        finally:
-            await db.close()
+        db = await get_db()
+        cursor = await db.execute(
+            """
+            SELECT p.*, ph.price as current_price,
+                   (SELECT MIN(ph2.price) FROM price_history ph2 WHERE ph2.product_id = p.id) as min_price
+            FROM products p
+            JOIN price_history ph ON ph.product_id = p.id
+            WHERE ph.id = (SELECT MAX(ph3.id) FROM price_history ph3 WHERE ph3.product_id = p.id)
+            HAVING current_price <= min_price
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
     except Exception as e:
         logger.error("Ошибка получения исторических минимумов: %s", e)
         return []

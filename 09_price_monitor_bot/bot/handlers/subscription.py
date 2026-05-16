@@ -1,5 +1,7 @@
 """Обработчики для управления подпиской (VIP / Free)."""
 
+from datetime import datetime
+
 from aiogram import Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -22,8 +24,17 @@ async def cb_sub_info(callback: CallbackQuery) -> None:
 
     if is_vip:
         indicator = status_indicator("high")
-        # Условно: VIP на 30 дней, показываем прогресс
-        days_left = 30  # TODO: хранить дату окончания VIP
+        # Рассчитываем оставшиеся дни по vip_expires_at
+        vip_expires_at = user.get("vip_expires_at")
+        if vip_expires_at:
+            try:
+                expires_dt = datetime.fromisoformat(vip_expires_at)
+                days_left = max(0, (expires_dt - datetime.now()).days)
+            except (ValueError, TypeError):
+                days_left = 0
+        else:
+            days_left = 0
+
         bar = progress_bar(days_left, 30)
         lines = [
             f"<b>Статус:</b> {indicator} VIP",

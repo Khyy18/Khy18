@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from bot.db.queries import add_alert, delete_alert, get_user, get_user_alerts
+from bot.db.queries import add_alert, delete_alert, get_alert_by_id, get_user, get_user_alerts
 from bot.ui.cards import card, format_number, status_indicator
 
 router = Router()
@@ -138,8 +138,25 @@ async def msg_alert_price(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(lambda c: c.data and c.data.startswith("alerts:delete:"))
 async def cb_alerts_delete(callback: CallbackQuery) -> None:
-    """Удалить конкретный алерт."""
+    """Удалить конкретный алерт (с проверкой владельца)."""
     alert_id = int(callback.data.split(":")[2])  # type: ignore[union-attr]
+
+    # Проверка принадлежности алерта текущему пользователю
+    telegram_id = callback.from_user.id
+    user = await get_user(telegram_id)
+    if user is None:
+        await callback.answer("Сначала нажмите /start", show_alert=True)
+        return
+
+    alert = await get_alert_by_id(alert_id)
+    if alert is None:
+        await callback.answer("\u274c Алерт не найден", show_alert=True)
+        return
+
+    if alert["user_id"] != user["id"]:
+        await callback.answer("\u274c Нет доступа к этому алерту", show_alert=True)
+        return
+
     await delete_alert(alert_id)
     await callback.answer("\u2705 Алерт удален")
     # Показать обновленный список

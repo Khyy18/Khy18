@@ -41,6 +41,7 @@ async def init_db() -> None:
                 telegram_id INTEGER UNIQUE NOT NULL,
                 username TEXT,
                 is_vip INTEGER DEFAULT 0,
+                vip_expires_at TEXT,
                 interests TEXT DEFAULT '[]',
                 referral_code TEXT UNIQUE,
                 referred_by TEXT,

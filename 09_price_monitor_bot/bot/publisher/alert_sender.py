@@ -1,10 +1,11 @@
 """Отправка персональных алертов пользователям о снижении цен."""
 
-import asyncio
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 from aiogram import Bot
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot.config import settings
 from bot.db.queries import get_active_alerts_for_keyword, get_user
@@ -17,14 +18,18 @@ logger = logging.getLogger(__name__)
 class AlertSender:
     """Отправка персональных уведомлений о снижении цен."""
 
-    def __init__(self, bot: Bot, db_path: str | None = None) -> None:
+    def __init__(self, bot: Bot, scheduler: AsyncIOScheduler, db_path: str | None = None) -> None:
         self._bot = bot
+        self._scheduler = scheduler
         self._db_path = db_path or settings.db_path
 
     async def check_and_send_alerts(
         self, product: dict[str, Any], new_price: float
     ) -> None:
         """Проверить алерты и отправить уведомления пользователям.
+
+        Логика: получаем все активные алерты, проверяем совпадение
+        keyword (целое слово, регистронезависимо) в названии товара.
 
         Args:
             product: dict с информацией о товаре (name, marketplace, article_id/product_id, url).
@@ -34,22 +39,27 @@ class AlertSender:
         if not product_name:
             return
 
-        # Ищем алерты по ключевым словам из названия товара
-        keywords = product_name.lower().split()
+        product_name_lower = product_name.lower()
+
+        # Получаем все активные алерты
+        all_alerts = await get_active_alerts_for_keyword("")
         matched_alerts: list[dict[str, Any]] = []
 
-        for keyword in keywords[:5]:  # проверяем первые 5 слов
-            if len(keyword) < 3:
+        for alert in all_alerts:
+            keyword = alert.get("keyword", "").lower()
+            if not keyword:
                 continue
-            alerts = await get_active_alerts_for_keyword(keyword)
-            for alert in alerts:
-                # Проверяем порог цены
-                max_price = alert.get("max_price")
-                if max_price is not None and new_price > max_price:
-                    continue
-                # Избегаем дубликатов
-                if alert["id"] not in [a["id"] for a in matched_alerts]:
-                    matched_alerts.append(alert)
+
+            # Проверяем, что ключевое слово содержится в названии товара
+            if keyword not in product_name_lower:
+                continue
+
+            # Проверяем порог цены
+            max_price = alert.get("max_price")
+            if max_price is not None and new_price > max_price:
+                continue
+
+            matched_alerts.append(alert)
 
         if not matched_alerts:
             return
@@ -77,13 +87,14 @@ class AlertSender:
                 # VIP - отправляем сразу
                 await self._send_alert(telegram_id, message)
             else:
-                # Бесплатные пользователи - с задержкой
+                # Бесплатные пользователи - с задержкой через APScheduler (date trigger)
                 delay = settings.free_delay_seconds
-                asyncio.get_event_loop().call_later(
-                    delay,
-                    lambda tid=telegram_id, msg=message: asyncio.ensure_future(
-                        self._send_alert(tid, msg)
-                    ),
+                run_date = datetime.now() + timedelta(seconds=delay)
+                self._scheduler.add_job(
+                    self._send_alert,
+                    trigger="date",
+                    run_date=run_date,
+                    args=[telegram_id, message],
                 )
 
     async def _send_alert(self, telegram_id: int, message: str) -> None:
