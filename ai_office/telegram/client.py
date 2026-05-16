@@ -8,11 +8,13 @@ from pyrogram.types import Message
 from ai_office.core.config import settings
 from ai_office.telegram.handlers import (
     handle_command,
+    handle_document_message,
     handle_grant_admin,
     handle_grant_viewer,
     handle_message,
     handle_revoke_admin,
     handle_start,
+    handle_voice_message,
 )
 
 
@@ -74,6 +76,16 @@ class TelegramClient:
             # Имитация задержки для реалистичности
             await asyncio.sleep(0.5)
             await handle_message(client, message)
+
+        @self.app.on_message(filters.voice)
+        async def on_voice(client: Client, message: Message) -> None:
+            """Обработка голосовых сообщений."""
+            await handle_voice_message(client, message)
+
+        @self.app.on_message(filters.document)
+        async def on_document(client: Client, message: Message) -> None:
+            """Обработка документов."""
+            await handle_document_message(client, message)
 
     async def start(self) -> None:
         """Запуск Telegram клиента."""

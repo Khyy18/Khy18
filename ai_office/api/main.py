@@ -20,6 +20,7 @@ from ai_office.api.routes.dashboard import router as dashboard_router
 from ai_office.api.routes.templates import router as templates_router
 from ai_office.api.routes.feedback import router as feedback_router
 from ai_office.api.routes.delegation_trace import router as delegation_trace_router
+from ai_office.api.routes.plugins import router as plugins_router
 from ai_office.api.middleware import TelegramAuthMiddleware
 from ai_office.api.observability import RequestLoggingMiddleware
 from ai_office.api.websocket import websocket_endpoint
@@ -37,6 +38,9 @@ async def lifespan(app: FastAPI):
     from ai_office.core.database import async_session
     async with async_session() as session:
         await seed_templates(session)
+    # Load plugins
+    from ai_office.plugins.loader import load_plugins
+    load_plugins()
     yield
     await cache.disconnect()
 
@@ -77,6 +81,7 @@ app.include_router(dashboard_router)
 app.include_router(templates_router)
 app.include_router(feedback_router)
 app.include_router(delegation_trace_router)
+app.include_router(plugins_router)
 
 
 @app.get("/api/health")

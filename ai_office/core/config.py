@@ -54,6 +54,20 @@ class Settings(BaseSettings):
     # GitHub
     github_token: str = Field(default="", description="GitHub Personal Access Token")
 
+    # Linear
+    linear_api_key: str = Field(default="", description="API ключ Linear")
+    sync_to_linear: bool = Field(default=False, description="Синхронизация задач в Linear")
+
+    # Notion
+    notion_api_key: str = Field(default="", description="API ключ Notion")
+    notion_database_id: str = Field(default="", description="ID базы данных Notion")
+    sync_to_notion: bool = Field(default=False, description="Синхронизация в Notion")
+
+    # Voice/TTS
+    whisper_model: str = Field(default="whisper-1", description="Модель Whisper для транскрипции")
+    tts_model: str = Field(default="tts-1", description="Модель TTS для синтеза речи")
+    voice_responses: bool = Field(default=False, description="Отвечать голосовыми сообщениями")
+
     # Аутентификация
     skip_telegram_auth: bool = Field(
         default=True, description="Пропуск аутентификации Telegram (dev-режим)"

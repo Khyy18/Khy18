@@ -1,6 +1,8 @@
 """Обработчики команд и сообщений Telegram."""
 
 import logging
+import os
+import tempfile
 
 from pyrogram import Client
 from pyrogram.types import (
@@ -352,6 +354,177 @@ async def handle_message(client: Client, message: Message) -> None:
         response_text = format_agent_message(
             "Alice", "Персональный ассистент",
             "Произошла внутренняя ошибка при обработке запроса. Попробуйте позже."
+        )
+
+    await message.reply(response_text)
+
+
+async def handle_voice_message(client: Client, message: Message) -> None:
+    """Обработчик голосовых сообщений - транскрипция и передача в оркестратор.
+
+    Args:
+        client: Pyrogram клиент
+        message: Входящее голосовое сообщение
+    """
+    telegram_id = message.from_user.id
+    username = message.from_user.username
+    chat_id = message.chat.id
+
+    # Проверка прав
+    async with async_session() as session:
+        await get_or_create_user(telegram_id, username, session=session)
+        if not await check_permission(telegram_id, UserRole.ADMIN, session=session):
+            await message.reply(
+                "\U0001f512 У вас нет прав для взаимодействия с агентами."
+            )
+            return
+
+    await client.send_chat_action(chat_id, "typing")
+
+    try:
+        # Скачиваем голосовое сообщение
+        voice_file = await message.download(
+            file_name=os.path.join(tempfile.gettempdir(), f"voice_{message.id}.ogg")
+        )
+
+        # Транскрибируем
+        from ai_office.tools.voice_tools import transcribe_voice
+
+        transcript = await transcribe_voice.ainvoke({"file_path": voice_file})
+
+        # Удаляем временный файл
+        if os.path.exists(voice_file):
+            os.remove(voice_file)
+
+        if transcript.startswith("Ошибка"):
+            await message.reply(
+                format_agent_message("Alice", "Персональный ассистент", transcript)
+            )
+            return
+
+        # Передаем транскрипцию как обычное текстовое сообщение
+        add_message(chat_id, "human", f"[Голосовое сообщение]: {transcript}")
+
+        # Обрабатываем через оркестратор
+        history = get_history(chat_id)
+        history_messages = []
+        for msg in history[:-1]:
+            if msg["role"] == "human":
+                history_messages.append(HumanMessage(content=msg["content"]))
+            else:
+                history_messages.append(AIMessage(content=msg["content"]))
+
+        graph = build_graph()
+        initial_state = {
+            "messages": history_messages + [HumanMessage(content=transcript)],
+            "current_agent": "",
+            "task_context": {},
+            "chat_history": history,
+        }
+        result = await graph.ainvoke(initial_state)
+
+        ai_response = ""
+        for msg in reversed(result["messages"]):
+            if isinstance(msg, AIMessage) and msg.content:
+                ai_response = msg.content
+                break
+
+        if ai_response:
+            add_message(chat_id, "ai", ai_response)
+            agent_name = result.get("current_agent", "alice").capitalize()
+            role = "Персональный ассистент" if agent_name == "Alice" else "Разработчик"
+            response_text = format_agent_message(agent_name, role, ai_response)
+        else:
+            response_text = format_agent_message(
+                "Alice", "Персональный ассистент",
+                "Не удалось обработать голосовое сообщение."
+            )
+
+    except Exception as e:
+        logger.error("Error processing voice from user %d: %s", telegram_id, str(e), exc_info=True)
+        response_text = format_agent_message(
+            "Alice", "Персональный ассистент",
+            "Произошла ошибка при обработке голосового сообщения."
+        )
+
+    await message.reply(response_text)
+
+
+async def handle_document_message(client: Client, message: Message) -> None:
+    """Обработчик документов - парсинг и анализ файлов.
+
+    Args:
+        client: Pyrogram клиент
+        message: Входящее сообщение с документом
+    """
+    telegram_id = message.from_user.id
+    username = message.from_user.username
+    chat_id = message.chat.id
+
+    # Проверка прав
+    async with async_session() as session:
+        await get_or_create_user(telegram_id, username, session=session)
+        if not await check_permission(telegram_id, UserRole.ADMIN, session=session):
+            await message.reply(
+                "\U0001f512 У вас нет прав для взаимодействия с агентами."
+            )
+            return
+
+    await client.send_chat_action(chat_id, "typing")
+
+    try:
+        document = message.document
+        if not document:
+            await message.reply("Не удалось обработать документ.")
+            return
+
+        file_name = document.file_name or "unknown"
+        file_ext = os.path.splitext(file_name)[1].lower()
+
+        # Скачиваем документ
+        file_path = await message.download(
+            file_name=os.path.join(tempfile.gettempdir(), f"doc_{message.id}_{file_name}")
+        )
+
+        # Определяем тип файла и парсим
+        result_text = ""
+        if file_ext == ".pdf":
+            from ai_office.tools.file_tools import parse_pdf
+            result_text = await parse_pdf.ainvoke({"file_path": file_path})
+        elif file_ext == ".csv":
+            from ai_office.tools.file_tools import parse_csv
+            result_text = await parse_csv.ainvoke({"file_path": file_path})
+        elif file_ext in (".txt", ".md", ".json", ".log"):
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read(5000)
+            result_text = f"Содержимое файла {file_name}:\n\n{content}"
+        else:
+            result_text = f"Формат файла {file_ext} пока не поддерживается."
+
+        # Удаляем временный файл
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        # Формируем ответ
+        caption = message.caption or ""
+        if caption:
+            summary = f"Файл: {file_name}\nВопрос: {caption}\n\n{result_text}"
+        else:
+            summary = f"Файл: {file_name}\n\n{result_text}"
+
+        # Ограничиваем длину
+        if len(summary) > 4000:
+            summary = summary[:4000] + "\n\n... (текст обрезан)"
+
+        response_text = format_agent_message(
+            "Alice", "Персональный ассистент", summary
+        )
+
+    except Exception as e:
+        logger.error("Error processing document from user %d: %s", telegram_id, str(e), exc_info=True)
+        response_text = format_agent_message(
+            "Alice", "Персональный ассистент",
+            "Произошла ошибка при обработке документа."
         )
 
     await message.reply(response_text)
