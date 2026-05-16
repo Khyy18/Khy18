@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+
+{% block title %}Billing - AI Outbound Agency{% endblock %}
+{% block page_title %}Billing{% endblock %}
+
+{% block content %}
+<div id="billing-app" class="space-y-8">
+    <!-- Current Plan Card -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Current Plan</h3>
+        <div id="current-plan" class="flex items-center justify-between">
+            <div>
+                <p class="text-2xl font-bold text-indigo-600" id="plan-name">Loading...</p>
+                <p class="text-gray-500" id="plan-price"></p>
+            </div>
+            <div id="subscription-status" class="px-3 py-1 rounded-full text-sm font-medium"></div>
+        </div>
+    </div>
+
+    <!-- Usage Meters -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Usage This Period</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Leads -->
+            <div>
+                <div class="flex justify-between mb-1">
+                    <span class="text-sm font-medium text-gray-700">Leads</span>
+                    <span class="text-sm text-gray-500" id="leads-usage-text">0 / 0</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-3">
+                    <div id="leads-bar" class="bg-indigo-600 h-3 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+            </div>
+            <!-- Emails -->
+            <div>
+                <div class="flex justify-between mb-1">
+                    <span class="text-sm font-medium text-gray-700">Emails</span>
+                    <span class="text-sm text-gray-500" id="emails-usage-text">0 / 0</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-3">
+                    <div id="emails-bar" class="bg-green-500 h-3 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+            </div>
+            <!-- LinkedIn -->
+            <div>
+                <div class="flex justify-between mb-1">
+                    <span class="text-sm font-medium text-gray-700">LinkedIn Actions</span>
+                    <span class="text-sm text-gray-500" id="linkedin-usage-text">0 / 0</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-3">
+                    <div id="linkedin-bar" class="bg-blue-500 h-3 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+            </div>
+            <!-- Campaigns -->
+            <div>
+                <div class="flex justify-between mb-1">
+                    <span class="text-sm font-medium text-gray-700">Active Campaigns</span>
+                    <span class="text-sm text-gray-500" id="campaigns-usage-text">0 / 0</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-3">
+                    <div id="campaigns-bar" class="bg-yellow-500 h-3 rounded-full transition-all" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Plan Comparison Table -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Available Plans</h3>
+        <div class="overflow-x-auto">
+            <table class="w-full text-left">
+                <thead>
+                    <tr class="border-b">
+                        <th class="pb-3 text-sm font-medium text-gray-500">Feature</th>
+                        <th class="pb-3 text-sm font-medium text-gray-500 text-center">Starter</th>
+                        <th class="pb-3 text-sm font-medium text-gray-500 text-center">Growth</th>
+                        <th class="pb-3 text-sm font-medium text-gray-500 text-center">Scale</th>
+                        <th class="pb-3 text-sm font-medium text-gray-500 text-center">Enterprise</th>
+                    </tr>
+                </thead>
+                <tbody id="plans-table-body">
+                    <tr><td colspan="5" class="py-4 text-center text-gray-400">Loading plans...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Cancel Subscription -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-2">Cancel Subscription</h3>
+        <p class="text-gray-500 text-sm mb-4">Canceling will stop your subscription at the end of the current billing period.</p>
+        <button onclick="showCancelModal()" class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition text-sm">
+            Cancel Subscription
+        </button>
+    </div>
+
+    <!-- Invoice History -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Invoice History</h3>
+        <table class="w-full text-left">
+            <thead>
+                <tr class="border-b">
+                    <th class="pb-3 text-sm font-medium text-gray-500">Date</th>
+                    <th class="pb-3 text-sm font-medium text-gray-500">Amount</th>
+                    <th class="pb-3 text-sm font-medium text-gray-500">Status</th>
+                    <th class="pb-3 text-sm font-medium text-gray-500">Invoice</th>
+                </tr>
+            </thead>
+            <tbody id="invoices-table-body">
+                <tr><td colspan="4" class="py-4 text-center text-gray-400">Loading invoices...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Cancel Confirmation Modal -->
+<div id="cancel-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+        <h3 class="text-lg font-semibold text-gray-800 mb-2">Confirm Cancellation</h3>
+        <p class="text-gray-600 mb-6">Are you sure you want to cancel your subscription? You will lose access to premium features at the end of your billing period.</p>
+        <div class="flex justify-end space-x-3">
+            <button onclick="hideCancelModal()" class="px-4 py-2 border border-gray-300 rounded text-gray-700 hover:bg-gray-50 transition">
+                Keep Subscription
+            </button>
+            <button onclick="confirmCancel()" class="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition">
+                Yes, Cancel
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+const token = localStorage.getItem('token');
+const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+let allPlans = [];
+
+async function loadBillingData() {
+    await Promise.all([loadSubscription(), loadUsage(), loadPlans(), loadInvoices()]);
+}
+
+async function loadSubscription() {
+    try {
+        const res = await fetch('/api/billing/subscription', { headers });
+        if (res.ok) {
+            const sub = await res.json();
+            document.getElementById('plan-name').textContent = sub.plan.name.charAt(0).toUpperCase() + sub.plan.name.slice(1);
+            document.getElementById('plan-price').textContent = sub.plan.price_cents > 0 ? `$${(sub.plan.price_cents / 100).toFixed(0)}/month` : 'Custom pricing';
+            const statusEl = document.getElementById('subscription-status');
+            statusEl.textContent = sub.status;
+            statusEl.className = `px-3 py-1 rounded-full text-sm font-medium ${sub.status === 'active' ? 'bg-green-100 text-green-800' : sub.status === 'trialing' ? 'bg-blue-100 text-blue-800' : 'bg-red-100 text-red-800'}`;
+        }
+    } catch (e) { console.error('Failed to load subscription:', e); }
+}
+
+async function loadUsage() {
+    try {
+        const res = await fetch('/api/billing/usage', { headers });
+        if (res.ok) {
+            const u = await res.json();
+            updateMeter('leads', u.leads_used, u.leads_limit);
+            updateMeter('emails', u.emails_used, u.emails_limit);
+            updateMeter('linkedin', u.linkedin_used, u.linkedin_limit);
+            updateMeter('campaigns', u.campaigns_active, u.campaigns_limit);
+        }
+    } catch (e) { console.error('Failed to load usage:', e); }
+}
+
+function updateMeter(name, used, limit) {
+    const limitText = limit === -1 ? 'Unlimited' : limit;
+    document.getElementById(`${name}-usage-text`).textContent = `${used} / ${limitText}`;
+    const pct = limit <= 0 ? 0 : Math.min((used / limit) * 100, 100);
+    document.getElementById(`${name}-bar`).style.width = `${pct}%`;
+}
+
+async function loadPlans() {
+    try {
+        const res = await fetch('/api/billing/plans', { headers });
+        if (res.ok) {
+            allPlans = await res.json();
+            renderPlansTable(allPlans);
+        }
+    } catch (e) { console.error('Failed to load plans:', e); }
+}
+
+function renderPlansTable(plans) {
+    const tbody = document.getElementById('plans-table-body');
+    const formatLimit = (v) => v === -1 ? 'Unlimited' : v.toLocaleString();
+    const rows = [
+        { label: 'Price', key: 'price_cents', format: (v) => v > 0 ? `$${v/100}/mo` : 'Custom' },
+        { label: 'Leads', key: 'leads_limit', format: formatLimit },
+        { label: 'Emails', key: 'emails_limit', format: formatLimit },
+        { label: 'LinkedIn Actions', key: 'linkedin_limit', format: formatLimit },
+        { label: 'Campaigns', key: 'campaigns_limit', format: formatLimit },
+    ];
+    const ordered = ['starter', 'growth', 'scale', 'enterprise'];
+    const sorted = ordered.map(n => plans.find(p => p.name === n)).filter(Boolean);
+
+    let html = '';
+    for (const row of rows) {
+        html += `<tr class="border-b"><td class="py-3 text-sm text-gray-700">${row.label}</td>`;
+        for (const plan of sorted) {
+            html += `<td class="py-3 text-sm text-gray-700 text-center">${row.format(plan[row.key])}</td>`;
+        }
+        html += '</tr>';
+    }
+    // Action row
+    html += '<tr><td class="py-3"></td>';
+    for (const plan of sorted) {
+        html += `<td class="py-3 text-center"><button onclick="subscribeToPlan('${plan.id}')" class="px-3 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 transition">Select</button></td>`;
+    }
+    html += '</tr>';
+    tbody.innerHTML = html;
+}
+
+async function subscribeToPlan(planId) {
+    try {
+        const res = await fetch('/api/billing/subscribe', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ plan_id: planId, success_url: window.location.origin + '/billing?success=1', cancel_url: window.location.origin + '/billing' }),
+        });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.checkout_url) window.location.href = data.checkout_url;
+        } else {
+            const err = await res.json();
+            alert(err.detail || 'Failed to start checkout');
+        }
+    } catch (e) { console.error('Subscribe error:', e); }
+}
+
+async function loadInvoices() {
+    try {
+        const res = await fetch('/api/billing/invoices', { headers });
+        if (res.ok) {
+            const invoices = await res.json();
+            const tbody = document.getElementById('invoices-table-body');
+            if (invoices.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="py-4 text-center text-gray-400">No invoices yet</td></tr>';
+                return;
+            }
+            let html = '';
+            for (const inv of invoices) {
+                const date = new Date(inv.created).toLocaleDateString();
+                const amount = `$${(inv.amount_due / 100).toFixed(2)}`;
+                const link = inv.hosted_invoice_url ? `<a href="${inv.hosted_invoice_url}" target="_blank" class="text-indigo-600 hover:underline">View</a>` : '-';
+                html += `<tr class="border-b"><td class="py-3 text-sm">${date}</td><td class="py-3 text-sm">${amount}</td><td class="py-3 text-sm">${inv.status}</td><td class="py-3 text-sm">${link}</td></tr>`;
+            }
+            tbody.innerHTML = html;
+        }
+    } catch (e) { console.error('Failed to load invoices:', e); }
+}
+
+function showCancelModal() { document.getElementById('cancel-modal').classList.remove('hidden'); }
+function hideCancelModal() { document.getElementById('cancel-modal').classList.add('hidden'); }
+
+async function confirmCancel() {
+    hideCancelModal();
+    try {
+        const res = await fetch('/api/billing/cancel', { method: 'POST', headers });
+        if (res.ok) { await loadBillingData(); }
+        else { const err = await res.json(); alert(err.detail || 'Failed to cancel'); }
+    } catch (e) { console.error('Cancel error:', e); }
+}
+
+document.addEventListener('DOMContentLoaded', loadBillingData);
+</script>
+{% endblock %}
