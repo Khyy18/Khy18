@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -381,16 +381,56 @@ async def delete_script(
 @router.post("/test-call")
 async def initiate_test_call(
     data: TestCallRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
 ) -> dict:
     """Initiate a test call to a specified phone number."""
-    from fastapi import Request
+    call_manager = getattr(request.app.state, "call_manager", None)
+    if call_manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Voice call service is not available",
+        )
 
-    # Access call_manager from app state (will be set during lifespan init)
-    # For now return a structured response
+    # Look up or create a lead for the test call phone number
+    from core.models import Lead, LeadStatus
+
+    result = await session.execute(
+        select(Lead).where(
+            Lead.tenant_id == current_user.tenant_id,
+            Lead.email == f"test-call-{data.phone_number}@internal",
+        )
+    )
+    lead = result.scalar_one_or_none()
+
+    if lead is None:
+        import uuid as _uuid
+
+        lead = Lead(
+            id=_uuid.uuid4(),
+            tenant_id=current_user.tenant_id,
+            email=f"test-call-{data.phone_number}@internal",
+            first_name="Test",
+            last_name="Call",
+            status=LeadStatus.new,
+            enrichment_data={"phone": data.phone_number},
+        )
+        session.add(lead)
+        await session.commit()
+        await session.refresh(lead)
+
+    # Initiate the call via call_manager
+    call_result = await call_manager.start_call(
+        lead_id=lead.id,
+        tenant_id=current_user.tenant_id,
+        script_id=data.script_id if data.script_id else None,
+    )
+
     return {
-        "status": "queued",
+        "status": "initiated",
+        "call_id": call_result.get("call_id"),
+        "twilio_sid": call_result.get("twilio_sid"),
         "phone_number": data.phone_number,
         "script_id": data.script_id,
-        "message": "Test call has been queued for dispatch",
     }

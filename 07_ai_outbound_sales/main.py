@@ -372,6 +372,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             from channels.voice import TwilioClient, DeepgramSTT, ElevenLabsTTS, CallManager
             from scheduler.voice_scheduler import VoiceScheduler
+            from agents.voice_conversation import VoiceConversationAgent
 
             twilio_client = TwilioClient(
                 account_sid=settings.twilio_account_sid,
@@ -387,6 +388,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             # Use the webhook LLM client already created above
             voice_llm = getattr(app.state, "llm_client", None)
 
+            # Create VoiceConversationAgent for FSM-driven conversations
+            voice_agent = VoiceConversationAgent(
+                llm_client=voice_llm,
+                settings=settings,
+                session_factory=async_session_factory,
+            )
+
             call_manager = CallManager(
                 twilio_client=twilio_client,
                 stt=deepgram_stt,
@@ -394,6 +402,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 llm_client=voice_llm,
                 session_factory=async_session_factory,
                 settings=settings,
+                redis_url=settings.redis_url,
+                voice_agent=voice_agent,
             )
             app.state.call_manager = call_manager
 

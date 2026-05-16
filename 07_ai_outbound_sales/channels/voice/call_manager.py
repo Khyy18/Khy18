@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import redis.asyncio as aioredis
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,8 @@ class CallManager:
         llm_client: Any,
         session_factory: Any,
         settings: Any,
+        redis_url: str = "",
+        voice_agent: Any = None,
     ) -> None:
         self._twilio = twilio_client
         self._stt = stt
@@ -32,6 +35,20 @@ class CallManager:
         self._llm = llm_client
         self._session_factory = session_factory
         self._settings = settings
+        self._redis_url = redis_url
+        self._redis: aioredis.Redis | None = None
+        self._voice_agent = voice_agent
+        # Per-call conversation state and history, keyed by stream_sid/call_sid
+        self._conversation_states: dict[str, Any] = {}
+        self._conversation_histories: dict[str, list[dict[str, Any]]] = {}
+
+    async def _get_redis(self) -> aioredis.Redis | None:
+        """Get or create Redis connection."""
+        if not self._redis_url:
+            return None
+        if self._redis is None:
+            self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
+        return self._redis
 
     async def start_call(
         self,
@@ -158,7 +175,14 @@ class CallManager:
         update_data: dict[str, Any] = {"status": call_status}
         if duration is not None:
             update_data["duration_seconds"] = duration
-        if call_status in (CallStatus.completed, CallStatus.failed, CallStatus.no_answer, CallStatus.busy):
+
+        terminal_statuses = (
+            CallStatus.completed,
+            CallStatus.failed,
+            CallStatus.no_answer,
+            CallStatus.busy,
+        )
+        if call_status in terminal_statuses:
             update_data["ended_at"] = datetime.now(timezone.utc)
 
         async with self._session_factory() as session:
@@ -169,6 +193,19 @@ class CallManager:
             )
             await session.execute(stmt)
             await session.commit()
+
+            # Remove from active set on terminal statuses
+            if call_status in terminal_statuses:
+                # Look up the call to get tenant_id and call_id
+                result = await session.execute(
+                    select(Call).where(Call.twilio_sid == call_sid)
+                )
+                call = result.scalar_one_or_none()
+                if call:
+                    redis = await self._get_redis()
+                    if redis:
+                        active_key = f"voice:active:{call.tenant_id}"
+                        await redis.srem(active_key, str(call.id))
 
     async def handle_amd_result(self, call_sid: str, answered_by: str) -> None:
         """Handle answering machine detection result."""
@@ -235,9 +272,41 @@ class CallManager:
     async def _process_turn(
         self, websocket: Any, stream_sid: str, user_text: str
     ) -> None:
-        """Process a conversation turn: send to LLM and stream TTS response."""
+        """Process a conversation turn: send to VoiceConversationAgent and stream TTS response."""
         try:
-            response_text = await self._llm.generate(user_text)
+            if self._voice_agent:
+                from agents.voice_conversation import ConversationState
+
+                # Get or initialize conversation state for this stream
+                if stream_sid not in self._conversation_states:
+                    self._conversation_states[stream_sid] = ConversationState.greeting
+                if stream_sid not in self._conversation_histories:
+                    self._conversation_histories[stream_sid] = []
+
+                current_state = self._conversation_states[stream_sid]
+                history = self._conversation_histories[stream_sid]
+
+                # Build minimal lead_data (empty dict if not available)
+                lead_data: dict[str, Any] = {}
+
+                result = await self._voice_agent.process_transcript(
+                    transcript=user_text,
+                    state=current_state,
+                    lead_data=lead_data,
+                    conversation_history=history,
+                )
+
+                response_text = result.get("response_text", "")
+                new_state = result.get("new_state", current_state)
+
+                # Update tracked state and history
+                self._conversation_states[stream_sid] = new_state
+                history.append({"role": "user", "content": user_text})
+                history.append({"role": "assistant", "content": response_text})
+            else:
+                # Fallback: direct LLM call if no voice agent configured
+                response_text = await self._llm.generate(user_text)
+
             async for audio_chunk in self._tts.synthesize(response_text):
                 payload = base64.b64encode(audio_chunk).decode("utf-8")
                 media_message = json.dumps({

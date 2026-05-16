@@ -1,4 +1,10 @@
-import audioop
+try:
+    import audioop
+except (ImportError, ModuleNotFoundError):
+    try:
+        import audioop_lts as audioop  # type: ignore[no-redef]
+    except (ImportError, ModuleNotFoundError):
+        audioop = None  # type: ignore[assignment]
 import logging
 from typing import AsyncGenerator
 
@@ -53,4 +59,25 @@ class ElevenLabsTTS:
     @staticmethod
     def convert_to_mulaw(audio_bytes: bytes) -> bytes:
         """Convert 16-bit PCM audio to mu-law encoded audio."""
-        return audioop.lin2ulaw(audio_bytes, 2)
+        if audioop is not None:
+            return audioop.lin2ulaw(audio_bytes, 2)
+        # Fallback: manual mu-law encoding using struct
+        import struct
+
+        num_samples = len(audio_bytes) // 2
+        samples = struct.unpack(f"<{num_samples}h", audio_bytes)
+        result = bytearray(num_samples)
+        MULAW_BIAS = 33
+        MULAW_MAX = 0x1FFF
+        for i, sample in enumerate(samples):
+            sign = 0x80 if sample < 0 else 0
+            sample = min(abs(sample), 32635)
+            sample = sample + MULAW_BIAS
+            exponent = 7
+            for exp_val in (0x4000, 0x2000, 0x1000, 0x800, 0x400, 0x200, 0x100):
+                if sample >= exp_val:
+                    break
+                exponent -= 1
+            mantissa = (sample >> (exponent + 3)) & 0x0F
+            result[i] = ~(sign | (exponent << 4) | mantissa) & 0xFF
+        return bytes(result)
