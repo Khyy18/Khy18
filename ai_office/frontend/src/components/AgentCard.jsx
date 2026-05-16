@@ -5,7 +5,7 @@ import TypingIndicator from './TypingIndicator'
  * Карточка агента с glass-morphism эффектом
  * Отображает: аватар, имя, роль, статус, текущую задачу
  */
-export default function AgentCard({ agent }) {
+export default function AgentCard({ agent, onSelect }) {
   // Получаем инициалы из имени агента
   const initials = agent.name
     .split(' ')
@@ -47,7 +47,12 @@ export default function AgentCard({ agent }) {
   const showTyping = agent.status === 'typing' || agent.status === 'working'
 
   return (
-    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 animate-slide-up">
+    <div
+      className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 animate-slide-up cursor-pointer hover:bg-white/10 transition-colors"
+      onClick={() => onSelect && onSelect(agent)}
+      role="button"
+      tabIndex={0}
+    >
       <div className="flex items-center gap-3">
         {/* Аватар с градиентом */}
         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent to-secondary flex items-center justify-center text-white font-semibold text-sm shrink-0">

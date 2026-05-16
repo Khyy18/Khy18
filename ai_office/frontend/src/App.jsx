@@ -1,16 +1,19 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, ListTodo, Activity } from 'lucide-react'
+import { Users, ListTodo, Activity, GitBranch, Clock } from 'lucide-react'
 import AgentCard from './components/AgentCard'
 import TaskCard from './components/TaskCard'
 import ActivityLog from './components/ActivityLog'
 import SystemStatus from './components/SystemStatus'
+import AgentGraph from './components/AgentGraph'
+import TaskTimeline from './components/TaskTimeline'
+import AgentDetailView from './components/AgentDetailView'
 import { ToastContainer, showToast } from './components/Toast'
 import { useApi } from './hooks/useApi'
 import { useWebSocket } from './hooks/useWebSocket'
 
 /**
  * Главный компонент AI Office Mini App
- * Три таба: Agents, Tasks, Activity
+ * Пять табов: Agents, Tasks, Activity, Graph, Timeline
  * Интеграция с Telegram Web App SDK
  */
 export default function App() {
@@ -18,6 +21,7 @@ export default function App() {
   const [wsAgents, setWsAgents] = useState(null)
   const [wsTasks, setWsTasks] = useState(null)
   const [wsActivity, setWsActivity] = useState(null)
+  const [selectedAgent, setSelectedAgent] = useState(null)
 
   // Инициализация Telegram Web App
   useEffect(() => {
@@ -95,6 +99,8 @@ export default function App() {
     { id: 'agents', label: 'Agents', icon: Users },
     { id: 'tasks', label: 'Tasks', icon: ListTodo },
     { id: 'activity', label: 'Activity', icon: Activity },
+    { id: 'graph', label: 'Graph', icon: GitBranch },
+    { id: 'timeline', label: 'Timeline', icon: Clock },
   ]
 
   return (
@@ -127,7 +133,7 @@ export default function App() {
               <div className="space-y-3">
                 {agents && agents.length > 0 ? (
                   agents.map((agent) => (
-                    <AgentCard key={agent.id || agent.name} agent={agent} />
+                    <AgentCard key={agent.id || agent.name} agent={agent} onSelect={setSelectedAgent} />
                   ))
                 ) : (
                   <div className="text-center py-8 text-white/30 text-sm">
@@ -154,16 +160,29 @@ export default function App() {
             {activeTab === 'activity' && (
               <ActivityLog activities={activity || []} />
             )}
+
+            {activeTab === 'graph' && (
+              <AgentGraph />
+            )}
+
+            {activeTab === 'timeline' && (
+              <TaskTimeline />
+            )}
           </div>
         </div>
       </main>
+
+      {/* AgentDetailView overlay */}
+      {selectedAgent && (
+        <AgentDetailView agent={selectedAgent} onClose={() => setSelectedAgent(null)} />
+      )}
 
       {/* Toast notifications */}
       <ToastContainer />
 
       {/* Нижний таб-бар */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-xl border-t border-white/5">
-        <div className="flex items-center justify-around py-2 px-4">
+        <div className="flex items-center justify-around py-2 px-2">
           {tabs.map((tab) => {
             const Icon = tab.icon
             const isActive = activeTab === tab.id
@@ -171,7 +190,7 @@ export default function App() {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-all ${
+                className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition-all ${
                   isActive
                     ? 'text-accent'
                     : 'text-white/40 hover:text-white/60'
