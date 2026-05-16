@@ -32,3 +32,6 @@ backtester/data/*.json
 
 # Персистентная память ChromaDB
 ai_office_memory/
+
+# Runtime state (marketplace installs)
+ai_office/plugins/.installed.json

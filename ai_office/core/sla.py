@@ -38,11 +38,11 @@ class SLAEngine:
 
         breaches = []
         for task in tasks:
-            # Calculate elapsed seconds since creation
-            created = task.created_at
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-            elapsed = (now - created).total_seconds()
+            # Use response_started_at if available, falling back to created_at
+            start_time = task.response_started_at or task.created_at
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            elapsed = (now - start_time).total_seconds()
 
             if elapsed > task.sla_target_seconds:
                 breaches.append({

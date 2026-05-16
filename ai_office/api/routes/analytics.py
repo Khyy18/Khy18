@@ -90,22 +90,30 @@ async def analytics_overview(
         bottleneck = max(agent_workload, key=lambda x: x["tasks"])
         bottleneck_agent = bottleneck["agent"]
 
-    # Throughput trend (tasks closed per day for last 30 days)
+    # Throughput trend (tasks closed per day for last 30 days) - single GROUP BY query
+    period_start = (now - timedelta(days=29)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    result = await session.execute(
+        select(
+            sa_func.date(Task.closed_at).label("day"),
+            sa_func.count(Task.id).label("cnt"),
+        )
+        .where(
+            Task.status.in_(["done", "closed"]),
+            Task.closed_at >= period_start,
+        )
+        .group_by(sa_func.date(Task.closed_at))
+    )
+    day_counts = {str(row.day): row.cnt for row in result.all()}
+
     throughput_trend = []
     for i in range(30):
         day_start = (now - timedelta(days=29 - i)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        day_end = day_start + timedelta(days=1)
-        result = await session.execute(
-            select(sa_func.count(Task.id)).where(
-                Task.status.in_(["done", "closed"]),
-                Task.closed_at >= day_start,
-                Task.closed_at < day_end,
-            )
-        )
-        count = result.scalar() or 0
-        throughput_trend.append({"date": day_start.strftime("%Y-%m-%d"), "count": count})
+        day_str = day_start.strftime("%Y-%m-%d")
+        throughput_trend.append({"date": day_str, "count": day_counts.get(day_str, 0)})
 
     return AnalyticsOverviewResponse(
         tasks_completed_week=tasks_completed_week,
@@ -222,35 +230,44 @@ async def productivity_metrics(
     """Метрики продуктивности команды."""
     now = datetime.now(timezone.utc)
 
-    # Created vs completed per day (last 7 days)
+    # Created vs completed per day (last 7 days) - two GROUP BY queries
+    week_start = (now - timedelta(days=6)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    result = await session.execute(
+        select(
+            sa_func.date(Task.created_at).label("day"),
+            sa_func.count(Task.id).label("cnt"),
+        )
+        .where(Task.created_at >= week_start)
+        .group_by(sa_func.date(Task.created_at))
+    )
+    created_by_day = {str(row.day): row.cnt for row in result.all()}
+
+    result = await session.execute(
+        select(
+            sa_func.date(Task.closed_at).label("day"),
+            sa_func.count(Task.id).label("cnt"),
+        )
+        .where(
+            Task.status.in_(["done", "closed"]),
+            Task.closed_at >= week_start,
+        )
+        .group_by(sa_func.date(Task.closed_at))
+    )
+    completed_by_day = {str(row.day): row.cnt for row in result.all()}
+
     created_vs_completed = []
     for i in range(7):
         day_start = (now - timedelta(days=6 - i)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        day_end = day_start + timedelta(days=1)
-
-        result = await session.execute(
-            select(sa_func.count(Task.id)).where(
-                Task.created_at >= day_start,
-                Task.created_at < day_end,
-            )
-        )
-        created = result.scalar() or 0
-
-        result = await session.execute(
-            select(sa_func.count(Task.id)).where(
-                Task.status.in_(["done", "closed"]),
-                Task.closed_at >= day_start,
-                Task.closed_at < day_end,
-            )
-        )
-        completed = result.scalar() or 0
-
+        day_str = day_start.strftime("%Y-%m-%d")
         created_vs_completed.append({
-            "date": day_start.strftime("%Y-%m-%d"),
-            "created": created,
-            "completed": completed,
+            "date": day_str,
+            "created": created_by_day.get(day_str, 0),
+            "completed": completed_by_day.get(day_str, 0),
         })
 
     # Peak hours (count tasks created per hour)

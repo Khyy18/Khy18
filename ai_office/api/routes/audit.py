@@ -5,7 +5,7 @@ import io
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,13 +42,13 @@ async def list_audit_entries(
             dt_from = datetime.fromisoformat(date_from)
             query = query.where(AuditEntry.timestamp >= dt_from)
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="Некорректный формат date_from (ожидается ISO)")
     if date_to:
         try:
             dt_to = datetime.fromisoformat(date_to)
             query = query.where(AuditEntry.timestamp <= dt_to)
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail="Некорректный формат date_to (ожидается ISO)")
 
     query = query.order_by(AuditEntry.timestamp.desc()).offset(offset).limit(limit)
     result = await session.execute(query)
@@ -59,12 +59,29 @@ async def list_audit_entries(
 @router.get("/export")
 async def export_audit(
     format: str = Query(default="csv"),
+    date_from: Optional[str] = Query(default=None),
+    date_to: Optional[str] = Query(default=None),
+    export_limit: int = Query(default=10000, ge=1, le=100000, alias="limit"),
     session: AsyncSession = Depends(get_session),
 ):
     """Экспорт записей аудита в CSV или JSON."""
-    result = await session.execute(
-        select(AuditEntry).order_by(AuditEntry.timestamp.desc()).limit(1000)
-    )
+    query = select(AuditEntry).order_by(AuditEntry.timestamp.desc())
+
+    if date_from:
+        try:
+            dt_from = datetime.fromisoformat(date_from)
+            query = query.where(AuditEntry.timestamp >= dt_from)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Некорректный формат date_from (ожидается ISO)")
+    if date_to:
+        try:
+            dt_to = datetime.fromisoformat(date_to)
+            query = query.where(AuditEntry.timestamp <= dt_to)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Некорректный формат date_to (ожидается ISO)")
+
+    query = query.limit(export_limit)
+    result = await session.execute(query)
     entries = result.scalars().all()
 
     if format == "csv":

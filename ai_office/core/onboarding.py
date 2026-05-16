@@ -171,15 +171,14 @@ class OnboardingManager:
             automation_goals, automation_config["Task management"]
         )
 
-        # Build final configuration
-        config = {
-            "enabled_agents": enabled_agents,
-            "max_concurrent_tasks": max_concurrent_tasks,
-            "automation": automation,
-            "onboarding": settings.get("onboarding", {}),
-        }
+        # Merge onboarding configuration into existing settings,
+        # preserving branding and other previously-stored keys.
+        settings["enabled_agents"] = enabled_agents
+        settings["max_concurrent_tasks"] = max_concurrent_tasks
+        settings["automation"] = automation
+        settings["onboarding"] = settings.get("onboarding", {})
 
-        workspace.settings_json = json.dumps(config, ensure_ascii=False)
+        workspace.settings_json = json.dumps(settings, ensure_ascii=False)
         await session.commit()
 
         logger.info(
@@ -190,7 +189,7 @@ class OnboardingManager:
             automation_goals,
         )
 
-        return config
+        return json.loads(workspace.settings_json)
 
 
 # Module-level instance

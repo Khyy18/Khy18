@@ -82,8 +82,8 @@ class KnowledgeGraph:
             for ent in entities_to_check:
                 query = select(KnowledgeFact).where(
                     or_(
-                        KnowledgeFact.subject.contains(ent),
-                        KnowledgeFact.object_value.contains(ent),
+                        KnowledgeFact.subject == ent,
+                        KnowledgeFact.object_value == ent,
                     )
                 )
                 if workspace_id is not None:

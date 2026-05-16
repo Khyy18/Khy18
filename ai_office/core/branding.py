@@ -1,9 +1,34 @@
 """Конфигурация брендинга рабочего пространства."""
 
 import json
+import re
 from typing import Optional
 
 from ai_office.core.models import Workspace
+
+
+# Patterns that are dangerous in custom CSS and must be stripped
+_DANGEROUS_CSS_PATTERNS = [
+    re.compile(r"expression\s*\(", re.IGNORECASE),
+    re.compile(r"url\s*\(", re.IGNORECASE),
+    re.compile(r"@import", re.IGNORECASE),
+    re.compile(r"behavior\s*:", re.IGNORECASE),
+    re.compile(r"javascript\s*:", re.IGNORECASE),
+    re.compile(r"-moz-binding", re.IGNORECASE),
+]
+
+
+def sanitize_css(css: str) -> str:
+    """Strip dangerous CSS patterns that could enable XSS attacks.
+
+    Removes: expression(), url(), @import, behavior:, javascript:, -moz-binding.
+    """
+    if not css:
+        return css
+    sanitized = css
+    for pattern in _DANGEROUS_CSS_PATTERNS:
+        sanitized = pattern.sub("", sanitized)
+    return sanitized
 
 
 class BrandingConfig:
@@ -47,6 +72,9 @@ class BrandingConfig:
             settings = {}
 
         branding = settings.get("branding", dict(cls.DEFAULT))
+        # Sanitize custom_css before persisting
+        if "custom_css" in updates:
+            updates["custom_css"] = sanitize_css(updates["custom_css"])
         branding.update(updates)
         settings["branding"] = branding
         workspace.settings_json = json.dumps(settings, ensure_ascii=False)

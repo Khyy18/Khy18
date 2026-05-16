@@ -1,5 +1,6 @@
 """Эндпоинты для работы с задачами."""
 
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -85,6 +86,9 @@ async def update_task(
         raise HTTPException(status_code=404, detail="Задача не найдена")
 
     if task_data.status is not None:
+        # Set response_started_at when agent begins processing
+        if task_data.status == "in_progress" and task.response_started_at is None:
+            task.response_started_at = datetime.now(timezone.utc)
         task.status = task_data.status
     if task_data.executor_id is not None:
         task.executor_id = task_data.executor_id

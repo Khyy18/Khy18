@@ -16,7 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 class ApprovalManager:
-    """Менеджер запросов на одобрение критических действий."""
+    """Менеджер запросов на одобрение критических действий.
+
+    NOTE: This implementation stores pending approval events in process memory
+    (_events and _results dicts). This is acceptable for the current single-process,
+    SQLite-based architecture but will NOT work under multi-worker deployments
+    (uvicorn --workers N) or across process restarts. To support those scenarios,
+    pending state should be persisted in the database and re-hydrated on startup.
+    """
 
     APPROVAL_REQUIRED_ACTIONS = [
         "deploy",
