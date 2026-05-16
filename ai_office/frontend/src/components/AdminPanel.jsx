@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Bot, Settings, Link, Puzzle, BarChart3, Save, RefreshCw, TestTube } from 'lucide-react'
+import { Bot, Settings, Link, Puzzle, BarChart3, Save, RefreshCw, TestTube, ShieldCheck, FileText, Palette, Store } from 'lucide-react'
+import ApprovalsPanel from './ApprovalsPanel'
+import AuditTab from './AuditTab'
+import BrandingPanel from './BrandingPanel'
+import MarketplaceTab from './MarketplaceTab'
 
 /**
  * Панель администратора AI Office
@@ -15,6 +19,10 @@ export default function AdminPanel() {
     { id: 'integrations', label: 'Интеграции', icon: Link },
     { id: 'plugins', label: 'Плагины', icon: Puzzle },
     { id: 'usage', label: 'Расходы', icon: BarChart3 },
+    { id: 'approvals', label: 'Одобрения', icon: ShieldCheck },
+    { id: 'audit', label: 'Аудит', icon: FileText },
+    { id: 'branding', label: 'Бренд', icon: Palette },
+    { id: 'marketplace', label: 'Маркет', icon: Store },
   ]
 
   return (
@@ -47,6 +55,10 @@ export default function AdminPanel() {
         {activeTab === 'integrations' && <IntegrationsTab />}
         {activeTab === 'plugins' && <PluginsTab />}
         {activeTab === 'usage' && <UsageTab />}
+        {activeTab === 'approvals' && <ApprovalsPanel />}
+        {activeTab === 'audit' && <AuditTab />}
+        {activeTab === 'branding' && <BrandingPanel />}
+        {activeTab === 'marketplace' && <MarketplaceTab />}
       </div>
     </div>
   )

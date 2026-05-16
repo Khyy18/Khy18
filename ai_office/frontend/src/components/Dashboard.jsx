@@ -2,6 +2,7 @@ import { ListTodo, DollarSign, Zap, Users } from 'lucide-react'
 import { useApi } from '../hooks/useApi'
 import Sparkline from './Sparkline'
 import Skeleton from './Skeleton'
+import SLAWidget from './SLAWidget'
 
 /**
  * Панель метрик (замена SystemStatus)
@@ -101,6 +102,9 @@ export default function Dashboard() {
           ))}
         </div>
       </div>
+
+      {/* Row 3: SLA Widget */}
+      <SLAWidget />
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Users, ListTodo, Activity, GitBranch, Clock, Settings } from 'lucide-react'
+import { Users, ListTodo, Activity, GitBranch, Clock, Settings, BarChart3 } from 'lucide-react'
 import AgentCard from './components/AgentCard'
 import TaskCard from './components/TaskCard'
 import ActivityLog from './components/ActivityLog'
@@ -9,6 +9,7 @@ import TaskTimeline from './components/TaskTimeline'
 import KanbanBoard from './components/KanbanBoard'
 import AgentDetailView from './components/AgentDetailView'
 import AdminPanel from './components/AdminPanel'
+import AnalyticsTab from './components/AnalyticsTab'
 import Skeleton from './components/Skeleton'
 import { ToastContainer, showToast } from './components/Toast'
 import { useApi } from './hooks/useApi'
@@ -201,6 +202,7 @@ export default function App() {
     { id: 'agents', label: 'Agents', icon: Users },
     { id: 'tasks', label: 'Tasks', icon: ListTodo },
     { id: 'activity', label: 'Activity', icon: Activity },
+    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'graph', label: 'Graph', icon: GitBranch },
     { id: 'timeline', label: 'Timeline', icon: Clock },
     ...(userRole === 'owner' ? [{ id: 'admin', label: 'Admin', icon: Settings }] : []),
@@ -320,6 +322,10 @@ export default function App() {
 
             {activeTab === 'activity' && (
               <ActivityLog activities={activity || []} />
+            )}
+
+            {activeTab === 'analytics' && (
+              <AnalyticsTab />
             )}
 
             {activeTab === 'graph' && (
