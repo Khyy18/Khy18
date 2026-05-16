@@ -11,6 +11,7 @@ import '../services/notification_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/floating_nav_bar.dart';
 import '../widgets/stat_card.dart';
+import '../widgets/sync_indicator.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
@@ -79,6 +80,8 @@ class DashboardScreen extends ConsumerWidget {
                     ],
                   ),
                   const SizedBox(height: 28),
+                  const SyncIndicator(),
+                  const SizedBox(height: 12),
                   const _NotificationBanner(),
                   const SizedBox(height: 16),
                   Row(

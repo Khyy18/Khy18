@@ -7,6 +7,7 @@ import 'providers/auth_provider.dart';
 import 'services/local_storage.dart';
 import 'services/notification_service.dart';
 import 'services/secure_storage_service.dart';
+import 'services/sync_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/page_transitions.dart';
 
@@ -29,12 +30,19 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
   await LocalStorage.init();
+  final syncService = SyncService();
+  await syncService.init();
   try {
     await NotificationService.init();
   } catch (e) {
     // App works without Firebase - it's optional
   }
-  runApp(const ProviderScope(child: KindergartenApp()));
+  runApp(ProviderScope(
+    overrides: [
+      syncServiceProvider.overrideWithValue(syncService),
+    ],
+    child: const KindergartenApp(),
+  ));
 }
 
 class KindergartenApp extends ConsumerWidget {

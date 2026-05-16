@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../models/employee.dart';
@@ -10,15 +11,34 @@ import '../models/sick_result.dart';
 import '../models/payment_order.dart';
 import '../models/reminder.dart';
 import '../models/kbk_code.dart';
+import 'sync_service.dart';
 
 class ApiService {
   final String baseUrl;
   String? _authToken;
+  SyncService? _syncService;
 
   ApiService({String? baseUrl}) : baseUrl = baseUrl ?? AppConfig.apiBaseUrl;
 
   void setAuthToken(String token) {
     _authToken = token;
+    _syncService?.setAuthToken(token);
+  }
+
+  void setSyncService(SyncService syncService) {
+    _syncService = syncService;
+    if (_authToken != null) {
+      _syncService?.setAuthToken(_authToken);
+    }
+  }
+
+  Future<bool> _isOnline() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      return results.any((r) => r != ConnectivityResult.none);
+    } catch (e) {
+      return true; // Assume online if check fails
+    }
   }
 
   Map<String, String> get _headers {
@@ -45,6 +65,10 @@ class ApiService {
   }
 
   Future<Employee> createEmployee(Employee employee) async {
+    if (!await _isOnline() && _syncService != null) {
+      await _syncService!.addToQueue('/employees', 'POST', employee.toJson());
+      return employee;
+    }
     final response = await http.post(
       Uri.parse('$baseUrl/employees'),
       headers: _headers,
@@ -57,6 +81,10 @@ class ApiService {
   }
 
   Future<void> deleteEmployee(int id) async {
+    if (!await _isOnline() && _syncService != null) {
+      await _syncService!.addToQueue('/employees/$id', 'DELETE');
+      return;
+    }
     final response = await http.delete(
       Uri.parse('$baseUrl/employees/$id'),
       headers: _headers,
@@ -163,6 +191,10 @@ class ApiService {
   }
 
   Future<JournalEntry> addJournalEntry(JournalEntry entry) async {
+    if (!await _isOnline() && _syncService != null) {
+      await _syncService!.addToQueue('/journal', 'POST', entry.toJson());
+      return entry;
+    }
     final response = await http.post(
       Uri.parse('$baseUrl/journal'),
       headers: _headers,
@@ -201,6 +233,10 @@ class ApiService {
   }
 
   Future<ChildModel> createChild(ChildModel child) async {
+    if (!await _isOnline() && _syncService != null) {
+      await _syncService!.addToQueue('/children', 'POST', child.toJson());
+      return child;
+    }
     final response = await http.post(
       Uri.parse('$baseUrl/children'),
       headers: _headers,
@@ -213,6 +249,10 @@ class ApiService {
   }
 
   Future<void> deleteChild(int id) async {
+    if (!await _isOnline() && _syncService != null) {
+      await _syncService!.addToQueue('/children/$id', 'DELETE');
+      return;
+    }
     final response = await http.delete(
       Uri.parse('$baseUrl/children/$id'),
       headers: _headers,
@@ -237,6 +277,11 @@ class ApiService {
 
   // Payments
   Future<Map<String, dynamic>> generatePayment(PaymentOrder order) async {
+    if (!await _isOnline() && _syncService != null) {
+      await _syncService!
+          .addToQueue('/payments/generate', 'POST', order.toJson());
+      return {'status': 'queued'};
+    }
     final response = await http.post(
       Uri.parse('$baseUrl/payments/generate'),
       headers: _headers,
