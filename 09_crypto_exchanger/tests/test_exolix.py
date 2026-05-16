@@ -36,7 +36,7 @@ async def test_get_currencies_with_data_wrapper(mock_exolix_session):
     ]
     session = mock_exolix_session({"data": currencies})
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.exolix._get_session", return_value=session):
         from services.exolix import get_currencies
 
         result = await get_currencies()
@@ -52,7 +52,7 @@ async def test_get_currencies_with_list_response(mock_exolix_session):
     currencies = [{"code": "BTC", "name": "Bitcoin"}]
     session = mock_exolix_session(currencies)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.exolix._get_session", return_value=session):
         from services.exolix import get_currencies
 
         result = await get_currencies()
@@ -65,7 +65,7 @@ async def test_get_estimated_amount(sample_exolix_estimate, mock_exolix_session)
     """Test get_estimated_amount returns rate data with correct params."""
     session = mock_exolix_session(sample_exolix_estimate)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.exolix._get_session", return_value=session):
         from services.exolix import get_estimated_amount
 
         result = await get_estimated_amount("btc", "eth", 1.0, "fixed")
@@ -85,7 +85,7 @@ async def test_get_estimated_amount_float_rate(sample_exolix_estimate, mock_exol
     """Test get_estimated_amount with float rate type."""
     session = mock_exolix_session(sample_exolix_estimate)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.exolix._get_session", return_value=session):
         from services.exolix import get_estimated_amount
 
         result = await get_estimated_amount("btc", "eth", 1.0, "float")
@@ -100,7 +100,7 @@ async def test_create_exchange(sample_exolix_exchange, mock_exolix_session):
     """Test create_exchange sends correct body and returns exchange data."""
     session = mock_exolix_session(sample_exolix_exchange, status=201)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.exolix._get_session", return_value=session):
         from services.exolix import create_exchange
 
         result = await create_exchange("btc", "eth", 1.0, "0xwallet123", "fixed")
@@ -121,7 +121,7 @@ async def test_get_exchange_status(sample_exolix_status, mock_exolix_session):
     """Test get_exchange_status returns status data."""
     session = mock_exolix_session(sample_exolix_status)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.exolix._get_session", return_value=session):
         from services.exolix import get_exchange_status
 
         result = await get_exchange_status("12345")
@@ -137,7 +137,7 @@ async def test_api_error_raises_exolix_error(mock_exolix_session):
     """Test that non-200/201 status raises ExolixError."""
     session = mock_exolix_session({"message": "Unauthorized"}, status=401)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.exolix._get_session", return_value=session):
         from services.exolix import get_currencies, ExolixError
 
         with pytest.raises(ExolixError) as exc_info:
@@ -150,10 +150,8 @@ async def test_connection_error_raises_exolix_error():
     """Test that connection errors are wrapped in ExolixError."""
     mock_session = AsyncMock()
     mock_session.request = MagicMock(side_effect=aiohttp.ClientError("connection refused"))
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("aiohttp.ClientSession", return_value=mock_session):
+    with patch("services.exolix._get_session", return_value=mock_session):
         from services.exolix import get_currencies, ExolixError
 
         with pytest.raises(ExolixError) as exc_info:

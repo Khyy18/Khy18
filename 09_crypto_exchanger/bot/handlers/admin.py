@@ -1,5 +1,6 @@
 """Admin panel handlers - restricted to ADMIN_CHAT_ID."""
 
+import asyncio
 import logging
 
 from aiogram import F, Router
@@ -14,6 +15,7 @@ from db.repository import (
     get_daily_stats,
     get_failed_exchanges,
     get_stuck_exchanges,
+    update_exchange,
 )
 from services.exchange_router import get_status
 from services.changenow import ChangeNowError
@@ -22,6 +24,11 @@ from services.exolix import ExolixError
 logger = logging.getLogger(__name__)
 
 router = Router(name="admin")
+
+# Maximum concurrent API checks for stuck exchanges
+_MAX_CONCURRENT_CHECKS = 5
+# Timeout per individual status check (seconds)
+_CHECK_TIMEOUT = 10.0
 
 
 def _is_admin(user_id: int) -> bool:
@@ -170,21 +177,33 @@ async def on_admin_stuck(callback: CallbackQuery) -> None:
             f"[{ex['status']}]"
         )
 
-    # Force-check stuck exchanges
-    checked = 0
-    for ex in exchanges:
+    # Force-check stuck exchanges with concurrency limit and per-check timeout
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_CHECKS)
+
+    async def _check_one(ex: dict) -> bool:
+        """Check one exchange status. Returns True if updated."""
         exchange_id = ex.get("exchange_id")
         provider = ex.get("provider", "changenow")
-        if exchange_id:
+        if not exchange_id:
+            return False
+        async with semaphore:
             try:
-                status_data = await get_status(exchange_id, provider)
+                status_data = await asyncio.wait_for(
+                    get_status(exchange_id, provider),
+                    timeout=_CHECK_TIMEOUT,
+                )
                 new_status = status_data["status"]
                 if new_status != ex["status"]:
-                    from db.repository import update_exchange
                     await update_exchange(ex["id"], status=new_status)
-                    checked += 1
-            except (ChangeNowError, ExolixError):
+                    return True
+            except (ChangeNowError, ExolixError, asyncio.TimeoutError):
                 pass
+        return False
+
+    results = await asyncio.gather(
+        *[_check_one(ex) for ex in exchanges], return_exceptions=True
+    )
+    checked = sum(1 for r in results if r is True)
 
     if checked:
         lines.append(f"")

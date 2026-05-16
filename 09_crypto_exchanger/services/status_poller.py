@@ -13,6 +13,7 @@ from db.repository import get_active_exchanges, get_stuck_exchanges, update_exch
 from services.exchange_router import get_status
 from services.changenow import ChangeNowError
 from services.exolix import ExolixError
+from services.rate_cache import rate_cache
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,9 @@ async def poll_statuses(bot: Bot) -> None:
             await _check_all_active(bot)
         except Exception:
             logger.exception("Error in status polling loop")
+
+        # Evict expired rate cache entries to prevent unbounded growth
+        rate_cache.cleanup()
 
         await asyncio.sleep(config.STATUS_POLL_INTERVAL)
 

@@ -32,7 +32,7 @@ async def test_get_currencies(sample_currencies, mock_changenow_session):
     """Test that get_currencies returns a list of currencies from the API."""
     session = mock_changenow_session(sample_currencies)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.changenow._get_session", return_value=session):
         from services.changenow import get_currencies
 
         result = await get_currencies()
@@ -47,7 +47,7 @@ async def test_get_estimated_amount_standard(sample_estimate, mock_changenow_ses
     """Test get_estimated_amount with standard flow returns estimate data."""
     session = mock_changenow_session(sample_estimate)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.changenow._get_session", return_value=session):
         from services.changenow import get_estimated_amount
 
         result = await get_estimated_amount("btc", "eth", 1.0, "standard")
@@ -66,7 +66,7 @@ async def test_get_estimated_amount_fixed_rate(sample_estimate, mock_changenow_s
     """Test get_estimated_amount with fixed-rate flow includes flow param."""
     session = mock_changenow_session(sample_estimate)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.changenow._get_session", return_value=session):
         from services.changenow import get_estimated_amount
 
         result = await get_estimated_amount("btc", "eth", 1.0, "fixed-rate")
@@ -83,7 +83,7 @@ async def test_create_exchange_standard(sample_exchange, mock_changenow_session)
     """Test create_exchange with standard flow."""
     session = mock_changenow_session(sample_exchange)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.changenow._get_session", return_value=session):
         from services.changenow import create_exchange
 
         result = await create_exchange("btc", "eth", 1.0, "0xpayout456")
@@ -101,7 +101,7 @@ async def test_create_exchange_fixed_rate(sample_exchange, mock_changenow_sessio
     """Test create_exchange with fixed-rate flow includes rateId."""
     session = mock_changenow_session(sample_exchange)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.changenow._get_session", return_value=session):
         from services.changenow import create_exchange
 
         result = await create_exchange(
@@ -121,7 +121,7 @@ async def test_get_exchange_status(sample_status_response, mock_changenow_sessio
     """Test get_exchange_status returns status data."""
     session = mock_changenow_session(sample_status_response)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.changenow._get_session", return_value=session):
         from services.changenow import get_exchange_status
 
         result = await get_exchange_status("exchange-abc-123")
@@ -137,7 +137,7 @@ async def test_api_error_raises_changenow_error(mock_changenow_session):
     """Test that non-200 status code raises ChangeNowError."""
     session = mock_changenow_session({"error": "not found"}, status=404)
 
-    with patch("aiohttp.ClientSession", return_value=session):
+    with patch("services.changenow._get_session", return_value=session):
         from services.changenow import get_currencies, ChangeNowError
 
         with pytest.raises(ChangeNowError) as exc_info:
@@ -150,10 +150,8 @@ async def test_connection_error_raises_changenow_error():
     """Test that connection errors are wrapped in ChangeNowError."""
     mock_session = AsyncMock()
     mock_session.request = MagicMock(side_effect=aiohttp.ClientError("timeout"))
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("aiohttp.ClientSession", return_value=mock_session):
+    with patch("services.changenow._get_session", return_value=mock_session):
         from services.changenow import get_currencies, ChangeNowError
 
         with pytest.raises(ChangeNowError) as exc_info:

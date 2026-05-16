@@ -13,11 +13,30 @@ BASE_URL = config.EXOLIX_BASE_URL
 API_KEY = config.EXOLIX_API_KEY
 TIMEOUT = aiohttp.ClientTimeout(total=30)
 
+# Shared session for connection pooling
+_session: Optional[aiohttp.ClientSession] = None
+
 
 class ExolixError(Exception):
     """Exolix API error."""
 
     pass
+
+
+def _get_session() -> aiohttp.ClientSession:
+    """Get or create the shared aiohttp session."""
+    global _session
+    if _session is None or _session.closed:
+        _session = aiohttp.ClientSession(timeout=TIMEOUT)
+    return _session
+
+
+async def close_session() -> None:
+    """Close the shared aiohttp session. Call on shutdown."""
+    global _session
+    if _session and not _session.closed:
+        await _session.close()
+        _session = None
 
 
 async def _request(
@@ -28,18 +47,18 @@ async def _request(
     headers = {"Authorization": f"Bearer {API_KEY}"}
 
     try:
-        async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
-            async with session.request(
-                method, url, params=params, json=json, headers=headers
-            ) as resp:
-                if resp.status in (200, 201):
-                    return await resp.json()
-                error_text = await resp.text()
-                logger.error(
-                    "Exolix API error: %s %s -> %d: %s",
-                    method, path, resp.status, error_text,
-                )
-                raise ExolixError(f"API error {resp.status}: {error_text}")
+        session = _get_session()
+        async with session.request(
+            method, url, params=params, json=json, headers=headers
+        ) as resp:
+            if resp.status in (200, 201):
+                return await resp.json()
+            error_text = await resp.text()
+            logger.error(
+                "Exolix API error: %s %s -> %d: %s",
+                method, path, resp.status, error_text,
+            )
+            raise ExolixError(f"API error {resp.status}: {error_text}")
     except aiohttp.ClientError as e:
         logger.error("Exolix connection error: %s", e)
         raise ExolixError(f"Connection error: {e}") from e
