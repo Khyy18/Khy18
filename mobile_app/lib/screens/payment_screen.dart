@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../widgets/gradient_button.dart';
 
 class PaymentScreen extends ConsumerStatefulWidget {
@@ -34,8 +35,19 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Платёжное поручение')),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) context.go('/');
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Платёжное поручение'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+            onPressed: () => context.go('/'),
+          ),
+        ),
       body: Stepper(
         currentStep: _currentStep,
         type: StepperType.vertical,
@@ -149,6 +161,7 @@ class _PaymentScreenState extends ConsumerState<PaymentScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 }

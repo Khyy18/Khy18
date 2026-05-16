@@ -26,6 +26,7 @@ import 'screens/ai_chat_screen.dart';
 import 'screens/lock_screen.dart';
 import 'screens/pin_setup_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/profile_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -200,6 +201,18 @@ class KindergartenApp extends ConsumerWidget {
             },
           ),
         ),
+        GoRoute(
+          path: '/profile',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const ProfileScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
+        ),
       ],
       redirect: (context, state) {
         final isLoggedIn = authState.isAuthenticated;
@@ -224,7 +237,7 @@ class KindergartenApp extends ConsumerWidget {
 
     return AppLifecycleWrapper(
       child: MaterialApp.router(
-        title: 'Детский сад',
+        title: 'Помощник бухгалтера',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light,
         darkTheme: AppTheme.dark,

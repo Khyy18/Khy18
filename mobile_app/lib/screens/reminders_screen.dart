@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../providers/reminders_provider.dart';
 import '../theme/app_colors.dart';
 import '../widgets/empty_state.dart';
@@ -22,8 +23,19 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(remindersProvider);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Напоминания')),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) context.go('/');
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Напоминания'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+            onPressed: () => context.go('/'),
+          ),
+        ),
       body: state.reminders.isEmpty
           ? const EmptyState(
               icon: Icons.notifications_outlined,
@@ -60,6 +72,7 @@ class _RemindersScreenState extends ConsumerState<RemindersScreen> {
                 );
               },
             ),
+    ),
     );
   }
 }

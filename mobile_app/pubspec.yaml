@@ -1,5 +1,5 @@
 name: kindergarten_app
-description: "Мобильное приложение бухгалтера детского сада"
+description: "Помощник бухгалтера - мобильное приложение для бухгалтерии детского сада"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -30,6 +30,12 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/icon.png"
 
 flutter:
   uses-material-design: true

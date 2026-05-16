@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../providers/children_provider.dart';
 import '../theme/app_colors.dart';
 import '../widgets/empty_state.dart';
@@ -22,8 +23,19 @@ class _ChildrenScreenState extends ConsumerState<ChildrenScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(childrenProvider);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Дети')),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) context.go('/');
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Дети'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+            onPressed: () => context.go('/'),
+          ),
+        ),
       body: state.children.isEmpty
           ? const EmptyState(
               icon: Icons.child_care_outlined,
@@ -83,10 +95,11 @@ class _ChildrenScreenState extends ConsumerState<ChildrenScreen> {
                 );
               },
             ),
-      floatingActionButton: FloatingActionButton(
+        floatingActionButton: FloatingActionButton(
         onPressed: () {},
         backgroundColor: AppColors.primary,
         child: const Icon(Icons.add, color: Colors.white),
+      ),
       ),
     );
   }

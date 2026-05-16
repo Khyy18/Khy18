@@ -13,15 +13,41 @@ import '../widgets/floating_nav_bar.dart';
 import '../widgets/stat_card.dart';
 import '../widgets/sync_indicator.dart';
 
-class DashboardScreen extends ConsumerWidget {
+class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  DateTime? _lastBackPress;
+
+  @override
+  Widget build(BuildContext context) {
     final authState = ref.watch(authProvider);
     final role = authState.role;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        final now = DateTime.now();
+        if (_lastBackPress == null ||
+            now.difference(_lastBackPress!) > const Duration(seconds: 2)) {
+          _lastBackPress = now;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Нажмите ещё раз для выхода'),
+              duration: Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
       body: Stack(
         children: [
           // Background gradient
@@ -54,26 +80,48 @@ class DashboardScreen extends ConsumerWidget {
                           painter: _ParticleDotsPainter(),
                         ),
                       ),
-                      Column(
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            'Добрый день',
-                            style: GoogleFonts.spaceGrotesk(
-                              fontSize: 32,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -1,
-                            ),
-                          ).animate().fadeIn(duration: 400.ms),
-                          const SizedBox(height: 4),
-                          Text(
-                            _getDateString(),
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  color: AppColors.neutral,
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Помощник бухгалтера',
+                                style: GoogleFonts.spaceGrotesk(
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: -1,
                                 ),
+                              ).animate().fadeIn(duration: 400.ms),
+                              const SizedBox(height: 4),
+                              Text(
+                                _getDateString(),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: AppColors.neutral,
+                                    ),
+                              ),
+                            ],
+                          ),
+                          GestureDetector(
+                            onTap: () => context.go('/profile'),
+                            child: Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: AppColors.primary.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: const Icon(
+                                Icons.person_outline,
+                                color: AppColors.primary,
+                                size: 22,
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -155,7 +203,7 @@ class DashboardScreen extends ConsumerWidget {
                     context.go('/children');
                     break;
                   case 3:
-                    context.go('/reminders');
+                    context.go('/profile');
                     break;
                 }
               },
@@ -163,6 +211,7 @@ class DashboardScreen extends ConsumerWidget {
           ),
         ],
       ),
+    ),
     );
   }
 
@@ -360,20 +409,26 @@ class _AiCard extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF6366F1).withOpacity(0.12),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: Colors.white.withOpacity(0.2),
-              width: 1,
+              color: Colors.white,
+              width: 2,
             ),
-            gradient: LinearGradient(
+            gradient: const LinearGradient(
               colors: [
-                AppColors.primary.withOpacity(0.3),
-                AppColors.primaryLight.withOpacity(0.1),
+                Color(0xFF6366F1),
+                Color(0xFF8B5CF6),
               ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF6366F1).withOpacity(0.3),
+                blurRadius: 16,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: Material(
             color: Colors.transparent,
@@ -381,20 +436,20 @@ class _AiCard extends StatelessWidget {
               borderRadius: BorderRadius.circular(20),
               onTap: onTap,
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                 child: Row(
                   children: [
                     Container(
-                      width: 48,
-                      height: 48,
+                      width: 52,
+                      height: 52,
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(14),
+                        color: Colors.white.withOpacity(0.25),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                       child: const Icon(
                         Icons.auto_awesome,
                         color: Colors.white,
-                        size: 24,
+                        size: 28,
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -405,7 +460,7 @@ class _AiCard extends StatelessWidget {
                           Text(
                             'AI Ассистент',
                             style: GoogleFonts.spaceGrotesk(
-                              fontSize: 18,
+                              fontSize: 20,
                               fontWeight: FontWeight.w700,
                               color: Colors.white,
                             ),
@@ -414,17 +469,25 @@ class _AiCard extends StatelessWidget {
                           Text(
                             'Задайте вопрос по бухгалтерии',
                             style: GoogleFonts.manrope(
-                              fontSize: 13,
-                              color: Colors.white.withOpacity(0.8),
+                              fontSize: 14,
+                              color: Colors.white.withOpacity(0.9),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const Icon(
-                      Icons.arrow_forward_ios,
-                      color: Colors.white70,
-                      size: 16,
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.arrow_forward_ios,
+                        color: Colors.white,
+                        size: 16,
+                      ),
                     ),
                   ],
                 ),

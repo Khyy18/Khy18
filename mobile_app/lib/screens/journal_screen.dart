@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../providers/journal_provider.dart';
 import '../theme/app_colors.dart';
 import '../widgets/empty_state.dart';
@@ -23,8 +24,19 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(journalProvider);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Журнал операций')),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) context.go('/');
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Журнал операций'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+            onPressed: () => context.go('/'),
+          ),
+        ),
       body: Column(
         children: [
           Container(
@@ -113,6 +125,7 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 }

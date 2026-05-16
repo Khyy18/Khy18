@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../models/kbk_code.dart';
 import '../providers/employees_provider.dart';
 import '../theme/app_colors.dart';
@@ -41,8 +42,19 @@ class _KbkScreenState extends ConsumerState<KbkScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Справочник КБК')),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) context.go('/');
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Справочник КБК'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+            onPressed: () => context.go('/'),
+          ),
+        ),
       body: Column(
         children: [
           Padding(
@@ -129,6 +141,7 @@ class _KbkScreenState extends ConsumerState<KbkScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 }

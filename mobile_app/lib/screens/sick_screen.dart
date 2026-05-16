@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../providers/salary_provider.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gradient_button.dart';
@@ -30,8 +31,19 @@ class _SickScreenState extends ConsumerState<SickScreen> {
   Widget build(BuildContext context) {
     final calcState = ref.watch(calculationProvider);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Больничный')),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) context.go('/');
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Больничный'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 20),
+            onPressed: () => context.go('/'),
+          ),
+        ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
@@ -145,6 +157,7 @@ class _SickScreenState extends ConsumerState<SickScreen> {
           ],
         ),
       ),
+    ),
     );
   }
 
