@@ -27,10 +27,13 @@ export default function App() {
     }
   }, [])
 
-  // Polling данных с API (initial load + fallback)
-  const { data: apiAgents } = useApi('agents', 3000)
-  const { data: apiTasks } = useApi('tasks', 3000)
-  const { data: apiActivity } = useApi('activity', 3000)
+  // WebSocket connection state (declared early for polling control)
+  const [wsConnected, setWsConnected] = useState(false)
+
+  // Polling данных с API (initial load + fallback, paused when WS connected)
+  const { data: apiAgents } = useApi('agents', 3000, wsConnected)
+  const { data: apiTasks } = useApi('tasks', 3000, wsConnected)
+  const { data: apiActivity } = useApi('activity', 3000, wsConnected)
   const { data: systemStatus } = useApi('status', 5000)
 
   // Initialize WS state from API data
@@ -76,6 +79,11 @@ export default function App() {
   }
 
   const { connected, error: wsError } = useWebSocket('/api/ws', wsHandlers)
+
+  // Sync WS connection status for polling control
+  useEffect(() => {
+    setWsConnected(connected)
+  }, [connected])
 
   // Use WS state if available, otherwise fall back to API polling data
   const agents = wsAgents || apiAgents

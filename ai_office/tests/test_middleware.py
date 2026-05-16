@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import time
 from unittest.mock import patch
 from urllib.parse import quote
 
@@ -33,7 +34,7 @@ def test_validate_init_data_valid():
     """Тест валидации корректного initData."""
     params = {
         "user": '{"id":123456,"first_name":"Test"}',
-        "auth_date": "1234567890",
+        "auth_date": str(int(time.time())),
         "query_id": "AAHdF6IQAAAAAN0XohDhrOrc",
     }
     init_data = make_init_data(params)
@@ -55,6 +56,19 @@ def test_validate_init_data_invalid_hash():
 def test_validate_init_data_no_hash():
     """Тест валидации без hash."""
     init_data = "user=test&auth_date=123"
+    with patch("ai_office.api.middleware.settings") as mock_settings:
+        mock_settings.telegram_bot_token = TEST_BOT_TOKEN
+        result = TelegramAuthMiddleware.validate_init_data(init_data)
+    assert result is False
+
+
+def test_validate_init_data_expired_auth_date():
+    """Тест валидации с устаревшим auth_date (> 5 минут)."""
+    params = {
+        "user": '{"id":123456,"first_name":"Test"}',
+        "auth_date": str(int(time.time()) - 600),  # 10 minutes ago
+    }
+    init_data = make_init_data(params)
     with patch("ai_office.api.middleware.settings") as mock_settings:
         mock_settings.telegram_bot_token = TEST_BOT_TOKEN
         result = TelegramAuthMiddleware.validate_init_data(init_data)
@@ -84,7 +98,7 @@ async def test_middleware_allows_with_valid_init_data(test_client: AsyncClient):
     """Тест что middleware пропускает запросы с валидным initData."""
     params = {
         "user": '{"id":123456,"first_name":"Test"}',
-        "auth_date": "1234567890",
+        "auth_date": str(int(time.time())),
     }
     with patch("ai_office.api.middleware.settings") as mock_settings:
         mock_settings.skip_telegram_auth = False

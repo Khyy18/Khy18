@@ -1,6 +1,6 @@
 """Инструмент делегирования задач между агентами."""
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from sqlalchemy import select
@@ -61,18 +61,41 @@ async def delegate_to_agent(agent_name: str, task_description: str) -> str:
 
         await session.commit()
 
-    # Вызываем LLM от имени целевого агента
+    # Вызываем LLM от имени целевого агента с привязкой инструментов
     llm = ChatOpenAI(
         model=settings.openai_model,
         api_key=settings.openai_api_key,
         temperature=0.7,
     )
+    llm_with_tools = llm.bind_tools(config.tools)
 
-    system_prompt = config.system_prompt
     messages = [
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=config.system_prompt),
         HumanMessage(content=task_description),
     ]
 
-    response = await llm.ainvoke(messages)
+    # Цикл выполнения инструментов (максимум 3 итерации)
+    for _ in range(3):
+        response = await llm_with_tools.ainvoke(messages)
+        messages.append(response)
+
+        if not response.tool_calls:
+            break
+
+        # Выполняем вызовы инструментов
+        tool_map = {t.name: t for t in config.tools}
+        for tool_call in response.tool_calls:
+            if tool_call["name"] in tool_map:
+                result = await tool_map[tool_call["name"]].ainvoke(tool_call["args"])
+                messages.append(
+                    ToolMessage(content=str(result), tool_call_id=tool_call["id"])
+                )
+            else:
+                messages.append(
+                    ToolMessage(
+                        content=f"Инструмент '{tool_call['name']}' не найден.",
+                        tool_call_id=tool_call["id"],
+                    )
+                )
+
     return response.content

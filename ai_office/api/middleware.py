@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import time
 from urllib.parse import unquote
 
 from fastapi import Request
@@ -53,6 +54,15 @@ class TelegramAuthMiddleware(BaseHTTPMiddleware):
             received_hash = parsed.pop("hash", None)
             if not received_hash:
                 return False
+
+            # Проверка свежести auth_date (не старше 5 минут)
+            auth_date = parsed.get("auth_date")
+            if auth_date:
+                try:
+                    if time.time() - int(auth_date) > 300:  # 5 minutes
+                        return False
+                except (ValueError, TypeError):
+                    pass
 
             # Сортировка и формирование data-check-string
             data_check_string = "\n".join(

@@ -29,15 +29,16 @@ class RouterDecision(BaseModel):
     )
 
 
-ROUTER_SYSTEM_PROMPT = """Ты - маршрутизатор запросов в AI Office. Определи какому агенту адресовать сообщение пользователя.
+def _build_router_prompt() -> str:
+    """Динамически генерирует системный промпт роутера из реестра агентов."""
+    agent_descriptions = "\n".join(
+        f"- {config.name}: {config.role}. {config.system_prompt.split(chr(10))[0]}"
+        for config in registry.get_all()
+    )
+    return f"""Ты - маршрутизатор запросов в AI Office. Определи какому агенту адресовать сообщение пользователя.
 
 Доступные агенты:
-- alice: Персональный ассистент и продакт-менеджер. Занимается задачами, планированием, приоритетами, управлением проектами, общими вопросами.
-- sam: Senior Developer. Занимается кодом, архитектурой, багами, техническими вопросами, ревью, деплоем.
-- max: UI/UX дизайнер. Занимается дизайном интерфейсов, вайрфреймами, UX-аудитом, юзабилити, визуальной частью.
-- eva: Бизнес-аналитик. Занимается требованиями, user stories, аналитическими отчётами, метриками, исследованием рынка.
-- leo: QA инженер. Занимается тестированием, тест-планами, баг-репортами, верификацией исправлений, качеством продукта.
-- nova: DevOps/SRE инженер. Занимается деплоями, мониторингом, CI/CD, инфраструктурой, производительностью.
+{agent_descriptions}
 
 Верни имя агента, которому лучше всего подходит запрос. Если не уверен - выбери alice."""
 
@@ -70,7 +71,7 @@ async def router_node(state: AgentState) -> AgentState:
         structured_llm = router_llm.with_structured_output(RouterDecision)
 
         # Формируем контекст для роутера
-        router_messages = [SystemMessage(content=ROUTER_SYSTEM_PROMPT)]
+        router_messages = [SystemMessage(content=_build_router_prompt())]
 
         # Добавляем историю чата для контекста
         chat_history = state.get("chat_history", [])

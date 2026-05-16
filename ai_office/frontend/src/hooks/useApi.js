@@ -4,9 +4,10 @@ import { useState, useEffect, useRef } from 'react'
  * Кастомный хук для polling данных с API
  * @param {string} endpoint - путь API (без /api/ префикса)
  * @param {number} interval - интервал опроса в мс (по умолчанию 3000)
+ * @param {boolean} paused - приостановить polling (по умолчанию false)
  * @returns {{ data: any, loading: boolean, error: string|null }}
  */
-export function useApi(endpoint, interval = 3000) {
+export function useApi(endpoint, interval = 3000, paused = false) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -35,19 +36,24 @@ export function useApi(endpoint, interval = 3000) {
       }
     }
 
-    // Первый запрос сразу
-    fetchData()
+    // Первый запрос сразу (только если не paused или ещё нет данных)
+    if (!paused || data === null) {
+      fetchData()
+    }
 
-    // Polling с интервалом
-    intervalRef.current = setInterval(fetchData, interval)
+    // Polling с интервалом (только если не paused)
+    if (!paused) {
+      intervalRef.current = setInterval(fetchData, interval)
+    }
 
     return () => {
       isMounted = false
       if (intervalRef.current) {
         clearInterval(intervalRef.current)
+        intervalRef.current = null
       }
     }
-  }, [endpoint, interval])
+  }, [endpoint, interval, paused])
 
   return { data, loading, error }
 }
