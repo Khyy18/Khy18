@@ -1,4 +1,4 @@
-"""AES-256 encryption at rest using Fernet (symmetric)."""
+"""Fernet encryption at rest (AES-128-CBC with HMAC-SHA256 authentication)."""
 
 from cryptography.fernet import Fernet
 

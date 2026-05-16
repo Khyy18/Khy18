@@ -6,14 +6,14 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from sqlalchemy import text
 
 from backend.config import settings
 from backend.database import Base, engine, async_session
 from backend.logging_config import configure_logging
+from backend.rate_limiter import limiter
 from backend.routers import (
     employees,
     children,
@@ -34,9 +34,6 @@ from backend.ai.router import router as ai_router
 
 # Configure structlog
 configure_logging()
-
-# Rate limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 # Track app start time for uptime
 _app_start_time: float = time.time()

@@ -24,6 +24,12 @@ class _LockScreenState extends State<LockScreen> {
   bool _isError = false;
   bool _biometricAvailable = false;
 
+  // Brute-force protection
+  int _failedAttempts = 0;
+  bool _isLocked = false;
+  int _lockCountdown = 0;
+  bool _requireBiometric = false;
+
   @override
   void initState() {
     super.initState();
@@ -41,22 +47,66 @@ class _LockScreenState extends State<LockScreen> {
   Future<void> _tryBiometric() async {
     final success = await _biometricService.authenticate();
     if (success) {
+      setState(() {
+        _failedAttempts = 0;
+        _requireBiometric = false;
+      });
       await _storageService.saveLastAuthTime(DateTime.now());
       widget.onUnlocked();
     }
   }
 
+  void _startLockout() {
+    setState(() {
+      _isLocked = true;
+      _lockCountdown = 30;
+    });
+    _tickCountdown();
+  }
+
+  void _tickCountdown() {
+    Future.delayed(const Duration(seconds: 1), () {
+      if (!mounted) return;
+      setState(() {
+        _lockCountdown--;
+        if (_lockCountdown <= 0) {
+          _isLocked = false;
+        }
+      });
+      if (_lockCountdown > 0) {
+        _tickCountdown();
+      }
+    });
+  }
+
   Future<void> _onPinComplete() async {
+    if (_isLocked || _requireBiometric) return;
+
     final savedPin = await _storageService.getPin();
     if (_enteredPin == savedPin) {
+      setState(() {
+        _failedAttempts = 0;
+        _requireBiometric = false;
+      });
       await _storageService.saveLastAuthTime(DateTime.now());
       widget.onUnlocked();
     } else {
+      _failedAttempts++;
       HapticFeedback.heavyImpact();
       setState(() {
         _isError = true;
         _enteredPin = '';
       });
+
+      // After 10 total failures, require biometric or app restart
+      if (_failedAttempts >= 10) {
+        setState(() => _requireBiometric = true);
+      }
+      // After 5 failed attempts, lock for 30 seconds
+      else if (_failedAttempts >= 5 && _failedAttempts % 5 == 0) {
+        _startLockout();
+      }
+
       await Future.delayed(const Duration(milliseconds: 800));
       if (mounted) {
         setState(() => _isError = false);
@@ -65,7 +115,7 @@ class _LockScreenState extends State<LockScreen> {
   }
 
   void _onDigitTap(String digit) {
-    if (_enteredPin.length >= 4) return;
+    if (_enteredPin.length >= 4 || _isLocked || _requireBiometric) return;
     HapticFeedback.selectionClick();
     setState(() {
       _enteredPin += digit;
@@ -76,7 +126,7 @@ class _LockScreenState extends State<LockScreen> {
   }
 
   void _onBackspace() {
-    if (_enteredPin.isEmpty) return;
+    if (_enteredPin.isEmpty || _isLocked || _requireBiometric) return;
     HapticFeedback.selectionClick();
     setState(() {
       _enteredPin = _enteredPin.substring(0, _enteredPin.length - 1);
@@ -116,20 +166,33 @@ class _LockScreenState extends State<LockScreen> {
                 ),
             const SizedBox(height: 24),
             Text(
-              'Введите PIN-код',
+              _requireBiometric
+                  ? 'Требуется биометрия'
+                  : _isLocked
+                      ? 'PIN заблокирован'
+                      : 'Введите PIN-код',
               style: GoogleFonts.spaceGrotesk(
                 fontSize: 22,
                 fontWeight: FontWeight.w700,
-                color: AppColors.textPrimaryLight,
+                color: _requireBiometric || _isLocked
+                    ? AppColors.expense
+                    : AppColors.textPrimaryLight,
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              'Для доступа к приложению',
+              _requireBiometric
+                  ? 'Слишком много попыток. Используйте биометрию или перезапустите приложение.'
+                  : _isLocked
+                      ? 'Повторите через $_lockCountdown сек.'
+                      : 'Для доступа к приложению',
               style: GoogleFonts.manrope(
                 fontSize: 14,
-                color: AppColors.textSecondaryLight,
+                color: _requireBiometric || _isLocked
+                    ? AppColors.expense
+                    : AppColors.textSecondaryLight,
               ),
+              textAlign: TextAlign.center,
             ),
             const SizedBox(height: 32),
             // PIN dots
@@ -143,6 +206,7 @@ class _LockScreenState extends State<LockScreen> {
               onDigitTap: _onDigitTap,
               onBackspace: _onBackspace,
               onBiometric: _biometricAvailable ? _tryBiometric : null,
+              isDisabled: _isLocked || _requireBiometric,
             ),
             const SizedBox(height: 40),
           ],
@@ -194,60 +258,65 @@ class _PinPad extends StatelessWidget {
   final void Function(String) onDigitTap;
   final VoidCallback onBackspace;
   final VoidCallback? onBiometric;
+  final bool isDisabled;
 
   const _PinPad({
     required this.onDigitTap,
     required this.onBackspace,
     this.onBiometric,
+    this.isDisabled = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 48),
-      child: Column(
-        children: [
-          _buildRow(['1', '2', '3']),
-          const SizedBox(height: 16),
-          _buildRow(['4', '5', '6']),
-          const SizedBox(height: 16),
-          _buildRow(['7', '8', '9']),
-          const SizedBox(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _PinButton(
-                child: onBiometric != null
-                    ? Icon(
-                        Icons.fingerprint_rounded,
-                        color: AppColors.primary,
-                        size: 28,
-                      )
-                    : const SizedBox.shrink(),
-                onTap: onBiometric,
-              ),
-              _PinButton(
-                child: Text(
-                  '0',
-                  style: GoogleFonts.spaceGrotesk(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimaryLight,
+      child: Opacity(
+        opacity: isDisabled ? 0.4 : 1.0,
+        child: Column(
+          children: [
+            _buildRow(['1', '2', '3']),
+            const SizedBox(height: 16),
+            _buildRow(['4', '5', '6']),
+            const SizedBox(height: 16),
+            _buildRow(['7', '8', '9']),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _PinButton(
+                  child: onBiometric != null
+                      ? Icon(
+                          Icons.fingerprint_rounded,
+                          color: AppColors.primary,
+                          size: 28,
+                        )
+                      : const SizedBox.shrink(),
+                  onTap: onBiometric,
+                ),
+                _PinButton(
+                  child: Text(
+                    '0',
+                    style: GoogleFonts.spaceGrotesk(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimaryLight,
+                    ),
                   ),
+                  onTap: isDisabled ? null : () => onDigitTap('0'),
                 ),
-                onTap: () => onDigitTap('0'),
-              ),
-              _PinButton(
-                child: Icon(
-                  Icons.backspace_outlined,
-                  color: AppColors.textSecondaryLight,
-                  size: 24,
+                _PinButton(
+                  child: Icon(
+                    Icons.backspace_outlined,
+                    color: AppColors.textSecondaryLight,
+                    size: 24,
+                  ),
+                  onTap: isDisabled ? null : onBackspace,
                 ),
-                onTap: onBackspace,
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -265,7 +334,7 @@ class _PinPad extends StatelessWidget {
               color: AppColors.textPrimaryLight,
             ),
           ),
-          onTap: () => onDigitTap(digit),
+          onTap: isDisabled ? null : () => onDigitTap(digit),
         );
       }).toList(),
     );

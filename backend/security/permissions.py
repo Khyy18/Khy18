@@ -19,9 +19,14 @@ def require_role(*allowed_roles: str):
         @router.delete("/...", dependencies=[Depends(require_role("admin"))])
     """
 
-    async def _check_role(x_user_role: str = Header(default="admin")) -> str:
+    async def _check_role(x_user_role: str = Header(default="")) -> str:
         """Verify the user's role from X-User-Role header."""
         role = x_user_role.lower().strip()
+        if not role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Role not specified",
+            )
         if role not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

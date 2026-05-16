@@ -10,6 +10,7 @@ from backend.auth import verify_bearer_token
 from backend.database import get_db
 from backend.models.employee import Employee
 from backend.schemas.employee import EmployeeCreate, EmployeeResponse
+from backend.security.encryption import encrypt_value, decrypt_value
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 
@@ -17,7 +18,11 @@ router = APIRouter(prefix="/employees", tags=["employees"])
 @router.get("", response_model=List[EmployeeResponse])
 async def list_employees(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Employee))
-    return result.scalars().all()
+    employees = result.scalars().all()
+    # Decrypt fio on read
+    for emp in employees:
+        emp.fio = decrypt_value(emp.fio)
+    return employees
 
 
 @router.post("", response_model=EmployeeResponse, status_code=201)
@@ -26,10 +31,12 @@ async def create_employee(
     db: AsyncSession = Depends(get_db),
     _token: str = Depends(verify_bearer_token),
 ):
-    employee = Employee(fio=data.fio, position=data.position, rate=data.rate)
+    employee = Employee(fio=encrypt_value(data.fio), position=data.position, rate=data.rate)
     db.add(employee)
     await db.commit()
     await db.refresh(employee)
+    # Decrypt for response
+    employee.fio = decrypt_value(employee.fio)
     return employee
 
 

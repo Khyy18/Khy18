@@ -6,19 +6,15 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 from backend.ai.intents import Intent, classify_intent
 from backend.ai.groq_client import chat_completion
 from backend.ai.knowledge import get_knowledge_context
+from backend.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai", tags=["ai"])
-
-# Rate limiter for AI endpoints
-_ai_limiter = Limiter(key_func=get_remote_address)
 
 # Conversation history storage (in-memory, per chat_id)
 _conversation_history: dict = {}
@@ -42,9 +38,11 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-@_ai_limiter.limit("10/minute")
+@limiter.limit("10/minute")
 async def ai_chat(request: Request, data: ChatRequest) -> ChatResponse:
     """Process a natural language message through the AI pipeline.
+
+    Rate limited to 10/minute via the shared app-level limiter.
 
     Flow:
     1. Retrieve conversation history for chat_id

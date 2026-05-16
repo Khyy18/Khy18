@@ -1,5 +1,6 @@
 """Audit logging middleware for FastAPI."""
 
+import hashlib
 import logging
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -44,11 +45,25 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         ip_address = request.client.host if request.client else None
 
+        # Extract user identity from Authorization header
+        user_id = None
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token_value = auth_header[7:]
+            # Store a SHA-256 hash of the token as user identifier
+            user_id = hashlib.sha256(token_value.encode()).hexdigest()[:16]
+
+        # Extract role if present
+        role = request.headers.get("x-user-role", "")
+        if role and user_id:
+            user_id = f"{user_id}:{role}"
+
         entry = AuditLog(
             action=request.method,
             entity_type=entity_type,
             entity_id=entity_id,
             ip_address=ip_address,
+            user_id=user_id,
         )
 
         # Use the app's get_db dependency (respects test overrides)

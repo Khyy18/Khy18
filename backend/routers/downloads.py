@@ -16,10 +16,14 @@ from backend.auth import verify_bearer_token
 router = APIRouter(prefix="/downloads", tags=["downloads"])
 
 # In-memory store for download tokens
+# NOTE: Production should use Redis/DB for persistence across restarts
 _download_store: Dict[str, dict] = {}
 
 # Expiry time in seconds
 DOWNLOAD_EXPIRY_SECONDS = 600  # 10 minutes
+
+# Maximum number of pending downloads to prevent memory exhaustion
+MAX_DOWNLOADS = 1000
 
 
 class DownloadCreateRequest(BaseModel):
@@ -41,6 +45,12 @@ async def create_download(
     _token: str = Depends(verify_bearer_token),
 ):
     """Create a one-time download link for a file."""
+    if len(_download_store) >= MAX_DOWNLOADS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many pending downloads. Please try again later.",
+        )
+
     token = str(uuid.uuid4())
     expires_at = time.time() + DOWNLOAD_EXPIRY_SECONDS
 
