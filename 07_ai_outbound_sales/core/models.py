@@ -100,6 +100,14 @@ class PlanName(str, enum.Enum):
     enterprise = "enterprise"
 
 
+class OnboardingStep(str, enum.Enum):
+    tenant_created = "tenant_created"
+    smtp_connected = "smtp_connected"
+    icp_uploaded = "icp_uploaded"
+    campaign_activated = "campaign_activated"
+    completed = "completed"
+
+
 # ---------- Utility ----------
 
 def _utcnow() -> datetime:
@@ -120,6 +128,9 @@ class Tenant(Base):
     domain = Column(String, nullable=False)
     settings = Column(JSONB, default=dict)
     brand_settings = Column(JSONB, default=dict)
+    onboarding_step = Column(
+        Enum(OnboardingStep), default=OnboardingStep.tenant_created, nullable=True
+    )
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     leads = relationship("Lead", back_populates="tenant")

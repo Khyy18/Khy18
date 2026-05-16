@@ -306,3 +306,35 @@ class InvoiceResponse(BaseModel):
     status: str
     created: datetime
     hosted_invoice_url: Optional[str] = None
+
+
+# ---------- Onboarding Step Schemas ----------
+
+
+class OnboardingStep1Request(BaseModel):
+    company_name: str
+    domain: str
+
+
+class OnboardingStep2Request(BaseModel):
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: str
+
+
+class OnboardingStep3Request(BaseModel):
+    industry: str
+    company_size: str
+    titles: list[str]
+    geo: str
+
+
+class OnboardingStep4Request(BaseModel):
+    campaign_name: str = "First Campaign"
+
+
+class OnboardingStatusResponse(BaseModel):
+    current_step: str
+    steps_completed: list[str]
+    tenant_id: str
