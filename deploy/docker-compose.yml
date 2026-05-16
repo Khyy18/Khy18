@@ -1,0 +1,28 @@
+services:
+  zenith:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env
+    ports:
+      - "8080:8080"
+    volumes:
+      - zenith_data:/app/data
+    environment:
+      - TRADES_DB_PATH=/app/data/trades.db
+      - DASHBOARD_PORT=8080
+      - DASHBOARD_ENABLED=true
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  zenith_data:
+    driver: local
