@@ -93,12 +93,26 @@ async def handle_start(client: Client, message: Message) -> None:
     """Обработка команды /start - онбординг пользователя.
 
     Создаёт/находит пользователя, показывает приветствие с кнопками.
+    Если в аргументах есть ref_XXXXXXXX - применяет реферальный бонус.
     """
     telegram_id = message.from_user.id
     username = message.from_user.username
 
     # Регистрация/получение пользователя
     user = await get_or_create_user(telegram_id, username)
+
+    # Проверяем реферальный код в аргументах
+    text_args = (message.text or "").split()
+    if len(text_args) > 1 and text_args[1].startswith("ref_"):
+        ref_code = text_args[1][4:]  # убираем prefix "ref_"
+        from ai_office.core.referral import apply_referral as _apply_ref
+
+        async with async_session() as session:
+            ref_result = await _apply_ref(telegram_id, ref_code, session)
+            if ref_result["success"]:
+                await message.reply(
+                    f"\U0001f381 Реферальный бонус применен! +{ref_result['bonus_granted']} сообщений"
+                )
 
     # Авто-создание агентов при первом запуске
     await _auto_seed_agents()
@@ -140,6 +154,39 @@ async def handle_start(client: Client, message: Message) -> None:
     ])
 
     await message.reply(welcome_text, reply_markup=buttons)
+
+
+async def handle_invite(client: Client, message: Message) -> None:
+    """Обработка команды /invite - генерация реферальной ссылки и статистика."""
+    telegram_id = message.from_user.id
+    username = message.from_user.username
+
+    await get_or_create_user(telegram_id, username)
+
+    from ai_office.core.referral import generate_referral_code, get_referral_stats
+
+    async with async_session() as session:
+        code = await generate_referral_code(telegram_id, session)
+        stats = await get_referral_stats(telegram_id, session)
+
+    bot_me = await client.get_me()
+    referral_link = f"https://t.me/{bot_me.username}?start=ref_{code}"
+
+    stats_text = (
+        f"\U0001f517 **Ваша реферальная ссылка:**\n"
+        f"`{referral_link}`\n\n"
+        f"\U0001f4ca **Статистика рефералов:**\n"
+        f"Прямые приглашения (L1): {stats['direct_referrals']}\n"
+        f"Уровень 2: {stats['level_2']}\n"
+        f"Уровень 3: {stats['level_3']}\n"
+        f"Всего бонусов: +{stats['total_bonus']} сообщений\n\n"
+        f"**Бонусы:**\n"
+        f"L1: +100 сообщений вам и другу\n"
+        f"L2: +50 сообщений вам\n"
+        f"L3: +25 сообщений вам"
+    )
+
+    await message.reply(stats_text)
 
 
 async def handle_grant_admin(client: Client, message: Message) -> None:

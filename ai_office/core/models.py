@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Float, Integer, String, Text, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Float, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ai_office.core.database import Base
@@ -276,6 +276,23 @@ class KnowledgeFact(Base):
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class Referral(Base):
+    """Модель реферальной системы с 3-уровневым отслеживанием."""
+
+    __tablename__ = "referrals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    referrer_telegram_id: Mapped[int] = mapped_column(BigInteger)
+    referred_telegram_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    referral_code: Mapped[str] = mapped_column(String(20), unique=True)
+    level: Mapped[int] = mapped_column(Integer, default=1)
+    bonus_granted: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
 
 
 class AuditEntry(Base):

@@ -362,3 +362,43 @@ class MarketplacePluginResponse(BaseModel):
     download_url: str = ""
     tools_count: int
     installed: bool = False
+
+
+class ReferralStatsResponse(BaseModel):
+    """Статистика реферальной программы пользователя."""
+
+    direct_referrals: int
+    level_2: int
+    level_3: int
+    total_bonus: int
+
+
+class ReferralCodeResponse(BaseModel):
+    """Ответ с реферальным кодом и ссылкой."""
+
+    code: str
+    referral_link: str
+
+
+class ReferralApplyRequest(BaseModel):
+    """Запрос на применение реферального кода."""
+
+    code: str
+
+
+class ReferralApplyResponse(BaseModel):
+    """Ответ на применение реферального кода."""
+
+    success: bool
+    message: str
+    bonus_granted: int
+
+
+class ShareCardResponse(BaseModel):
+    """Ответ с данными карточки задачи для шаринга."""
+
+    task_description: str
+    agent_name: str
+    completed_in: str
+    priority: str
+    share_text: str
