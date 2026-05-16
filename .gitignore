@@ -1,10 +1,10 @@
-# Секреты и локальные артефакты
+# Environment and secrets
 .env
-trades.db
-bot.log
-bot_dry.log
-*.log
+
+# Runtime artifacts
 *.db
+*.log
+freelance_responded.json
 
 # Python
 __pycache__/
@@ -14,24 +14,22 @@ __pycache__/
 .venv/
 venv/
 
-# Редакторы и IDE
+# Linters and test caches
+.ruff_cache/
+.pytest_cache/
+
+# Editors and IDEs
 .idea/
 .vscode/
-
-# Служебная директория агентов (не обязательна в публичном репо)
-.agents/
 
 # Node.js / Frontend
 node_modules/
 dist/
 
-# Кэш бэктестера (исторические CSV/ZIP Binance и JSON-метрики)
+# Backtester data cache
 backtester/data/*.csv
 backtester/data/*.zip
 backtester/data/*.json
 
-# Персистентная память ChromaDB
+# ChromaDB persistent memory
 ai_office_memory/
-
-# Freelance automation dedup state
-freelance_responded.json

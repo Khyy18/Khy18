@@ -2,7 +2,7 @@
   "id": "FEAT-006",
   "type": "feat",
   "description": "Telegram Mini App payments module (payments/) - Telegram Stars integration, invoice generation, successful_payment handling, webhook, and Mini App HTML checkout page.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create payments/__init__.py exporting PaymentService.",
     "Create payments/models.py with SQLite storage: table invoices (id, user_tg_id, amount_stars, description, status, created_at, paid_at, telegram_payment_charge_id), table payment_history (id, invoice_id, user_tg_id, amount, currency, provider, completed_at). Functions: init_db(), create_invoice(user_tg_id, amount, description) -> invoice_id, mark_paid(telegram_charge_id, invoice_id), get_user_payments(user_tg_id).",
@@ -23,5 +23,5 @@
     "grep 'telegram-web-app' payments/mini_app.html"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All 9 tests pass. pytest-aiohttp not available so webhook test uses aiohttp.test_utils.TestClient directly. Minor AppKey warning from aiohttp (cosmetic, non-blocking)."
 }
