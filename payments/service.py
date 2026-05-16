@@ -52,21 +52,49 @@ class PaymentService:
                 return data["result"]
             return None
 
-    async def handle_pre_checkout_query(self, session, query_id: str) -> bool:
-        """Подтвердить pre_checkout_query (ответить ok=True)."""
-        payload = {
+    async def handle_pre_checkout_query(
+        self, session, query_id: str, invoice_payload: str = ""
+    ) -> bool:
+        """Подтвердить pre_checkout_query после валидации инвойса.
+
+        Проверяет что invoice_payload соответствует существующему pending-инвойсу.
+        Если валидация не проходит - отвечает ok=False с описанием ошибки.
+        """
+        # Validate the invoice exists and is pending
+        ok = True
+        error_message = ""
+        try:
+            invoice_id = int(invoice_payload)
+            invoice = models.get_invoice(invoice_id)
+            if invoice is None:
+                ok = False
+                error_message = "Invoice not found"
+            elif invoice["status"] != "pending":
+                ok = False
+                error_message = "Invoice is no longer pending"
+        except (ValueError, TypeError):
+            ok = False
+            error_message = "Invalid invoice payload"
+
+        payload: dict = {
             "pre_checkout_query_id": query_id,
-            "ok": True,
+            "ok": ok,
         }
+        if not ok:
+            payload["error_message"] = error_message
+
         url = self._bot_url("answerPreCheckoutQuery")
         async with session.post(url, json=payload) as resp:
             data = await resp.json()
             return data.get("ok", False)
 
-    async def handle_successful_payment(self, update: dict) -> Optional[int]:
+    async def handle_successful_payment(
+        self, update: dict, session=None
+    ) -> Optional[int]:
         """Обработать successful_payment из Telegram update.
 
-        Помечает инвойс как оплаченный и возвращает invoice_id.
+        Помечает инвойс как оплаченный, вызывает бонус реферала и
+        генерацию оферты при первом платеже. Возвращает invoice_id.
         """
         message = update.get("message", {})
         payment = message.get("successful_payment")
@@ -82,4 +110,45 @@ class PaymentService:
             return None
 
         success = models.mark_paid(invoice_id, charge_id)
-        return invoice_id if success else None
+        if not success:
+            return None
+
+        # Extract user info from update
+        from_user = message.get("from", {})
+        user_tg_id = from_user.get("id", 0)
+        user_name = (
+            from_user.get("first_name", "")
+            or from_user.get("username", "User")
+        )
+
+        # Get invoice details for amount/description
+        invoice = models.get_invoice(invoice_id)
+        amount = invoice["amount_stars"] if invoice else 0
+        description = invoice.get("description", "") if invoice else ""
+
+        # Wire referral bonus (conditional import)
+        try:
+            from viral.models import grant_bonus_on_payment
+        except ImportError:
+            pass
+        else:
+            try:
+                grant_bonus_on_payment(user_tg_id)
+            except Exception:
+                pass
+
+        # Wire legal integration (conditional import)
+        try:
+            from legal.integration import on_first_payment
+        except ImportError:
+            pass
+        else:
+            try:
+                if session:
+                    await on_first_payment(
+                        session, user_tg_id, user_name, amount, description
+                    )
+            except Exception:
+                pass
+
+        return invoice_id

@@ -7,12 +7,21 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from freelance_automation.base import Order, FreelancePlatform
+from freelance_automation import scheduler as scheduler_module
 from freelance_automation.scheduler import FreelanceScheduler
 from freelance_automation.config import (
     MAX_RESPONSES_PER_HOUR,
     RESPONSE_TEMPLATES,
     SCAN_INTERVAL_MINUTES,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dedup(tmp_path):
+    """Use a temp dedup path for each test to prevent cross-test interference."""
+    dedup_path = str(tmp_path / "dedup.json")
+    with patch.object(scheduler_module, "DEDUP_PATH", dedup_path):
+        yield
 
 
 # --- Тесты Order dataclass ---

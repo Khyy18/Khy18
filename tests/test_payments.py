@@ -143,8 +143,11 @@ class TestPaymentService:
         assert payload["prices"] == [{"label": "Подписка Pro", "amount": 50}]
 
     async def test_handle_pre_checkout_responds_ok(self, tmp_path):
-        """handle_pre_checkout_query отвечает ok=True через API."""
+        """handle_pre_checkout_query отвечает ok=True через API для валидного инвойса."""
         service = PaymentService(token="test_token")
+
+        # Create a pending invoice so validation passes
+        invoice_id = models.create_invoice(123, 50, "Тест")
 
         mock_resp = AsyncMock()
         mock_resp.json = AsyncMock(return_value={"ok": True})
@@ -154,7 +157,9 @@ class TestPaymentService:
         mock_session = MagicMock()
         mock_session.post = MagicMock(return_value=mock_resp)
 
-        result = await service.handle_pre_checkout_query(mock_session, "query_123")
+        result = await service.handle_pre_checkout_query(
+            mock_session, "query_123", str(invoice_id)
+        )
         assert result is True
 
         call_args = mock_session.post.call_args
@@ -172,6 +177,7 @@ class TestPaymentService:
 
         update = {
             "message": {
+                "from": {"id": 999, "first_name": "TestUser"},
                 "successful_payment": {
                     "currency": "XTR",
                     "total_amount": 100,

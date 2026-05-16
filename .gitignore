@@ -32,3 +32,6 @@ backtester/data/*.json
 
 # Персистентная память ChromaDB
 ai_office_memory/
+
+# Freelance automation dedup state
+freelance_responded.json

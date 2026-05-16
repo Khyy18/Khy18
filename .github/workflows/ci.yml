@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
-      - run: python -c "import config; import memory"
+      - run: python -c "import config; import memory; import freelance_automation; import viral; import ad_testing; import payments; import legal"
 
   deploy:
     runs-on: ubuntu-latest

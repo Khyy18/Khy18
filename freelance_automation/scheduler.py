@@ -1,7 +1,9 @@
 """Планировщик автоматических откликов на фриланс-площадках."""
 
 import asyncio
+import json
 import logging
+import os
 import random
 from datetime import datetime, timezone
 from typing import Optional
@@ -15,6 +17,9 @@ from freelance_automation.config import (
 
 logger = logging.getLogger(__name__)
 
+# Path for persisting responded order IDs across restarts
+DEDUP_PATH: str = os.getenv("FREELANCE_DEDUP_PATH", "freelance_responded.json")
+
 
 class FreelanceScheduler:
     """Планировщик сканирования и откликов на заказы."""
@@ -23,6 +28,26 @@ class FreelanceScheduler:
         self.platforms = platforms
         self.keywords = keywords
         self._responses_this_hour: list[datetime] = []
+        self._responded_order_ids: set[str] = self._load_dedup()
+
+    def _load_dedup(self) -> set[str]:
+        """Load responded order IDs from persistent storage."""
+        try:
+            with open(DEDUP_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(data)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+        return set()
+
+    def _save_dedup(self) -> None:
+        """Persist responded order IDs to disk."""
+        try:
+            with open(DEDUP_PATH, "w", encoding="utf-8") as f:
+                json.dump(list(self._responded_order_ids), f)
+        except OSError as e:
+            logger.warning(f"Failed to save dedup file: {e}")
 
     def _cleanup_old_responses(self) -> None:
         """Удаление записей старше 1 часа из счётчика откликов."""
@@ -53,6 +78,11 @@ class FreelanceScheduler:
                 logger.info(f"Получено {len(orders)} заказов с платформы")
 
                 for order in orders:
+                    # Skip already-responded orders
+                    if order.id in self._responded_order_ids:
+                        logger.debug(f"Пропуск (дубликат): {order.title}")
+                        continue
+
                     if not self._can_respond():
                         logger.warning(
                             f"Достигнут лимит откликов: {MAX_RESPONSES_PER_HOUR}/час"
@@ -64,6 +94,8 @@ class FreelanceScheduler:
 
                     if success:
                         self._responses_this_hour.append(datetime.now(timezone.utc))
+                        self._responded_order_ids.add(order.id)
+                        self._save_dedup()
                         logger.info(f"Отклик отправлен: {order.title}")
                     else:
                         logger.warning(f"Не удалось отправить отклик: {order.title}")
