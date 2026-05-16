@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
 
 from ai_office.core.config import settings
 from ai_office.core.database import init_db
@@ -66,3 +67,15 @@ app.include_router(metrics_router)
 async def health_check():
     """Проверка здоровья сервиса."""
     return {"status": "ok", "service": "ai_office"}
+
+
+@app.get("/api/status")
+async def system_status(request: Request):
+    """Статус системы с информацией о роли пользователя."""
+    user_role = getattr(request.state, "user_role", "owner")
+    return {
+        "status": "ok",
+        "service": "ai_office",
+        "agents_count": 8,
+        "user_role": user_role,
+    }

@@ -6,7 +6,14 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 from ai_office.core.config import settings
-from ai_office.telegram.handlers import handle_command, handle_message
+from ai_office.telegram.handlers import (
+    handle_command,
+    handle_grant_admin,
+    handle_grant_viewer,
+    handle_message,
+    handle_revoke_admin,
+    handle_start,
+)
 
 
 class TelegramClient:
@@ -30,12 +37,38 @@ class TelegramClient:
     def _register_handlers(self) -> None:
         """Регистрация обработчиков сообщений и команд."""
 
+        # Все команды для фильтрации
+        all_commands = [
+            "start", "agents", "tasks", "status",
+            "grant_admin", "grant_viewer", "revoke_admin",
+        ]
+
+        @self.app.on_message(filters.command(["start"]))
+        async def on_start(client: Client, message: Message) -> None:
+            """Обработка /start - онбординг."""
+            await handle_start(client, message)
+
+        @self.app.on_message(filters.command(["grant_admin"]))
+        async def on_grant_admin(client: Client, message: Message) -> None:
+            """Обработка /grant_admin."""
+            await handle_grant_admin(client, message)
+
+        @self.app.on_message(filters.command(["grant_viewer"]))
+        async def on_grant_viewer(client: Client, message: Message) -> None:
+            """Обработка /grant_viewer."""
+            await handle_grant_viewer(client, message)
+
+        @self.app.on_message(filters.command(["revoke_admin"]))
+        async def on_revoke_admin(client: Client, message: Message) -> None:
+            """Обработка /revoke_admin."""
+            await handle_revoke_admin(client, message)
+
         @self.app.on_message(filters.command(["agents", "tasks", "status"]))
         async def on_command(client: Client, message: Message) -> None:
             """Обработка команд бота."""
             await handle_command(client, message)
 
-        @self.app.on_message(filters.text & ~filters.command(["agents", "tasks", "status"]))
+        @self.app.on_message(filters.text & ~filters.command(all_commands))
         async def on_message(client: Client, message: Message) -> None:
             """Обработка обычных текстовых сообщений."""
             # Имитация задержки для реалистичности

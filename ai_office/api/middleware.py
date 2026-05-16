@@ -1,7 +1,9 @@
-"""Middleware для валидации Telegram initData."""
+"""Middleware для валидации Telegram initData и проверки ролей."""
 
 import hashlib
 import hmac
+import json
+import logging
 import time
 from urllib.parse import unquote
 
@@ -10,16 +12,23 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from ai_office.core.config import settings
+from ai_office.core.permissions import UserRole, get_user_role
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramAuthMiddleware(BaseHTTPMiddleware):
-    """Валидация Telegram Mini App initData через HMAC-SHA256."""
+    """Валидация Telegram Mini App initData через HMAC-SHA256 + проверка ролей."""
 
     SKIP_PATHS = {"/api/health", "/api/ws", "/api/metrics", "/docs", "/openapi.json"}
+
+    # Методы записи, запрещённые для viewer
+    WRITE_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 
     async def dispatch(self, request: Request, call_next):
         # Пропускаем аутентификацию в dev-режиме
         if settings.skip_telegram_auth:
+            request.state.user_role = UserRole.OWNER.value
             return await call_next(request)
 
         # Пропускаем не-API маршруты и исключенные пути
@@ -42,7 +51,41 @@ class TelegramAuthMiddleware(BaseHTTPMiddleware):
                 status_code=401, content={"detail": "Invalid initData"}
             )
 
+        # Извлекаем telegram_id из initData и проверяем роль
+        telegram_id = self._extract_telegram_id(init_data)
+        if telegram_id:
+            try:
+                user_role = await get_user_role(telegram_id)
+                role_value = user_role.value if user_role else UserRole.VIEWER.value
+            except Exception:
+                role_value = UserRole.VIEWER.value
+            request.state.user_role = role_value
+
+            # Viewer не может выполнять операции записи
+            if role_value == UserRole.VIEWER.value and request.method in self.WRITE_METHODS:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Недостаточно прав для данной операции"},
+                )
+        else:
+            request.state.user_role = UserRole.VIEWER.value
+
         return await call_next(request)
+
+    @staticmethod
+    def _extract_telegram_id(init_data: str) -> int | None:
+        """Извлечь telegram_id из initData."""
+        try:
+            parsed = dict(
+                pair.split("=", 1) for pair in unquote(init_data).split("&")
+            )
+            user_str = parsed.get("user")
+            if user_str:
+                user_data = json.loads(user_str)
+                return user_data.get("id")
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def validate_init_data(init_data: str) -> bool:

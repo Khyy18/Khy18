@@ -5,7 +5,7 @@ import { Clock, ArrowRight } from 'lucide-react'
  * Левая цветная полоска по приоритету: high=red, medium=yellow, low=green
  * Статус-бейдж: open=blue, in_progress=yellow, done=green
  */
-export default function TaskCard({ task }) {
+export default function TaskCard({ task, isViewer = false }) {
   // Цвет левой полоски по приоритету
   const priorityColors = {
     high: 'bg-red-500',

@@ -22,14 +22,27 @@ export default function App() {
   const [wsTasks, setWsTasks] = useState(null)
   const [wsActivity, setWsActivity] = useState(null)
   const [selectedAgent, setSelectedAgent] = useState(null)
+  const [userRole, setUserRole] = useState('viewer')
 
-  // Инициализация Telegram Web App
+  // Инициализация Telegram Web App и определение роли
   useEffect(() => {
     if (window.Telegram?.WebApp) {
       window.Telegram.WebApp.ready()
       window.Telegram.WebApp.expand()
     }
+    // Получаем роль из /api/status
+    fetch('/api/status')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && data.user_role) {
+          setUserRole(data.user_role)
+        }
+      })
+      .catch(() => {})
   }, [])
+
+  // Определяем, является ли пользователь viewer (только чтение)
+  const isViewer = userRole === 'viewer'
 
   // WebSocket connection state (declared early for polling control)
   const [wsConnected, setWsConnected] = useState(false)
@@ -145,9 +158,23 @@ export default function App() {
 
             {activeTab === 'tasks' && (
               <div className="space-y-3">
+                {!isViewer && (
+                  <div className="text-center py-2">
+                    <span className="text-white/30 text-xs">
+                      Создание задач через чат с агентами
+                    </span>
+                  </div>
+                )}
+                {isViewer && (
+                  <div className="text-center py-2 px-3 bg-yellow-500/10 border border-yellow-500/20 rounded-xl">
+                    <span className="text-yellow-400/70 text-xs">
+                      Режим наблюдателя - только просмотр
+                    </span>
+                  </div>
+                )}
                 {tasks && tasks.length > 0 ? (
                   tasks.map((task) => (
-                    <TaskCard key={task.id} task={task} />
+                    <TaskCard key={task.id} task={task} isViewer={isViewer} />
                   ))
                 ) : (
                   <div className="text-center py-8 text-white/30 text-sm">

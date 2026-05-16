@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import ForeignKey, Float, String, Text, func
+from sqlalchemy import BigInteger, ForeignKey, Float, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ai_office.core.database import Base
@@ -129,3 +129,15 @@ class TokenUsage(Base):
     estimated_cost_usd: Mapped[float] = mapped_column(default=0.0)
     agent_name: Mapped[str] = mapped_column(String(100))
     timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class User(Base):
+    """Модель пользователя с ролевой моделью доступа."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    username: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    role: Mapped[str] = mapped_column(String(50), server_default="viewer")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
