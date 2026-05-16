@@ -6,10 +6,30 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --color-background: #0a0a0f;
+    --color-card: #1a1a2e;
+    --color-surface: #16163a;
+    --color-accent: #3b82f6;
+    --color-secondary: #a855f7;
+    --color-text: #ffffff;
+    --color-text-muted: rgba(255, 255, 255, 0.5);
+  }
+
+  .light-theme {
+    --color-background: #f8fafc;
+    --color-card: #ffffff;
+    --color-surface: #f1f5f9;
+    --color-accent: #3b82f6;
+    --color-secondary: #a855f7;
+    --color-text: #1e293b;
+    --color-text-muted: rgba(30, 41, 59, 0.6);
+  }
+
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
-    background-color: #0a0a0f;
-    color: #ffffff;
+    background-color: var(--color-background);
+    color: var(--color-text);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -108,4 +128,14 @@
   transform: scale(1.03);
   box-shadow: 0 20px 40px rgba(59, 130, 246, 0.15);
   opacity: 0.9;
+}
+
+/* Avatar ring rotation */
+@keyframes avatar-ring-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-avatar-ring {
+  animation: avatar-ring-rotate 2s linear infinite;
 }

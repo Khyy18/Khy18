@@ -1,13 +1,14 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Users, ListTodo, Activity, GitBranch, Clock } from 'lucide-react'
 import AgentCard from './components/AgentCard'
 import TaskCard from './components/TaskCard'
 import ActivityLog from './components/ActivityLog'
-import SystemStatus from './components/SystemStatus'
+import Dashboard from './components/Dashboard'
 import AgentGraph from './components/AgentGraph'
 import TaskTimeline from './components/TaskTimeline'
 import KanbanBoard from './components/KanbanBoard'
 import AgentDetailView from './components/AgentDetailView'
+import Skeleton from './components/Skeleton'
 import { ToastContainer, showToast } from './components/Toast'
 import { useApi } from './hooks/useApi'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -26,6 +27,10 @@ export default function App() {
   const [userRole, setUserRole] = useState('viewer')
   const [streamingMessages, setStreamingMessages] = useState({})
   const [taskView, setTaskView] = useState('kanban')
+  const [pullDistance, setPullDistance] = useState(0)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const touchStartY = useRef(0)
+  const mainRef = useRef(null)
 
   // Инициализация Telegram Web App и определение роли
   useEffect(() => {
@@ -33,6 +38,19 @@ export default function App() {
       window.Telegram.WebApp.ready()
       window.Telegram.WebApp.expand()
     }
+
+    // Theme sync
+    const applyTheme = () => {
+      const colorScheme = window.Telegram?.WebApp?.colorScheme
+      if (colorScheme === 'light') {
+        document.documentElement.classList.add('light-theme')
+      } else {
+        document.documentElement.classList.remove('light-theme')
+      }
+    }
+    applyTheme()
+    window.Telegram?.WebApp?.onEvent?.('themeChanged', applyTheme)
+
     // Получаем роль из /api/status
     fetch('/api/status')
       .then(res => res.ok ? res.json() : null)
@@ -54,7 +72,6 @@ export default function App() {
   const { data: apiAgents } = useApi('agents', 3000, wsConnected)
   const { data: apiTasks } = useApi('tasks', 3000, wsConnected)
   const { data: apiActivity } = useApi('activity', 3000, wsConnected)
-  const { data: systemStatus } = useApi('status', 5000)
 
   // Initialize WS state from API data
   useEffect(() => {
@@ -68,6 +85,12 @@ export default function App() {
   useEffect(() => {
     if (apiActivity && !wsActivity) setWsActivity(apiActivity)
   }, [apiActivity, wsActivity])
+
+  // Tab switch with haptic feedback
+  const handleTabSwitch = useCallback((tabId) => {
+    setActiveTab(tabId)
+    window.Telegram?.WebApp?.HapticFeedback?.impactOccurred?.('light')
+  }, [])
 
   // WebSocket event handlers
   const wsHandlers = {
@@ -84,6 +107,7 @@ export default function App() {
       if (data.status === 'done') {
         showToast('Задача завершена', 'success')
       }
+      window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred?.('success')
     }, []),
 
     agent_status_changed: useCallback((data) => {
@@ -144,6 +168,33 @@ export default function App() {
   const tasks = wsTasks || apiTasks
   const activity = wsActivity || apiActivity
 
+  // Pull-to-refresh handlers
+  const handleTouchStart = useCallback((e) => {
+    touchStartY.current = e.touches[0].clientY
+  }, [])
+
+  const handleTouchMove = useCallback((e) => {
+    if (!mainRef.current || mainRef.current.scrollTop > 0) return
+    const distance = e.touches[0].clientY - touchStartY.current
+    if (distance > 0) {
+      setPullDistance(Math.min(distance, 100))
+    }
+  }, [])
+
+  const handleTouchEnd = useCallback(() => {
+    if (pullDistance > 60) {
+      setIsRefreshing(true)
+      // Trigger re-fetch by resetting WS state
+      setWsAgents(null)
+      setWsTasks(null)
+      setWsActivity(null)
+      setTimeout(() => {
+        setIsRefreshing(false)
+      }, 1000)
+    }
+    setPullDistance(0)
+  }, [pullDistance])
+
   // Конфигурация табов
   const tabs = [
     { id: 'agents', label: 'Agents', icon: Users },
@@ -171,10 +222,24 @@ export default function App() {
         </div>
       </header>
 
+      {/* Pull-to-refresh indicator */}
+      <div
+        className="flex justify-center transition-all duration-200"
+        style={{ height: pullDistance > 0 ? `${pullDistance * 0.4}px` : '0px', opacity: pullDistance > 30 ? 1 : 0 }}
+      >
+        <div className={`w-6 h-6 border-2 border-accent/50 border-t-accent rounded-full ${isRefreshing ? 'animate-spin' : ''}`} />
+      </div>
+
       {/* Основной контент */}
-      <main className="flex-1 overflow-y-auto px-4 py-4 pb-20">
-        {/* Системный статус - всегда виден */}
-        <SystemStatus status={systemStatus} />
+      <main
+        ref={mainRef}
+        className="flex-1 overflow-y-auto px-4 py-4 pb-20"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        {/* Dashboard - замена SystemStatus */}
+        <Dashboard />
 
         {/* Контент табов */}
         <div className="mt-4 space-y-3">
@@ -197,9 +262,7 @@ export default function App() {
                     />
                   ))
                 ) : (
-                  <div className="text-center py-8 text-white/30 text-sm">
-                    Loading agents...
-                  </div>
+                  <Skeleton type="card" count={4} />
                 )}
               </div>
             )}
@@ -243,7 +306,9 @@ export default function App() {
                     Timeline
                   </button>
                 </div>
-                {taskView === 'kanban' ? (
+                {tasks === null ? (
+                  <Skeleton type="kanban" count={3} />
+                ) : taskView === 'kanban' ? (
                   <KanbanBoard tasks={tasks} isViewer={isViewer} />
                 ) : (
                   <TaskTimeline />
@@ -283,7 +348,7 @@ export default function App() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => handleTabSwitch(tab.id)}
                 className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition-all ${
                   isActive
                     ? 'text-accent'

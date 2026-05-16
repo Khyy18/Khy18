@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import avatarMap from './avatars'
 
 /**
  * Граф делегирований между агентами
@@ -129,11 +130,23 @@ export default function AgentGraph() {
               style={{ left: pos.left, top: pos.top }}
               title={agent.name}
             >
-              <div
-                className={`w-12 h-12 rounded-full bg-gradient-to-br ${gradient} flex items-center justify-center text-white font-semibold text-xs shadow-lg border border-white/20`}
-              >
-                {getInitials(agent.name)}
-              </div>
+              {(() => {
+                const AvatarComponent = avatarMap[agent.name.toLowerCase()]
+                if (AvatarComponent) {
+                  return (
+                    <div className="w-10 h-10">
+                      <AvatarComponent />
+                    </div>
+                  )
+                }
+                return (
+                  <div
+                    className={`w-12 h-12 rounded-full bg-gradient-to-br ${gradient} flex items-center justify-center text-white font-semibold text-xs shadow-lg border border-white/20`}
+                  >
+                    {getInitials(agent.name)}
+                  </div>
+                )
+              })()}
               <p className="text-white/60 text-[10px] text-center mt-1 whitespace-nowrap">
                 {agent.name}
               </p>

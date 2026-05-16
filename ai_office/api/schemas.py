@@ -97,3 +97,16 @@ class PlanResponse(BaseModel):
     steps: List[PlanStepResponse] = []
 
     model_config = {"from_attributes": True}
+
+
+class DashboardResponse(BaseModel):
+    """Ответ с метриками для дашборда."""
+
+    tasks_today: int = 0
+    tasks_week_history: list[int] = []
+    cost_today: float = 0.0
+    cost_week_history: list[float] = []
+    avg_response_ms: int = 0
+    response_time_history: list[int] = []
+    active_agents: int = 0
+    hourly_activity: list[int] = []

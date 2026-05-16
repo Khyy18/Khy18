@@ -1,6 +1,8 @@
 import { Activity, Cpu, Pause } from 'lucide-react'
 import TypingIndicator from './TypingIndicator'
 import StreamingMessage from './StreamingMessage'
+import avatarMap from './avatars'
+import AvatarRing from './AvatarRing'
 
 /**
  * Карточка агента с glass-morphism эффектом
@@ -55,10 +57,22 @@ export default function AgentCard({ agent, onSelect, streamingText }) {
       tabIndex={0}
     >
       <div className="flex items-center gap-3">
-        {/* Аватар с градиентом */}
-        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent to-secondary flex items-center justify-center text-white font-semibold text-sm shrink-0">
-          {initials}
-        </div>
+        {/* Аватар с кольцом статуса */}
+        {(() => {
+          const AvatarComponent = avatarMap[agent.name.toLowerCase()]
+          if (AvatarComponent) {
+            return (
+              <AvatarRing status={agent.status} size={44}>
+                <AvatarComponent />
+              </AvatarRing>
+            )
+          }
+          return (
+            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent to-secondary flex items-center justify-center text-white font-semibold text-sm shrink-0">
+              {initials}
+            </div>
+          )
+        })()}
 
         {/* Информация об агенте */}
         <div className="flex-1 min-w-0">

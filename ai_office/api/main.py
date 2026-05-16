@@ -16,6 +16,7 @@ from ai_office.api.routes.plans import router as plans_router
 from ai_office.api.routes.delegations import router as delegations_router
 from ai_office.api.routes.usage import router as usage_router
 from ai_office.api.routes.metrics import router as metrics_router
+from ai_office.api.routes.dashboard import router as dashboard_router
 from ai_office.api.middleware import TelegramAuthMiddleware
 from ai_office.api.observability import RequestLoggingMiddleware
 from ai_office.api.websocket import websocket_endpoint
@@ -61,6 +62,7 @@ app.include_router(plans_router)
 app.include_router(delegations_router)
 app.include_router(usage_router)
 app.include_router(metrics_router)
+app.include_router(dashboard_router)
 
 
 @app.get("/api/health")

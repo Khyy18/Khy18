@@ -7,11 +7,11 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: '#0a0a0f',
-        card: '#1a1a2e',
-        surface: '#16163a',
-        accent: '#3b82f6',
-        secondary: '#a855f7',
+        background: 'var(--color-background)',
+        card: 'var(--color-card)',
+        surface: 'var(--color-surface)',
+        accent: 'var(--color-accent)',
+        secondary: 'var(--color-secondary)',
       },
       backdropBlur: {
         xs: '2px',
