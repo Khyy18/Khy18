@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     calcom_api_key: str = ""
     calcom_base_url: str = "https://api.cal.com/v1"
     google_calendar_credentials_json: str = ""
+    calendly_api_key: str = ""
+    calendly_event_type: str = ""
+    google_calendar_client_id: str = ""
+    google_calendar_client_secret: str = ""
 
     # JWT Auth
     jwt_secret_key: str = "change-me-in-production"

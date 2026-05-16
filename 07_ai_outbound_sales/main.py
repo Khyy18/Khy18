@@ -45,6 +45,7 @@ from channels.email.deliverability_routes import router as deliverability_router
 from dashboard.routes.voice import router as voice_router
 from dashboard.routes.voice_webhooks import router as voice_webhooks_router
 from dashboard.routes.voice_billing import router as voice_billing_router
+from dashboard.routes.calendar import router as calendar_router
 
 # Initialize structured logging
 setup_logging()
@@ -528,6 +529,7 @@ app.include_router(deliverability_router)
 app.include_router(voice_router)
 app.include_router(voice_webhooks_router)
 app.include_router(voice_billing_router)
+app.include_router(calendar_router)
 app.include_router(views_router)
 
 # Mount static files

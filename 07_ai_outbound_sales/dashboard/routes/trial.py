@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/trial", tags=["trial"])
 
-TRIAL_DURATION_DAYS = 14
+TRIAL_DURATION_DAYS = 7
 TRIAL_LEADS_LIMIT = 50
 TRIAL_EMAILS_LIMIT = 100
+TRIAL_VOICE_CALLS_LIMIT = 5
 
 
 async def check_trial_limits(
@@ -32,7 +33,7 @@ async def check_trial_limits(
     Args:
         tenant_id: The tenant to check.
         session: Database session.
-        resource: One of 'leads', 'emails', 'linkedin'.
+        resource: One of 'leads', 'emails', 'linkedin', 'voice'.
 
     Raises:
         HTTPException: 403 if trial limit exceeded or resource not allowed.
@@ -62,6 +63,14 @@ async def check_trial_limits(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Trial emails limit reached",
         )
+
+    if resource == "voice":
+        voice_used = getattr(trial, "voice_calls_used", 0) or 0
+        if voice_used >= TRIAL_VOICE_CALLS_LIMIT:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Trial voice calls limit reached",
+            )
 
 
 async def _get_session():
@@ -113,6 +122,7 @@ async def start_trial(
         "ends_at": trial.ends_at.isoformat(),
         "leads_limit": TRIAL_LEADS_LIMIT,
         "emails_limit": TRIAL_EMAILS_LIMIT,
+        "voice_calls_limit": TRIAL_VOICE_CALLS_LIMIT,
         "leads_used": trial.leads_used,
         "emails_used": trial.emails_used,
     }

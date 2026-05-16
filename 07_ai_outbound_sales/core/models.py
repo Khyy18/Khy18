@@ -443,6 +443,7 @@ class Trial(Base):
     ends_at = Column(DateTime(timezone=True), nullable=False)
     leads_used = Column(Integer, default=0)
     emails_used = Column(Integer, default=0)
+    voice_calls_used = Column(Integer, default=0)
     converted_at = Column(DateTime(timezone=True), nullable=True)
 
     tenant = relationship("Tenant")

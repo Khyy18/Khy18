@@ -1,17 +1,22 @@
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import case, cast, Date, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import (
+    Call,
+    CallOutcome,
+    CallStatus,
     Campaign,
+    ChannelType,
     Event,
     EventType,
     Lead,
     LeadStatus,
     Message,
+    MessageDirection,
     MessageStatus,
     Sequence,
     User,
@@ -41,12 +46,31 @@ async def get_funnel(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(_get_session),
 ) -> dict:
+    """Get full pipeline funnel: Leads -> Contacted -> Replied -> Meeting Booked -> Closed."""
     result = await session.execute(
         select(Lead.status, func.count())
         .where(Lead.tenant_id == current_user.tenant_id)
         .group_by(Lead.status)
     )
-    funnel = {str(row[0].value) if hasattr(row[0], "value") else str(row[0]): row[1] for row in result.all()}
+    status_counts = {
+        str(row[0].value) if hasattr(row[0], "value") else str(row[0]): row[1]
+        for row in result.all()
+    }
+
+    # Map to full pipeline stages
+    funnel = {
+        "leads": sum(status_counts.values()),
+        "contacted": status_counts.get("contacted", 0)
+        + status_counts.get("replied", 0)
+        + status_counts.get("qualified", 0)
+        + status_counts.get("booked", 0),
+        "replied": status_counts.get("replied", 0)
+        + status_counts.get("qualified", 0)
+        + status_counts.get("booked", 0),
+        "meeting_booked": status_counts.get("booked", 0),
+        "closed": status_counts.get("qualified", 0),
+    }
+
     return {"funnel": funnel}
 
 
@@ -235,3 +259,207 @@ async def get_top_sequences(
     # Sort by reply rate descending
     items.sort(key=lambda x: x.reply_rate, reverse=True)
     return {"items": items}
+
+
+def _parse_period(period: str) -> int:
+    """Parse period string like '7d', '30d', '90d' into number of days."""
+    period = period.strip().lower()
+    if period.endswith("d"):
+        try:
+            return int(period[:-1])
+        except ValueError:
+            pass
+    return 30  # default
+
+
+@router.get("/conversion")
+async def get_conversion_rates(
+    period: str = Query("30d", description="Period: 7d, 30d, or 90d"),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Get per-stage conversion rates with period-over-period comparison.
+
+    Compares current period vs previous period of equal length.
+    """
+    days = _parse_period(period)
+    now = datetime.now(timezone.utc)
+    current_start = now - timedelta(days=days)
+    previous_start = current_start - timedelta(days=days)
+
+    # Current period lead counts by status
+    current_result = await session.execute(
+        select(Lead.status, func.count())
+        .where(
+            Lead.tenant_id == current_user.tenant_id,
+            Lead.created_at >= current_start,
+        )
+        .group_by(Lead.status)
+    )
+    current_counts = {
+        str(row[0].value) if hasattr(row[0], "value") else str(row[0]): row[1]
+        for row in current_result.all()
+    }
+
+    # Previous period lead counts by status
+    previous_result = await session.execute(
+        select(Lead.status, func.count())
+        .where(
+            Lead.tenant_id == current_user.tenant_id,
+            Lead.created_at >= previous_start,
+            Lead.created_at < current_start,
+        )
+        .group_by(Lead.status)
+    )
+    previous_counts = {
+        str(row[0].value) if hasattr(row[0], "value") else str(row[0]): row[1]
+        for row in previous_result.all()
+    }
+
+    def _calc_rates(counts: dict[str, int]) -> dict[str, float]:
+        total = sum(counts.values())
+        if total == 0:
+            return {
+                "lead_to_contacted": 0.0,
+                "contacted_to_replied": 0.0,
+                "replied_to_booked": 0.0,
+                "booked_to_closed": 0.0,
+            }
+        contacted = counts.get("contacted", 0) + counts.get("replied", 0) + counts.get("qualified", 0) + counts.get("booked", 0)
+        replied = counts.get("replied", 0) + counts.get("qualified", 0) + counts.get("booked", 0)
+        booked = counts.get("booked", 0)
+        closed = counts.get("qualified", 0)
+        return {
+            "lead_to_contacted": round(contacted / total, 4) if total > 0 else 0.0,
+            "contacted_to_replied": round(replied / contacted, 4) if contacted > 0 else 0.0,
+            "replied_to_booked": round(booked / replied, 4) if replied > 0 else 0.0,
+            "booked_to_closed": round(closed / booked, 4) if booked > 0 else 0.0,
+        }
+
+    return {
+        "period": period,
+        "current": _calc_rates(current_counts),
+        "previous": _calc_rates(previous_counts),
+    }
+
+
+@router.get("/channel-performance")
+async def get_channel_performance(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Get performance breakdown by channel (email, linkedin, voice).
+
+    Returns messages sent, replies, and meetings booked per channel.
+    """
+    # Messages sent per channel
+    sent_result = await session.execute(
+        select(Message.channel, func.count())
+        .join(Campaign, Message.campaign_id == Campaign.id)
+        .where(
+            Campaign.tenant_id == current_user.tenant_id,
+            Message.status != MessageStatus.draft,
+            Message.direction == MessageDirection.outbound,
+        )
+        .group_by(Message.channel)
+    )
+    sent_by_channel = {
+        str(row[0].value) if hasattr(row[0], "value") else str(row[0]): row[1]
+        for row in sent_result.all()
+    }
+
+    # Replies per channel
+    replies_result = await session.execute(
+        select(Message.channel, func.count())
+        .join(Campaign, Message.campaign_id == Campaign.id)
+        .join(Event, Event.message_id == Message.id)
+        .where(
+            Campaign.tenant_id == current_user.tenant_id,
+            Event.event_type == EventType.reply,
+        )
+        .group_by(Message.channel)
+    )
+    replies_by_channel = {
+        str(row[0].value) if hasattr(row[0], "value") else str(row[0]): row[1]
+        for row in replies_result.all()
+    }
+
+    # Meetings booked per channel (leads with status=booked, grouped by message channel)
+    meetings_result = await session.execute(
+        select(Message.channel, func.count(func.distinct(Lead.id)))
+        .join(Lead, Message.lead_id == Lead.id)
+        .join(Campaign, Message.campaign_id == Campaign.id)
+        .where(
+            Campaign.tenant_id == current_user.tenant_id,
+            Lead.status == LeadStatus.booked,
+        )
+        .group_by(Message.channel)
+    )
+    meetings_by_channel = {
+        str(row[0].value) if hasattr(row[0], "value") else str(row[0]): row[1]
+        for row in meetings_result.all()
+    }
+
+    channels = ["email", "linkedin", "voice"]
+    performance = {}
+    for ch in channels:
+        performance[ch] = {
+            "messages_sent": sent_by_channel.get(ch, 0),
+            "replies": replies_by_channel.get(ch, 0),
+            "meetings_booked": meetings_by_channel.get(ch, 0),
+        }
+
+    return {"channels": performance}
+
+
+@router.get("/campaign/{campaign_id}/funnel")
+async def get_campaign_funnel(
+    campaign_id: UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Get per-campaign funnel with leads grouped by status."""
+    # Verify campaign belongs to tenant
+    campaign_result = await session.execute(
+        select(Campaign).where(
+            Campaign.id == campaign_id,
+            Campaign.tenant_id == current_user.tenant_id,
+        )
+    )
+    campaign = campaign_result.scalar_one_or_none()
+    if campaign is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found"
+        )
+
+    # Get leads associated with this campaign through messages
+    funnel_result = await session.execute(
+        select(Lead.status, func.count(func.distinct(Lead.id)))
+        .join(Message, Message.lead_id == Lead.id)
+        .where(Message.campaign_id == campaign_id)
+        .group_by(Lead.status)
+    )
+    status_counts = {
+        str(row[0].value) if hasattr(row[0], "value") else str(row[0]): row[1]
+        for row in funnel_result.all()
+    }
+
+    total = sum(status_counts.values())
+    funnel = {
+        "leads": total,
+        "contacted": status_counts.get("contacted", 0)
+        + status_counts.get("replied", 0)
+        + status_counts.get("qualified", 0)
+        + status_counts.get("booked", 0),
+        "replied": status_counts.get("replied", 0)
+        + status_counts.get("qualified", 0)
+        + status_counts.get("booked", 0),
+        "meeting_booked": status_counts.get("booked", 0),
+        "closed": status_counts.get("qualified", 0),
+    }
+
+    return {
+        "campaign_id": str(campaign_id),
+        "campaign_name": campaign.name,
+        "funnel": funnel,
+    }
