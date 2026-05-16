@@ -6,6 +6,7 @@ import ActivityLog from './components/ActivityLog'
 import SystemStatus from './components/SystemStatus'
 import AgentGraph from './components/AgentGraph'
 import TaskTimeline from './components/TaskTimeline'
+import KanbanBoard from './components/KanbanBoard'
 import AgentDetailView from './components/AgentDetailView'
 import { ToastContainer, showToast } from './components/Toast'
 import { useApi } from './hooks/useApi'
@@ -24,6 +25,7 @@ export default function App() {
   const [selectedAgent, setSelectedAgent] = useState(null)
   const [userRole, setUserRole] = useState('viewer')
   const [streamingMessages, setStreamingMessages] = useState({})
+  const [taskView, setTaskView] = useState('kanban')
 
   // Инициализация Telegram Web App и определение роли
   useEffect(() => {
@@ -218,14 +220,33 @@ export default function App() {
                     </span>
                   </div>
                 )}
-                {tasks && tasks.length > 0 ? (
-                  tasks.map((task) => (
-                    <TaskCard key={task.id} task={task} isViewer={isViewer} />
-                  ))
+                {/* Переключатель вида: Kanban / Timeline */}
+                <div className="flex gap-2 mb-3">
+                  <button
+                    onClick={() => setTaskView('kanban')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                      taskView === 'kanban'
+                        ? 'bg-accent/20 text-accent'
+                        : 'bg-white/5 text-white/40'
+                    }`}
+                  >
+                    Kanban
+                  </button>
+                  <button
+                    onClick={() => setTaskView('timeline')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                      taskView === 'timeline'
+                        ? 'bg-accent/20 text-accent'
+                        : 'bg-white/5 text-white/40'
+                    }`}
+                  >
+                    Timeline
+                  </button>
+                </div>
+                {taskView === 'kanban' ? (
+                  <KanbanBoard tasks={tasks} isViewer={isViewer} />
                 ) : (
-                  <div className="text-center py-8 text-white/30 text-sm">
-                    No tasks yet
-                  </div>
+                  <TaskTimeline />
                 )}
               </div>
             )}

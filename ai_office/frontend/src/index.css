@@ -102,3 +102,10 @@
 .animate-cursor-blink {
   animation: cursor-blink 1s step-end infinite;
 }
+
+/* Drag overlay styles */
+.kanban-dragging {
+  transform: scale(1.03);
+  box-shadow: 0 20px 40px rgba(59, 130, 246, 0.15);
+  opacity: 0.9;
+}
