@@ -106,37 +106,37 @@ async def list_linear_issues(
     if not settings.linear_api_key:
         return []
 
-    filter_parts = []
-    if team_id:
-        filter_parts.append(f'team: {{ id: {{ eq: "{team_id}" }} }}')
-    if status:
-        filter_parts.append(f'state: {{ name: {{ eq: "{status}" }} }}')
-
-    filter_str = ", ".join(filter_parts)
-    filter_arg = f"(filter: {{ {filter_str} }})" if filter_str else ""
-
-    query = f"""
-    query {{
-        issues{filter_arg} {{
-            nodes {{
+    query = """
+    query ListIssues($teamId: String, $status: String) {
+        issues(filter: {
+            team: { id: { eq: $teamId } }
+            state: { name: { eq: $status } }
+        }) {
+            nodes {
                 id
                 identifier
                 title
-                state {{
+                state {
                     name
-                }}
+                }
                 priority
                 url
-            }}
-        }}
-    }}
+            }
+        }
+    }
     """
+
+    variables: dict[str, Any] = {}
+    if team_id:
+        variables["teamId"] = team_id
+    if status:
+        variables["status"] = status
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 LINEAR_API_URL,
-                json={"query": query},
+                json={"query": query, "variables": variables},
                 headers=_get_headers(),
                 timeout=15.0,
             )
@@ -172,39 +172,36 @@ async def update_linear_issue(
     if not settings.linear_api_key:
         return {"error": "LINEAR_API_KEY не настроен"}
 
-    # Если нужно обновить статус, сначала найти stateId
-    input_fields = []
-    if status:
-        # Linear требует stateId, не имя
-        input_fields.append(f'stateId: "{status}"')
-
-    if not input_fields:
+    if not status:
         return {"error": "Нет полей для обновления"}
 
-    input_str = ", ".join(input_fields)
-
-    mutation = f"""
-    mutation {{
-        issueUpdate(id: "{issue_id}", input: {{ {input_str} }}) {{
+    mutation = """
+    mutation UpdateIssue($issueId: String!, $stateId: String!) {
+        issueUpdate(id: $issueId, input: { stateId: $stateId }) {
             success
-            issue {{
+            issue {
                 id
                 identifier
                 title
-                state {{
+                state {
                     name
-                }}
+                }
                 url
-            }}
-        }}
-    }}
+            }
+        }
+    }
     """
+
+    variables = {
+        "issueId": issue_id,
+        "stateId": status,
+    }
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 LINEAR_API_URL,
-                json={"query": mutation},
+                json={"query": mutation, "variables": variables},
                 headers=_get_headers(),
                 timeout=15.0,
             )

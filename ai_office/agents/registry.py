@@ -19,6 +19,16 @@ class AgentRegistry:
         """Register an agent configuration."""
         self._agents[config.name.lower()] = config
 
+    def unregister(self, name: str) -> None:
+        """Unregister an agent by name.
+
+        Args:
+            name: Name of the agent to remove (case-insensitive)
+        """
+        key = name.lower()
+        if key in self._agents:
+            del self._agents[key]
+
     def get(self, name: str) -> AgentConfig | None:
         """Get agent config by name (case-insensitive)."""
         return self._agents.get(name.lower())

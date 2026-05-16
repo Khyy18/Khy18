@@ -123,8 +123,7 @@ def reload_plugins() -> list[dict[str, Any]]:
     # Удаляем только плагин-агентов из реестра
     for plugin in _loaded_plugins:
         name = plugin["name"].lower()
-        if name in registry._agents:
-            del registry._agents[name]
+        registry.unregister(name)
 
     _loaded_plugins = []
     return load_plugins()

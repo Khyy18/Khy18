@@ -3,11 +3,30 @@
 import csv
 import io
 import logging
+import os
 from pathlib import Path
 
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
+
+ALLOWED_FILE_DIR = "/tmp/ai_office_files"
+
+# Создаём директорию если не существует
+os.makedirs(ALLOWED_FILE_DIR, exist_ok=True)
+
+
+def _validate_file_path(file_path: str) -> str | None:
+    """Проверить что путь к файлу находится в разрешённой директории.
+
+    Returns:
+        None если путь валиден, иначе сообщение об ошибке.
+    """
+    resolved = Path(file_path).resolve()
+    allowed = Path(ALLOWED_FILE_DIR).resolve()
+    if not str(resolved).startswith(str(allowed) + os.sep) and resolved != allowed:
+        return "Ошибка: доступ к файлу запрещён"
+    return None
 
 
 @tool
@@ -20,6 +39,10 @@ async def parse_pdf(file_path: str) -> str:
     Returns:
         Извлечённый текст или сообщение об ошибке
     """
+    error = _validate_file_path(file_path)
+    if error:
+        return error
+
     path = Path(file_path)
     if not path.exists():
         return f"Ошибка: файл не найден: {file_path}"
@@ -65,6 +88,10 @@ async def parse_csv(file_path: str) -> str:
     Returns:
         Содержимое CSV в текстовом формате
     """
+    error = _validate_file_path(file_path)
+    if error:
+        return error
+
     path = Path(file_path)
     if not path.exists():
         return f"Ошибка: файл не найден: {file_path}"
@@ -155,6 +182,10 @@ async def analyze_document(file_path: str, question: str) -> str:
     Returns:
         Ответ на вопрос или извлечённый контекст
     """
+    error = _validate_file_path(file_path)
+    if error:
+        return error
+
     path = Path(file_path)
     if not path.exists():
         return f"Ошибка: файл не найден: {file_path}"
