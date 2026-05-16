@@ -1,4 +1,5 @@
 import { Activity, Cpu, Pause } from 'lucide-react'
+import TypingIndicator from './TypingIndicator'
 
 /**
  * Карточка агента с glass-morphism эффектом
@@ -33,10 +34,17 @@ export default function AgentCard({ agent }) {
       icon: Cpu,
       animate: 'animate-status-pulse',
     },
+    processing: {
+      color: 'bg-blue-500',
+      label: 'Processing',
+      icon: Cpu,
+      animate: 'animate-status-pulse',
+    },
   }
 
   const status = statusConfig[agent.status] || statusConfig.idle
   const StatusIcon = status.icon
+  const showTyping = agent.status === 'typing' || agent.status === 'working'
 
   return (
     <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 animate-slide-up">
@@ -59,6 +67,13 @@ export default function AgentCard({ agent }) {
           <p className="text-white/50 text-xs mt-0.5">{agent.role}</p>
         </div>
       </div>
+
+      {/* Typing indicator */}
+      {showTyping && (
+        <div className="mt-2 pl-15">
+          <TypingIndicator />
+        </div>
+      )}
 
       {/* Текущая задача */}
       {agent.current_task && (

@@ -62,3 +62,33 @@
 .animate-slide-up {
   animation: slide-up 0.3s ease-out;
 }
+
+/* Toast slide-in animation */
+@keyframes toast-in {
+  0% { opacity: 0; transform: translateY(16px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-toast-in {
+  animation: toast-in 0.3s ease-out;
+}
+
+/* Typing dots - sequential bounce */
+@keyframes typing-dot {
+  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
+.animate-typing-dot-1 { animation: typing-dot 1.4s infinite; }
+.animate-typing-dot-2 { animation: typing-dot 1.4s infinite 0.2s; }
+.animate-typing-dot-3 { animation: typing-dot 1.4s infinite 0.4s; }
+
+/* Tab content transition */
+@keyframes tab-transition {
+  0% { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-tab-transition {
+  animation: tab-transition 0.2s ease-out;
+}
