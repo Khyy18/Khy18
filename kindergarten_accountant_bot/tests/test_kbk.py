@@ -1,6 +1,5 @@
 """Tests for KBK reference data and search functionality."""
 
-import pytest
 
 from kindergarten_accountant_bot.data.kbk_codes import KBK_CODES, POPULAR_KBK, search_kbk
 

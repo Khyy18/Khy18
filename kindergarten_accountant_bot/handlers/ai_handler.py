@@ -1,6 +1,7 @@
 """AI handler for Telegram bot - free-text intent classification via Groq."""
 
 import logging
+import os
 from typing import Optional
 
 from telegram import Update
@@ -11,7 +12,6 @@ from kindergarten_accountant_bot.utils.formatting import _card
 logger = logging.getLogger(__name__)
 
 # Backend URL for AI endpoint (can be overridden via environment)
-import os
 AI_BACKEND_URL = os.environ.get("AI_BACKEND_URL", "http://localhost:8000/api/v1/ai/chat")
 
 

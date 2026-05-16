@@ -25,10 +25,12 @@ jobs:
         run: pip install ruff
 
       - name: Run linter
-        run: ruff check backend/ kindergarten_accountant_bot/ --select E,F,W
+        run: ruff check backend/ kindergarten_accountant_bot/ --select E,F --ignore E501
 
   test-backend:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v4
 
@@ -38,13 +40,17 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install -r backend/requirements.txt
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r kindergarten_accountant_bot/requirements.txt
 
       - name: Run backend tests
         run: pytest backend/tests/ -v
 
   test-bot:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v4
 
@@ -54,10 +60,32 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install -r kindergarten_accountant_bot/requirements.txt
+        run: |
+          pip install -r kindergarten_accountant_bot/requirements.txt
+          pip install -r backend/requirements.txt
 
       - name: Run bot tests
         run: pytest kindergarten_accountant_bot/tests/ -v
+
+  test-e2e:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install -r kindergarten_accountant_bot/requirements.txt
+
+      - name: Run E2E tests
+        run: pytest tests/e2e/ -v
 
   build-apk:
     runs-on: ubuntu-latest

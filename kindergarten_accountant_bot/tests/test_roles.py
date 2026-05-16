@@ -141,7 +141,7 @@ async def test_require_roles_callback_query_denied():
     update.message = None
     context = MagicMock()
 
-    result = await decorated(update, context)
+    await decorated(update, context)
     handler.assert_not_called()
     update.callback_query.answer.assert_called_once()
     call_kwargs = update.callback_query.answer.call_args

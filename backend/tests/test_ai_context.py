@@ -2,9 +2,8 @@
 
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import patch
 
-from backend.ai.router import _get_history, _update_history, _conversation_history, HISTORY_TIMEOUT_MINUTES
+from backend.ai.router import _get_history, _update_history, _conversation_history
 
 
 @pytest.fixture(autouse=True)

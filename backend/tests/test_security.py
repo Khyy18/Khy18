@@ -55,7 +55,6 @@ class TestEncryption:
 
         # Re-import to pick up the key
         from backend.security.encryption import encrypt_value, decrypt_value
-        from backend.config import Settings
         # Update settings in-place
         from backend import config
         config.settings.ENCRYPTION_KEY = key

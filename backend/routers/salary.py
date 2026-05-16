@@ -9,7 +9,7 @@ from openpyxl import Workbook
 
 from backend.config import settings
 from backend.schemas.calculators import SalaryCalculateRequest, SalaryCalculateResponse
-from backend.schemas.payroll import PayrollEmployeeInput, PayrollRequest, PayrollResponse, PayrollEmployeeResult
+from backend.schemas.payroll import PayrollRequest, PayrollResponse, PayrollEmployeeResult
 
 router = APIRouter(prefix="/salary", tags=["calculators"])
 

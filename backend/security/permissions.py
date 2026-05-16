@@ -1,7 +1,6 @@
 """Role-based access control (RBAC) for FastAPI endpoints."""
 
 from enum import Enum
-from typing import Tuple
 
 from fastapi import Header, HTTPException, status
 

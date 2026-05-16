@@ -1,5 +1,4 @@
 import pytest
-import pytest_asyncio
 
 from kindergarten_accountant_bot.config import BASE_FEE_PER_DAY
 from kindergarten_accountant_bot.models.child import (

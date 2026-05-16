@@ -1,6 +1,5 @@
 """Tests for pagination utility."""
 
-import pytest
 
 from kindergarten_accountant_bot.utils.pagination import paginate_items
 

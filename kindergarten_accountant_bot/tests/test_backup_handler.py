@@ -1,7 +1,6 @@
 """Tests for backup handler - /backup command and auto-backup job."""
 
 import datetime
-import os
 import sqlite3
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch

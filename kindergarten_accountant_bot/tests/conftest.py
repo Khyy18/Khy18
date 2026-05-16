@@ -1,8 +1,5 @@
-import os
-import tempfile
 from unittest.mock import patch
 
-import pytest
 import pytest_asyncio
 
 from kindergarten_accountant_bot.models.database import init_db

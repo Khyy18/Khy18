@@ -71,7 +71,6 @@ async def input_mode_selected(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def monthly_input_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Receive 12 monthly values, sum them, ask for days."""
     text = update.message.text.strip()
-    separators = "," if "," in text else " "
     parts = [p.strip() for p in text.replace(",", " ").split() if p.strip()]
     try:
         values = [float(p) for p in parts]

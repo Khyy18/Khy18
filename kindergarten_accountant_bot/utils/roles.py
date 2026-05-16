@@ -1,7 +1,7 @@
 """Role-based access control for bot commands."""
 
 import functools
-from typing import Callable, Set, Tuple
+from typing import Callable, Set
 
 from telegram import Update
 from telegram.ext import ContextTypes

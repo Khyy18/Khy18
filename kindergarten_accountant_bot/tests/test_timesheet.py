@@ -1,5 +1,4 @@
 import pytest
-import pytest_asyncio
 
 from kindergarten_accountant_bot.models.employee import (
     add_employee,

@@ -1,7 +1,6 @@
 """Тесты для FEAT-001: 6 архитектурных исправлений."""
 from __future__ import annotations
 
-import asyncio
 import os
 import sqlite3
 import tempfile
@@ -10,7 +9,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import pytest_asyncio
 
 # Подготовка тестовой БД
 os.environ.setdefault("ARB_DB_PATH", ":memory:")
@@ -147,7 +145,6 @@ def test_record_arb_with_event_id():
             from arbitrage import memory as mem
 
             # Re-init with patched path
-            original_connect = mem._connect
 
             def patched_connect():
                 conn = sqlite3.connect(db_path)

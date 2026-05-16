@@ -57,7 +57,7 @@ async def test_audit_log_created_on_post(client):
     logs = response.json()
     assert len(logs) >= 1
     # The most recent entry should be the POST
-    post_logs = [l for l in logs if l["action"] == "POST"]
+    post_logs = [entry for entry in logs if entry["action"] == "POST"]
     assert len(post_logs) >= 1
 
 

@@ -10,7 +10,7 @@ from telegram.ext import (
     filters,
 )
 
-from kindergarten_accountant_bot.data.kbk_codes import KBK_CODES, POPULAR_KBK, search_kbk
+from kindergarten_accountant_bot.data.kbk_codes import POPULAR_KBK, search_kbk
 from kindergarten_accountant_bot.handlers.common import cancel
 from kindergarten_accountant_bot.utils.formatting import _card
 from kindergarten_accountant_bot.utils.keyboards import back_to_menu_button

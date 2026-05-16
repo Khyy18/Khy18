@@ -1,6 +1,5 @@
 """Tests for PII masking utilities."""
 
-import pytest
 
 from backend.middleware.pii_mask import (
     mask_fio,

@@ -1,4 +1,3 @@
-import pytest
 
 from kindergarten_accountant_bot.utils.formatting import (
     _card,
