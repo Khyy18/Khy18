@@ -1,0 +1,39 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Structured logging (structlog), Sentry integration, and Prometheus metrics. Replaces print/logging with structlog JSON formatting. Adds sentry-sdk with SENTRY_DSN env var. Creates monitoring/ module with prometheus_client counters/histograms and /metrics endpoint.",
+  "status": "in_progress",
+  "steps": [
+    "Add structlog, sentry-sdk, prometheus-client to requirements.txt",
+    "Create logging_config.py at project root: configure structlog with JSON formatting for prod, colored console for dev. Add get_logger(name) helper. Detect mode from LOG_FORMAT env var (json/console, default console)",
+    "Add SENTRY_DSN and LOG_FORMAT to config.py (from env vars, SENTRY_DSN defaults to empty string meaning disabled)",
+    "Create sentry_setup.py at project root: init_sentry() function that initializes sentry_sdk if SENTRY_DSN is set. Configure traces_sample_rate=0.1, attach_stacktrace=True. Add breadcrumb helpers for payments and trades",
+    "Create monitoring/__init__.py with setup_metrics() function",
+    "Create monitoring/metrics.py: define prometheus_client metrics - Counter for http_requests_total (labels: method, path, status), payment_events_total (labels: event_type), trade_operations_total (labels: symbol, side, outcome). Histogram for http_request_duration_seconds, trade_pnl_distribution. Gauge for queue_length, open_positions_count",
+    "Create monitoring/middleware.py: aiohttp middleware that increments http_requests_total and observes http_request_duration_seconds for each request",
+    "Create monitoring/endpoint.py: function to add /metrics route to aiohttp app that serves prometheus_client.generate_latest()",
+    "Create monitoring/grafana_dashboard.json: example Grafana dashboard JSON with panels for request rate, payment events, trade PnL, open positions",
+    "Update main.py imports: add structlog logger initialization at top (from logging_config import get_logger), call init_sentry() after config validation",
+    "Replace print() calls in payments/service.py with structlog logger (log.info, log.error with structured context)",
+    "Replace logging.getLogger in freelance_automation/kwork.py, freelance_automation/flru.py, freelance_automation/scheduler.py with structlog (from logging_config import get_logger)",
+    "Replace print() in viral/telegram_handlers.py with structlog",
+    "Replace print() in ad_testing/engine.py with structlog",
+    "Create tests/test_logging_and_monitoring.py: test structlog configuration produces valid output, test prometheus metrics increment correctly, test /metrics endpoint returns text/plain with expected metric names, test sentry_setup does not crash when DSN is empty"
+  ],
+  "acceptance_criteria": [
+    "structlog configured in logging_config.py with JSON and console modes",
+    "sentry_setup.py initializes SDK when SENTRY_DSN is set, does nothing when empty",
+    "monitoring/ module with metrics.py, middleware.py, endpoint.py exists",
+    "Key modules (payments/service.py, freelance_automation/*.py, viral/, ad_testing/) use structlog instead of print/logging",
+    "pytest tests/test_logging_and_monitoring.py passes",
+    "ruff check passes on all new/modified files"
+  ],
+  "verification": [
+    "pip install -r requirements.txt",
+    "ruff check . --select=E,F,I --ignore=F401,E501",
+    "pytest tests/ -v --tb=short",
+    "python -c \"import logging_config; import sentry_setup; from monitoring import metrics, middleware, endpoint\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

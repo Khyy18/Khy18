@@ -9,7 +9,10 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+from logging_config import get_logger
 from payments import models
+
+log = get_logger(__name__)
 
 
 class PaymentService:
@@ -36,6 +39,12 @@ class PaymentService:
         """
         # Сохраняем инвойс в БД
         invoice_id = models.create_invoice(user_tg_id, amount_stars, description)
+        log.info(
+            "invoice_created",
+            invoice_id=invoice_id,
+            user_tg_id=user_tg_id,
+            amount_stars=amount_stars,
+        )
 
         payload = {
             "title": title,
@@ -50,6 +59,7 @@ class PaymentService:
             data = await resp.json()
             if data.get("ok"):
                 return data["result"]
+            log.error("create_invoice_link_failed", response=data)
             return None
 
     async def handle_pre_checkout_query(
@@ -75,6 +85,13 @@ class PaymentService:
         except (ValueError, TypeError):
             ok = False
             error_message = "Invalid invoice payload"
+
+        if not ok:
+            log.warning(
+                "pre_checkout_rejected",
+                query_id=query_id,
+                error=error_message,
+            )
 
         payload: dict = {
             "pre_checkout_query_id": query_id,
@@ -107,11 +124,15 @@ class PaymentService:
         try:
             invoice_id = int(invoice_payload)
         except (ValueError, TypeError):
+            log.error("invalid_invoice_payload", payload=invoice_payload)
             return None
 
         success = models.mark_paid(invoice_id, charge_id)
         if not success:
+            log.error("mark_paid_failed", invoice_id=invoice_id)
             return None
+
+        log.info("payment_successful", invoice_id=invoice_id, charge_id=charge_id)
 
         # Extract user info from update
         from_user = message.get("from", {})

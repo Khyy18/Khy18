@@ -7,7 +7,6 @@
 
 import os
 
-
 # --- Секреты (только из окружения) ---
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
@@ -23,6 +22,12 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///trades.db")
 # URL Redis для кэширования. Пустая строка = кэш отключён.
 REDIS_URL = os.getenv("REDIS_URL", "")
+
+# --- Observability ---
+# Sentry DSN для отправки ошибок. Пустая строка = Sentry отключён.
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+# Формат логов: "json" для prod (машиночитаемый), "console" для dev (цветной).
+LOG_FORMAT = os.getenv("LOG_FORMAT", "console")
 
 
 def _safe_int(value: str, default: int = 0) -> int:

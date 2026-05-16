@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from ad_testing import models
 from ad_testing.stats import chi_squared_test
+from logging_config import get_logger
+
+log = get_logger(__name__)
 
 
 class ABTestEngine:
@@ -18,13 +21,16 @@ class ABTestEngine:
 
     def register_channel(self, name: str, source_tag: str) -> int:
         """Зарегистрировать рекламный канал. Возвращает id."""
-        return models.register_channel(name, source_tag)
+        channel_id = models.register_channel(name, source_tag)
+        log.info("channel_registered", name=name, source_tag=source_tag, channel_id=channel_id)
+        return channel_id
 
     def record_event(
         self, source_tag: str, event_type: str, revenue: float = 0.0
     ) -> None:
         """Записать событие: click, conversion, impression."""
         models.record_event(source_tag, event_type, revenue)
+        log.debug("event_recorded", source_tag=source_tag, event_type=event_type, revenue=revenue)
 
     def allocate_budget(self, total_budget: float) -> dict[str, float]:
         """Распределить бюджет: 80% лучшим (по конверсии), 20% экспериментальным.

@@ -1,6 +1,7 @@
 aiohttp>=3.9
 pytest
 pytest-asyncio
+pytest-aiohttp
 ruff
 playwright
 fpdf2
@@ -10,3 +11,6 @@ alembic
 asyncpg
 redis[hiredis]
 sqlalchemy
+structlog
+sentry-sdk
+prometheus-client

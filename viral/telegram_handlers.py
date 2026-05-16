@@ -12,7 +12,10 @@ from typing import Any, Optional
 import aiohttp
 
 import config
+from logging_config import get_logger
 from viral import models
+
+log = get_logger(__name__)
 
 
 def _bot_url(method: str) -> str:
@@ -37,9 +40,11 @@ async def _send_message(
     try:
         async with session.post(_bot_url("sendMessage"), data=payload, timeout=15) as resp:
             if resp.status != 200:
+                log.warning("telegram_send_failed", status=resp.status, chat_id=chat_id)
                 return None
             return await resp.json()
-    except (aiohttp.ClientError, Exception):
+    except (aiohttp.ClientError, Exception) as e:
+        log.error("telegram_send_error", error=str(e), chat_id=chat_id)
         return None
 
 
@@ -65,6 +70,8 @@ async def handle_referral_command(
     code = models.create_referral_code(user_id)
     link = f"https://t.me/{bot_username}?start=ref_{code}"
     stats = models.get_referral_stats(user_id)
+
+    log.info("referral_command", user_id=user_id, code=code)
 
     text = (
         f"<b>Ваша реферальная ссылка:</b>\n"
@@ -94,6 +101,7 @@ async def handle_start_referral(
 
     success = models.register_referral(code, user_id)
     if success:
+        log.info("referral_registered", user_id=user_id, code=code)
         text = "Вы зарегистрированы по реферальной ссылке! Добро пожаловать."
     else:
         text = "Добро пожаловать!"

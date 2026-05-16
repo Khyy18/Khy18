@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import logging
 import os
 import random
 from datetime import datetime, timezone
@@ -14,8 +13,9 @@ from freelance_automation.config import (
     RESPONSE_TEMPLATES,
     SCAN_INTERVAL_MINUTES,
 )
+from logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # Path for persisting responded order IDs across restarts
 DEDUP_PATH: str = os.getenv("FREELANCE_DEDUP_PATH", "freelance_responded.json")
@@ -47,7 +47,7 @@ class FreelanceScheduler:
             with open(DEDUP_PATH, "w", encoding="utf-8") as f:
                 json.dump(list(self._responded_order_ids), f)
         except OSError as e:
-            logger.warning(f"Failed to save dedup file: {e}")
+            log.warning("dedup_save_failed", error=str(e))
 
     def _cleanup_old_responses(self) -> None:
         """Удаление записей старше 1 часа из счётчика откликов."""
@@ -75,17 +75,18 @@ class FreelanceScheduler:
                 orders = await platform.fetch_new_orders(
                     keywords=self.keywords if self.keywords else None
                 )
-                logger.info(f"Получено {len(orders)} заказов с платформы")
+                log.info("orders_received", count=len(orders))
 
                 for order in orders:
                     # Skip already-responded orders
                     if order.id in self._responded_order_ids:
-                        logger.debug(f"Пропуск (дубликат): {order.title}")
+                        log.debug("order_skipped_duplicate", order_title=order.title)
                         continue
 
                     if not self._can_respond():
-                        logger.warning(
-                            f"Достигнут лимит откликов: {MAX_RESPONSES_PER_HOUR}/час"
+                        log.warning(
+                            "rate_limit_reached",
+                            limit=MAX_RESPONSES_PER_HOUR,
                         )
                         break
 
@@ -96,17 +97,18 @@ class FreelanceScheduler:
                         self._responses_this_hour.append(datetime.now(timezone.utc))
                         self._responded_order_ids.add(order.id)
                         self._save_dedup()
-                        logger.info(f"Отклик отправлен: {order.title}")
+                        log.info("response_sent", order_title=order.title)
                     else:
-                        logger.warning(f"Не удалось отправить отклик: {order.title}")
+                        log.warning("response_failed", order_title=order.title)
 
             except Exception as e:
-                logger.error(f"Ошибка при обработке платформы: {e}")
+                log.error("platform_processing_error", error=str(e))
 
     async def run_loop(self) -> None:
         """Бесконечный цикл сканирования с заданным интервалом."""
-        logger.info(
-            f"Запуск планировщика фриланса (интервал: {SCAN_INTERVAL_MINUTES} мин)"
+        log.info(
+            "scheduler_started",
+            interval_minutes=SCAN_INTERVAL_MINUTES,
         )
         while True:
             await self.run_once()

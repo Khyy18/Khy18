@@ -1,14 +1,14 @@
 """Реализация платформы Kwork.ru через Playwright."""
 
 import json
-import logging
 from typing import Optional
 
-from playwright.async_api import async_playwright, Browser, Page
+from playwright.async_api import Browser, Page, async_playwright
 
 from freelance_automation.base import FreelancePlatform, Order
+from logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class KworkPlatform(FreelancePlatform):
@@ -37,16 +37,16 @@ class KworkPlatform(FreelancePlatform):
             self._page = await context.new_page()
             await self._page.goto(self.BASE_URL)
 
-            logger.info("Успешная авторизация на Kwork.ru")
+            log.info("auth_success", platform="kwork.ru")
             return True
         except Exception as e:
-            logger.error(f"Ошибка авторизации на Kwork: {e}")
+            log.error("auth_failed", platform="kwork.ru", error=str(e))
             return False
 
     async def fetch_new_orders(self, keywords: list[str] | None = None) -> list[Order]:
         """Получение новых заказов со страницы проектов Kwork."""
         if not self._page:
-            logger.error("Браузер не инициализирован. Сначала вызовите login().")
+            log.error("browser_not_initialized", platform="kwork.ru")
             return []
 
         try:
@@ -98,16 +98,16 @@ class KworkPlatform(FreelancePlatform):
 
                 orders.append(order)
 
-            logger.info(f"Найдено {len(orders)} заказов на Kwork")
+            log.info("orders_fetched", platform="kwork.ru", count=len(orders))
             return orders
         except Exception as e:
-            logger.error(f"Ошибка получения заказов с Kwork: {e}")
+            log.error("fetch_orders_failed", platform="kwork.ru", error=str(e))
             return []
 
     async def respond_to_order(self, order: Order, text: str) -> bool:
         """Отправка отклика на заказ Kwork."""
         if not self._page:
-            logger.error("Браузер не инициализирован.")
+            log.error("browser_not_initialized", platform="kwork.ru")
             return False
 
         try:
@@ -117,7 +117,7 @@ class KworkPlatform(FreelancePlatform):
             # Заполнение формы отклика
             textarea = await self._page.query_selector(".wants-offer-form textarea")
             if not textarea:
-                logger.error(f"Форма отклика не найдена для заказа {order.id}")
+                log.error("response_form_not_found", order_id=order.id)
                 return False
 
             await textarea.fill(text)
@@ -128,10 +128,10 @@ class KworkPlatform(FreelancePlatform):
                 await submit_btn.click()
                 await self._page.wait_for_timeout(2000)
 
-            logger.info(f"Отклик отправлен на заказ: {order.title}")
+            log.info("response_sent", platform="kwork.ru", order_title=order.title)
             return True
         except Exception as e:
-            logger.error(f"Ошибка отправки отклика на Kwork: {e}")
+            log.error("response_failed", platform="kwork.ru", error=str(e))
             return False
 
     async def close(self) -> None:
@@ -141,6 +141,6 @@ class KworkPlatform(FreelancePlatform):
                 await self._browser.close()
             if self._playwright:
                 await self._playwright.stop()
-            logger.info("Браузер Kwork закрыт")
+            log.info("browser_closed", platform="kwork.ru")
         except Exception as e:
-            logger.error(f"Ошибка закрытия браузера Kwork: {e}")
+            log.error("browser_close_failed", platform="kwork.ru", error=str(e))

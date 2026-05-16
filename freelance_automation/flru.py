@@ -1,14 +1,14 @@
 """Реализация платформы FL.ru через Playwright."""
 
 import json
-import logging
 from typing import Optional
 
-from playwright.async_api import async_playwright, Browser, Page
+from playwright.async_api import Browser, Page, async_playwright
 
 from freelance_automation.base import FreelancePlatform, Order
+from logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class FLruPlatform(FreelancePlatform):
@@ -37,16 +37,16 @@ class FLruPlatform(FreelancePlatform):
             self._page = await context.new_page()
             await self._page.goto(self.BASE_URL)
 
-            logger.info("Успешная авторизация на FL.ru")
+            log.info("auth_success", platform="fl.ru")
             return True
         except Exception as e:
-            logger.error(f"Ошибка авторизации на FL.ru: {e}")
+            log.error("auth_failed", platform="fl.ru", error=str(e))
             return False
 
     async def fetch_new_orders(self, keywords: list[str] | None = None) -> list[Order]:
         """Получение новых заказов со страницы проектов FL.ru."""
         if not self._page:
-            logger.error("Браузер не инициализирован. Сначала вызовите login().")
+            log.error("browser_not_initialized", platform="fl.ru")
             return []
 
         try:
@@ -98,16 +98,16 @@ class FLruPlatform(FreelancePlatform):
 
                 orders.append(order)
 
-            logger.info(f"Найдено {len(orders)} заказов на FL.ru")
+            log.info("orders_fetched", platform="fl.ru", count=len(orders))
             return orders
         except Exception as e:
-            logger.error(f"Ошибка получения заказов с FL.ru: {e}")
+            log.error("fetch_orders_failed", platform="fl.ru", error=str(e))
             return []
 
     async def respond_to_order(self, order: Order, text: str) -> bool:
         """Отправка отклика на заказ FL.ru."""
         if not self._page:
-            logger.error("Браузер не инициализирован.")
+            log.error("browser_not_initialized", platform="fl.ru")
             return False
 
         try:
@@ -117,7 +117,7 @@ class FLruPlatform(FreelancePlatform):
             # Заполнение формы отклика
             textarea = await self._page.query_selector(".b-post__form textarea")
             if not textarea:
-                logger.error(f"Форма отклика не найдена для заказа {order.id}")
+                log.error("response_form_not_found", order_id=order.id)
                 return False
 
             await textarea.fill(text)
@@ -128,10 +128,10 @@ class FLruPlatform(FreelancePlatform):
                 await submit_btn.click()
                 await self._page.wait_for_timeout(2000)
 
-            logger.info(f"Отклик отправлен на заказ FL.ru: {order.title}")
+            log.info("response_sent", platform="fl.ru", order_title=order.title)
             return True
         except Exception as e:
-            logger.error(f"Ошибка отправки отклика на FL.ru: {e}")
+            log.error("response_failed", platform="fl.ru", error=str(e))
             return False
 
     async def close(self) -> None:
@@ -141,6 +141,6 @@ class FLruPlatform(FreelancePlatform):
                 await self._browser.close()
             if self._playwright:
                 await self._playwright.stop()
-            logger.info("Браузер FL.ru закрыт")
+            log.info("browser_closed", platform="fl.ru")
         except Exception as e:
-            logger.error(f"Ошибка закрытия браузера FL.ru: {e}")
+            log.error("browser_close_failed", platform="fl.ru", error=str(e))
