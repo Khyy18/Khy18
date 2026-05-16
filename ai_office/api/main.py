@@ -9,6 +9,8 @@ from ai_office.core.database import init_db
 from ai_office.api.routes.agents import router as agents_router
 from ai_office.api.routes.tasks import router as tasks_router
 from ai_office.api.routes.activity import router as activity_router
+from ai_office.api.middleware import TelegramAuthMiddleware
+from ai_office.api.websocket import websocket_endpoint
 
 
 @asynccontextmanager
@@ -26,13 +28,18 @@ app = FastAPI(
 )
 
 # CORS для Mini App (разрешаем все origins)
-# NOTE: Аутентификация намеренно пропущена для MVP - будет добавлена позже
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Аутентификация через Telegram initData
+app.add_middleware(TelegramAuthMiddleware)
+
+# WebSocket endpoint
+app.websocket("/api/ws")(websocket_endpoint)
 
 # Подключение роутеров
 app.include_router(agents_router)

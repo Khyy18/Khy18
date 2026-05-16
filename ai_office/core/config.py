@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", description="Токен Telegram бота")
     target_chat_id: int = Field(default=0, description="ID целевого чата")
 
+    # Аутентификация
+    skip_telegram_auth: bool = Field(
+        default=True, description="Пропуск аутентификации Telegram (dev-режим)"
+    )
+
     # База данных
     database_url: str = Field(
         default="sqlite+aiosqlite:///./ai_office.db",

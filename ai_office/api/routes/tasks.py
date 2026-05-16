@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_office.api.schemas import PaginatedResponse, TaskCreate, TaskResponse, TaskUpdate
+from ai_office.api.websocket import broadcast_event
 from ai_office.core.database import get_session
 from ai_office.core.models import Task
 
@@ -62,6 +63,12 @@ async def create_task(
     session.add(task)
     await session.commit()
     await session.refresh(task)
+    await broadcast_event("new_task", {
+        "id": task.id,
+        "description": task.description,
+        "status": task.status,
+        "priority": task.priority,
+    })
     return task
 
 
@@ -84,4 +91,9 @@ async def update_task(
 
     await session.commit()
     await session.refresh(task)
+    await broadcast_event("task_updated", {
+        "id": task.id,
+        "status": task.status,
+        "description": task.description,
+    })
     return task
