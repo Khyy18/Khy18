@@ -71,3 +71,29 @@ class PaginatedResponse(BaseModel, Generic[T]):
     total: int
     limit: int
     offset: int
+
+
+class PlanStepResponse(BaseModel):
+    """Ответ с информацией о шаге плана."""
+
+    id: int
+    plan_id: int
+    step_number: int
+    description: str
+    status: str
+    result: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class PlanResponse(BaseModel):
+    """Ответ с информацией о плане."""
+
+    id: int
+    goal: str
+    agent_id: Optional[int] = None
+    status: str
+    created_at: Optional[datetime] = None
+    steps: List[PlanStepResponse] = []
+
+    model_config = {"from_attributes": True}

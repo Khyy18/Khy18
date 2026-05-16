@@ -10,6 +10,7 @@ from ai_office.tools.task_tools import (
 from ai_office.tools.search_tools import web_search
 from ai_office.tools.delegation import delegate_to_agent
 from ai_office.tools.memory_tools import remember, recall_memory
+from ai_office.tools.planning_tools import create_plan, execute_next_step, get_plan_status
 
 ALICE_SYSTEM_PROMPT = """Ты - Alice, персональный ассистент и продакт-менеджер в AI Office.
 
@@ -33,5 +34,5 @@ alice_config = AgentConfig(
     name="alice",
     role="Personal Assistant / Product Manager",
     system_prompt=ALICE_SYSTEM_PROMPT,
-    tools=[create_task, update_task_status, assign_task, get_active_tasks, web_search, delegate_to_agent, remember, recall_memory],
+    tools=[create_task, update_task_status, assign_task, get_active_tasks, web_search, delegate_to_agent, remember, recall_memory, create_plan, execute_next_step, get_plan_status],
 )

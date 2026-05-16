@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from ai_office.core.config import settings  # noqa: E402
 from ai_office.core.database import Base  # noqa: E402
-from ai_office.core.models import Agent, Task, ActivityLog  # noqa: E402
+from ai_office.core.models import Agent, Task, ActivityLog, Plan, PlanStep  # noqa: E402
 
 # Alembic Config object
 config = context.config

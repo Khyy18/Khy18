@@ -9,6 +9,47 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ai_office.core.database import Base
 
 
+class Plan(Base):
+    """Модель плана с пошаговым выполнением."""
+
+    __tablename__ = "plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    goal: Mapped[str] = mapped_column(Text)
+    agent_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("agents.id"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(50), default="active")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    # Связи
+    steps: Mapped[list["PlanStep"]] = relationship(
+        back_populates="plan", lazy="selectin", order_by="PlanStep.step_number"
+    )
+
+    def __repr__(self) -> str:
+        return f"<Plan(id={self.id}, goal='{self.goal[:30]}', status='{self.status}')>"
+
+
+class PlanStep(Base):
+    """Модель шага плана."""
+
+    __tablename__ = "plan_steps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id"))
+    step_number: Mapped[int] = mapped_column()
+    description: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(50), default="pending")
+    result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Связи
+    plan: Mapped["Plan"] = relationship(back_populates="steps")
+
+    def __repr__(self) -> str:
+        return f"<PlanStep(id={self.id}, plan_id={self.plan_id}, step={self.step_number}, status='{self.status}')>"
+
+
 class Agent(Base):
     """Модель агента (Alice, Sam и другие)."""
 

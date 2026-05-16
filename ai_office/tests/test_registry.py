@@ -4,17 +4,19 @@ import pytest
 
 
 def test_all_agents_registered():
-    """Тест: все 6 агентов зарегистрированы."""
+    """Тест: все 8 агентов зарегистрированы."""
     from ai_office.agents import registry
 
     names = registry.get_names()
-    assert len(names) == 6
+    assert len(names) == 8
     assert "alice" in names
     assert "sam" in names
     assert "max" in names
     assert "eva" in names
     assert "leo" in names
     assert "nova" in names
+    assert "iris" in names
+    assert "oscar" in names
 
 
 def test_registry_get_case_insensitive():
@@ -29,6 +31,8 @@ def test_registry_get_case_insensitive():
     assert registry.get("eva") is not None
     assert registry.get("Leo") is not None
     assert registry.get("NOVA") is not None
+    assert registry.get("Iris") is not None
+    assert registry.get("Oscar") is not None
 
 
 def test_registry_get_unknown_returns_none():
@@ -44,7 +48,7 @@ def test_registry_get_all():
     from ai_office.agents import registry
 
     all_configs = registry.get_all()
-    assert len(all_configs) == 6
+    assert len(all_configs) == 8
     names = [c.name for c in all_configs]
     assert "alice" in names
     assert "sam" in names
@@ -52,6 +56,8 @@ def test_registry_get_all():
     assert "eva" in names
     assert "leo" in names
     assert "nova" in names
+    assert "iris" in names
+    assert "oscar" in names
 
 
 def test_each_agent_has_tools_and_prompt():
@@ -74,7 +80,7 @@ def test_each_new_agent_has_at_least_3_specialized_tools():
         "get_active_tasks", "delegate_to_agent",
     }
 
-    for name in ["max", "eva", "leo", "nova"]:
+    for name in ["max", "eva", "leo", "nova", "iris", "oscar"]:
         config = registry.get(name)
         assert config is not None
         specialized = [t for t in config.tools if t.name not in common_tool_names]
