@@ -60,6 +60,7 @@ async def timesheet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Список сотрудников", callback_data="ts_list_employees")],
         [InlineKeyboardButton("Отметить посещение", callback_data="ts_mark")],
         [InlineKeyboardButton("Итоги за месяц", callback_data="ts_summary")],
+        [InlineKeyboardButton("Выгрузить Т-13", callback_data="ts_export_t13")],
         [InlineKeyboardButton("\u25c0 Главное меню", callback_data="back_to_menu")],
     ]
     await query.edit_message_text(
@@ -426,12 +427,58 @@ summary_conv = ConversationHandler(
     conversation_timeout=600,
 )
 
+
+# --- Export T-13 ---
+
+
+async def export_t13_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Export T-13 timesheet form as Excel via backend."""
+    query = update.callback_query
+    await query.answer()
+    today = date.today()
+
+    import httpx
+
+    from kindergarten_accountant_bot.config import BACKEND_TOKEN, BACKEND_URL
+
+    headers = {"Authorization": f"Bearer {BACKEND_TOKEN}"} if BACKEND_TOKEN else {}
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{BACKEND_URL}/api/v1/timesheet/export-t13",
+                params={"year": today.year, "month": today.month},
+                headers=headers,
+            )
+        if resp.status_code == 200:
+            import io
+
+            buffer = io.BytesIO(resp.content)
+            buffer.name = f"timesheet_T13_{today.year}_{today.month:02d}.xlsx"
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=buffer,
+                filename=buffer.name,
+                caption="Табель Т-13",
+            )
+        else:
+            await query.edit_message_text(
+                "Ошибка при генерации табеля.",
+                reply_markup=back_to_menu_button(),
+            )
+    except Exception:
+        await query.edit_message_text(
+            "Ошибка при генерации табеля.",
+            reply_markup=back_to_menu_button(),
+        )
+
+
 timesheet_handler = [
     CallbackQueryHandler(timesheet_menu, pattern="^menu_timesheet$"),
     add_employee_conv,
     CallbackQueryHandler(list_employees, pattern="^ts_list_employees$"),
     CallbackQueryHandler(paginate_employees, pattern=r"^page_ts_list_"),
     CallbackQueryHandler(delete_employee_handler, pattern=r"^ts_del_\d+$"),
+    CallbackQueryHandler(export_t13_handler, pattern="^ts_export_t13$"),
     mark_conv,
     summary_conv,
 ]
