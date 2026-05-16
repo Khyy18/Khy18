@@ -25,6 +25,7 @@ class TokenBucket:
         self.refill_rate = refill_rate
         self.tokens = float(capacity)
         self.last_refill = time.monotonic()
+        self.last_access = time.monotonic()
 
     def consume(self, tokens: int = 1) -> bool:
         """Попытаться взять токен. Возвращает True если успешно."""
@@ -35,6 +36,7 @@ class TokenBucket:
             self.tokens + elapsed * self.refill_rate,
         )
         self.last_refill = now
+        self.last_access = now
 
         if self.tokens >= tokens:
             self.tokens -= tokens
@@ -43,7 +45,16 @@ class TokenBucket:
 
 
 class RateLimiterMiddleware:
-    """aiohttp middleware для rate limiting по IP-адресу."""
+    """aiohttp middleware для rate limiting по IP-адресу.
+
+    Включает TTL-based eviction: бакеты, к которым не обращались
+    дольше _EVICTION_TTL секунд, удаляются при каждом _EVICTION_INTERVAL-м запросе.
+    """
+
+    # Бакеты без обращений дольше 10 минут удаляются
+    _EVICTION_TTL: float = 600.0
+    # Проверяем на eviction каждые 100 запросов
+    _EVICTION_INTERVAL: int = 100
 
     def __init__(
         self,
@@ -55,6 +66,18 @@ class RateLimiterMiddleware:
             refill_rate if refill_rate is not None else float(config.RATE_LIMIT_RPS)
         )
         self._buckets: dict[str, TokenBucket] = {}
+        self._request_count: int = 0
+
+    def _evict_stale_buckets(self) -> None:
+        """Удалить бакеты, к которым не обращались дольше _EVICTION_TTL."""
+        now = time.monotonic()
+        stale_keys = [
+            key
+            for key, bucket in self._buckets.items()
+            if (now - bucket.last_access) > self._EVICTION_TTL
+        ]
+        for key in stale_keys:
+            del self._buckets[key]
 
     def _get_bucket(self, key: str) -> TokenBucket:
         """Получить или создать бакет для данного ключа (IP)."""
@@ -84,6 +107,11 @@ class RateLimiterMiddleware:
         handler: Callable,
     ) -> web.Response:
         """aiohttp middleware: проверяет бакет перед обработкой запроса."""
+        # Периодическая очистка устаревших бакетов
+        self._request_count += 1
+        if self._request_count % self._EVICTION_INTERVAL == 0:
+            self._evict_stale_buckets()
+
         client_ip = self._get_client_ip(request)
         bucket = self._get_bucket(client_ip)
 

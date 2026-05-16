@@ -39,16 +39,19 @@ async def _check_db() -> bool:
 
 
 async def _check_redis() -> bool:
-    """Проверить доступность Redis (если REDIS_URL задан)."""
+    """Проверить доступность Redis (если REDIS_URL задан).
+
+    Используем redis.asyncio чтобы не блокировать event loop.
+    """
     redis_url = config.REDIS_URL
     if not redis_url:
         return False
     try:
-        import redis as redis_lib
+        import redis.asyncio as aioredis
 
-        r = redis_lib.from_url(redis_url, socket_connect_timeout=2)
-        r.ping()
-        r.close()
+        r = aioredis.from_url(redis_url, socket_connect_timeout=2)
+        await r.ping()
+        await r.aclose()
         return True
     except Exception:
         return False

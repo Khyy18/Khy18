@@ -1,7 +1,7 @@
 """Redis-backed Token Bucket для распределённого rate limiting.
 
-Использует Redis MULTI/EXEC для атомарных операций с бакетом.
-Если Redis недоступен - fallback на in-memory TokenBucket.
+Использует Lua-скрипт для атомарных операций с бакетом (read + refill + consume
+в одном EVALSHA). Если Redis недоступен - fallback на in-memory TokenBucket.
 """
 
 from __future__ import annotations
@@ -11,6 +11,40 @@ from typing import Optional
 
 import config
 from rate_limiter.middleware import TokenBucket
+
+# Lua-скрипт: атомарно читает bucket state, пополняет, потребляет токен.
+# KEYS[1] = bucket hash key
+# ARGV[1] = capacity, ARGV[2] = refill_rate, ARGV[3] = now, ARGV[4] = tokens_to_consume, ARGV[5] = ttl
+_LUA_CONSUME = """
+local key = KEYS[1]
+local capacity = tonumber(ARGV[1])
+local refill_rate = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+local requested = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+
+local current_tokens = tonumber(redis.call('hget', key, 'tokens') or capacity)
+local last_refill = tonumber(redis.call('hget', key, 'last_refill') or now)
+
+if current_tokens == nil then current_tokens = capacity end
+if last_refill == nil then last_refill = now end
+
+-- Refill
+local elapsed = now - last_refill
+current_tokens = math.min(capacity, current_tokens + elapsed * refill_rate)
+
+local allowed = 0
+if current_tokens >= requested then
+    current_tokens = current_tokens - requested
+    allowed = 1
+end
+
+-- Save state
+redis.call('hset', key, 'tokens', tostring(current_tokens), 'last_refill', tostring(now))
+redis.call('expire', key, ttl)
+
+return allowed
+"""
 
 
 class RedisTokenBucket:
@@ -32,6 +66,7 @@ class RedisTokenBucket:
         )
         self.key_prefix = key_prefix
         self._redis: Optional[object] = None
+        self._lua_sha: Optional[str] = None
         self._fallback_buckets: dict[str, TokenBucket] = {}
 
     def _get_redis(self):
@@ -47,8 +82,11 @@ class RedisTokenBucket:
                     redis_url, socket_connect_timeout=2
                 )
                 self._redis.ping()
+                # Загружаем Lua-скрипт
+                self._lua_sha = self._redis.script_load(_LUA_CONSUME)
             except Exception:
                 self._redis = None
+                self._lua_sha = None
         return self._redis
 
     def _redis_key(self, key: str) -> str:
@@ -57,7 +95,7 @@ class RedisTokenBucket:
     def consume(self, key: str, tokens: int = 1) -> bool:
         """Попытаться взять токен для данного ключа.
 
-        Использует Redis MULTI/EXEC для атомарности.
+        Использует Lua-скрипт для атомарности (без TOCTOU race).
         При ошибке - fallback на in-memory.
         """
         r = self._get_redis()
@@ -69,48 +107,25 @@ class RedisTokenBucket:
         except Exception:
             # Redis упал - fallback
             self._redis = None
+            self._lua_sha = None
             return self._fallback_consume(key, tokens)
 
     def _redis_consume(self, r, key: str, tokens: int) -> bool:
-        """Атомарная операция с бакетом через Redis pipeline."""
+        """Атомарная операция с бакетом через Lua-скрипт (EVALSHA)."""
         rkey = self._redis_key(key)
         now = time.time()
 
-        pipe = r.pipeline(transaction=True)
-        pipe.hgetall(rkey)
-        results = pipe.execute()
-        data = results[0]
-
-        if data:
-            current_tokens = float(data.get(b"tokens", self.capacity))
-            last_refill = float(data.get(b"last_refill", now))
-        else:
-            current_tokens = float(self.capacity)
-            last_refill = now
-
-        # Пополняем
-        elapsed = now - last_refill
-        current_tokens = min(
-            self.capacity,
-            current_tokens + elapsed * self.refill_rate,
+        result = r.evalsha(
+            self._lua_sha,
+            1,  # numkeys
+            rkey,
+            str(self.capacity),
+            str(self.refill_rate),
+            str(now),
+            str(tokens),
+            str(3600),  # TTL 1 час
         )
-
-        if current_tokens >= tokens:
-            current_tokens -= tokens
-            allowed = True
-        else:
-            allowed = False
-
-        # Сохраняем обратно
-        pipe2 = r.pipeline(transaction=True)
-        pipe2.hset(rkey, mapping={
-            "tokens": str(current_tokens),
-            "last_refill": str(now),
-        })
-        pipe2.expire(rkey, 3600)  # TTL 1 час для cleanup
-        pipe2.execute()
-
-        return allowed
+        return int(result) == 1
 
     def _fallback_consume(self, key: str, tokens: int) -> bool:
         """In-memory fallback при недоступности Redis."""

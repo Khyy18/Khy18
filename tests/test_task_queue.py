@@ -46,35 +46,41 @@ def test_enqueue_helpers_are_coroutines():
 
 @pytest.mark.asyncio
 async def test_enqueue_freelance_scan_calls_pool():
-    """enqueue_freelance_scan создаёт пул и ставит задачу."""
+    """enqueue_freelance_scan использует singleton пул и ставит задачу."""
+    import task_queue.enqueue as enqueue_mod
+
     mock_pool = AsyncMock()
     mock_pool.enqueue_job = AsyncMock(return_value="job-123")
-    mock_pool.aclose = AsyncMock()
+
+    # Сбрасываем singleton
+    enqueue_mod._pool = None
 
     with patch("task_queue.enqueue.create_pool", return_value=mock_pool):
-        from task_queue.enqueue import enqueue_freelance_scan
-
-        result = await enqueue_freelance_scan()
+        result = await enqueue_mod.enqueue_freelance_scan()
 
     mock_pool.enqueue_job.assert_called_once_with(
         "freelance_scan_task",
         _queue_name="zenith:queue",
     )
-    mock_pool.aclose.assert_called_once()
     assert result == "job-123"
+
+    # Cleanup singleton
+    enqueue_mod._pool = None
 
 
 @pytest.mark.asyncio
 async def test_enqueue_offer_generation_passes_args():
     """enqueue_offer_generation передаёт аргументы в enqueue_job."""
+    import task_queue.enqueue as enqueue_mod
+
     mock_pool = AsyncMock()
     mock_pool.enqueue_job = AsyncMock(return_value="job-456")
-    mock_pool.aclose = AsyncMock()
+
+    # Сбрасываем singleton
+    enqueue_mod._pool = None
 
     with patch("task_queue.enqueue.create_pool", return_value=mock_pool):
-        from task_queue.enqueue import enqueue_offer_generation
-
-        result = await enqueue_offer_generation(
+        result = await enqueue_mod.enqueue_offer_generation(
             user_tg_id=12345,
             user_name="Test User",
             amount=100.0,
@@ -91,18 +97,23 @@ async def test_enqueue_offer_generation_passes_args():
     )
     assert result == "job-456"
 
+    # Cleanup singleton
+    enqueue_mod._pool = None
+
 
 @pytest.mark.asyncio
 async def test_enqueue_viral_notification_passes_args():
     """enqueue_viral_notification передаёт referrer_tg_id и bonus_info."""
+    import task_queue.enqueue as enqueue_mod
+
     mock_pool = AsyncMock()
     mock_pool.enqueue_job = AsyncMock(return_value="job-789")
-    mock_pool.aclose = AsyncMock()
+
+    # Сбрасываем singleton
+    enqueue_mod._pool = None
 
     with patch("task_queue.enqueue.create_pool", return_value=mock_pool):
-        from task_queue.enqueue import enqueue_viral_notification
-
-        result = await enqueue_viral_notification(
+        result = await enqueue_mod.enqueue_viral_notification(
             referrer_tg_id=99999,
             bonus_info="free order",
         )
@@ -114,3 +125,6 @@ async def test_enqueue_viral_notification_passes_args():
         _queue_name="zenith:queue",
     )
     assert result == "job-789"
+
+    # Cleanup singleton
+    enqueue_mod._pool = None

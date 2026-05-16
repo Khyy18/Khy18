@@ -152,14 +152,15 @@ async def test_metrics_middleware_increments_counter(aiohttp_client):
     app.router.add_get("/hello", hello)
     client = await aiohttp_client(app)
 
+    # /hello не в _KNOWN_PATHS, нормализуется в /__other
     before = metrics.HTTP_REQUESTS_TOTAL.labels(
-        method="GET", path="/hello", status="200"
+        method="GET", path="/__other", status="200"
     )._value.get()
 
     resp = await client.get("/hello")
     assert resp.status == 200
 
     after = metrics.HTTP_REQUESTS_TOTAL.labels(
-        method="GET", path="/hello", status="200"
+        method="GET", path="/__other", status="200"
     )._value.get()
     assert after == before + 1
