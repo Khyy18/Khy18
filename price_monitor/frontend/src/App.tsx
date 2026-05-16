@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Navigation } from './components/Navigation';
 import { useTheme } from './hooks/useTheme';
+import { useWebSocket } from './hooks/useWebSocket';
 import { Feed } from './pages/Feed';
 import { ProductDetail } from './pages/ProductDetail';
 import { Categories } from './pages/Categories';
@@ -24,6 +25,7 @@ const queryClient = new QueryClient({
 
 const AppContent: React.FC = () => {
   useTheme();
+  useWebSocket();
   return (
     <Routes>
       <Route path="/landing" element={<Landing />} />

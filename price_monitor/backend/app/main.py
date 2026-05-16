@@ -25,6 +25,7 @@ from app.routers import (
     payments,
     profile,
     tracking,
+    websocket,
 )
 
 # Initialize Sentry
@@ -71,6 +72,7 @@ app.include_router(arbitrage.router)
 app.include_router(admin.router)
 app.include_router(content.router)
 app.include_router(partners.router)
+app.include_router(websocket.router)
 
 @app.get("/health", tags=["system"])
 async def health_check():
