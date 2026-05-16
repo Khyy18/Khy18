@@ -12,7 +12,7 @@ import {
 import {useQuery, useMutation, useQueryClient} from '@tanstack/react-query';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import {useTheme} from '../theme/ThemeContext';
-import {getAlerts, createAlert} from '../api/services';
+import {getAlerts, createAlert, toggleAlert, deleteAlert} from '../api/services';
 import {Alert as AlertType} from '../types';
 import AlertItem from '../components/AlertItem';
 import EmptyState from '../components/EmptyState';
@@ -39,6 +39,47 @@ const AlertsScreen: React.FC = () => {
     },
   });
 
+  const toggleMutation = useMutation({
+    mutationFn: ({id, active}: {id: string; active: boolean}) =>
+      toggleAlert(id, active),
+    onMutate: async ({id, active}) => {
+      await queryClient.cancelQueries({queryKey: ['alerts']});
+      const previous = queryClient.getQueryData<AlertType[]>(['alerts']);
+      queryClient.setQueryData<AlertType[]>(['alerts'], old =>
+        old?.map(a => (a.id === id ? {...a, active} : a)),
+      );
+      return {previous};
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(['alerts'], context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({queryKey: ['alerts']});
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteAlert,
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({queryKey: ['alerts']});
+      const previous = queryClient.getQueryData<AlertType[]>(['alerts']);
+      queryClient.setQueryData<AlertType[]>(['alerts'], old =>
+        old?.filter(a => a.id !== id),
+      );
+      return {previous};
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(['alerts'], context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({queryKey: ['alerts']});
+    },
+  });
+
   const handleCreate = () => {
     if (!keyword.trim() || !maxPrice.trim()) {
       return;
@@ -51,8 +92,12 @@ const AlertsScreen: React.FC = () => {
     });
   };
 
-  const handleToggle = (_id: string, _active: boolean) => {
-    // In a real app, would call API to toggle
+  const handleToggle = (id: string, active: boolean) => {
+    toggleMutation.mutate({id, active});
+  };
+
+  const handleDelete = (id: string) => {
+    deleteMutation.mutate(id);
   };
 
   if (isLoading) {
@@ -87,7 +132,11 @@ const AlertsScreen: React.FC = () => {
           data={alerts}
           keyExtractor={item => item.id}
           renderItem={({item}: {item: AlertType}) => (
-            <AlertItem alert={item} onToggle={handleToggle} />
+            <AlertItem
+              alert={item}
+              onToggle={handleToggle}
+              onDelete={handleDelete}
+            />
           )}
           contentContainerStyle={styles.list}
         />

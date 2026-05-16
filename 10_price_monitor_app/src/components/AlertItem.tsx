@@ -1,5 +1,6 @@
 import React from 'react';
-import {View, Text, Switch, StyleSheet} from 'react-native';
+import {View, Text, Switch, Pressable, StyleSheet} from 'react-native';
+import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import {useTheme} from '../theme/ThemeContext';
 import {Alert} from '../types';
 import {formatPrice} from '../utils/formatPrice';
@@ -7,9 +8,10 @@ import {formatPrice} from '../utils/formatPrice';
 interface AlertItemProps {
   alert: Alert;
   onToggle: (id: string, active: boolean) => void;
+  onDelete?: (id: string) => void;
 }
 
-const AlertItem: React.FC<AlertItemProps> = ({alert, onToggle}) => {
+const AlertItem: React.FC<AlertItemProps> = ({alert, onToggle, onDelete}) => {
   const {colors} = useTheme();
 
   const formattedDate = new Date(alert.createdAt).toLocaleDateString('ru-RU');
@@ -33,6 +35,17 @@ const AlertItem: React.FC<AlertItemProps> = ({alert, onToggle}) => {
         trackColor={{false: colors.border, true: colors.primary}}
         thumbColor="#FFFFFF"
       />
+      {onDelete && (
+        <Pressable
+          onPress={() => onDelete(alert.id)}
+          style={styles.deleteButton}>
+          <MaterialCommunityIcons
+            name="trash-can-outline"
+            size={20}
+            color={colors.error}
+          />
+        </Pressable>
+      )}
     </View>
   );
 };
@@ -61,6 +74,10 @@ const styles = StyleSheet.create({
   date: {
     fontSize: 11,
     marginTop: 4,
+  },
+  deleteButton: {
+    marginLeft: 12,
+    padding: 4,
   },
 });
 

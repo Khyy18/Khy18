@@ -16,6 +16,7 @@ import {useTheme} from '../theme/ThemeContext';
 import {getDeals} from '../api/services';
 import {Product} from '../types';
 import ProductCard from '../components/ProductCard';
+import EmptyState from '../components/EmptyState';
 import {RootStackParamList, TabParamList} from '../navigation/AppNavigator';
 
 type FeedNavProp = NativeStackNavigationProp<RootStackParamList>;
@@ -94,6 +95,12 @@ const FeedScreen: React.FC = () => {
         <View style={styles.loading}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
+      ) : allProducts.length === 0 ? (
+        <EmptyState
+          icon="shopping-outline"
+          title="Нет товаров"
+          subtitle="Попробуйте выбрать другую категорию"
+        />
       ) : (
         <FlatList
           data={allProducts}

@@ -1,4 +1,4 @@
-import {useState, useEffect, useCallback} from 'react';
+import {useState, useEffect, useCallback, useRef} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const FAVORITES_KEY = '@price_monitor_favorites';
@@ -6,6 +6,11 @@ const FAVORITES_KEY = '@price_monitor_favorites';
 export const useFavorites = () => {
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const favoriteIdsRef = useRef<string[]>(favoriteIds);
+
+  useEffect(() => {
+    favoriteIdsRef.current = favoriteIds;
+  }, [favoriteIds]);
 
   useEffect(() => {
     loadFavorites();
@@ -25,26 +30,26 @@ export const useFavorites = () => {
   };
 
   const addFavorite = useCallback(async (id: string) => {
+    const previous = favoriteIdsRef.current;
+    const updated = [...previous, id];
+    setFavoriteIds(updated);
     try {
-      setFavoriteIds(prev => {
-        const updated = [...prev, id];
-        AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(updated));
-        return updated;
-      });
+      await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(updated));
     } catch (error) {
-      console.error('Failed to add favorite:', error);
+      console.error('Failed to persist favorite, rolling back:', error);
+      setFavoriteIds(previous);
     }
   }, []);
 
   const removeFavorite = useCallback(async (id: string) => {
+    const previous = favoriteIdsRef.current;
+    const updated = previous.filter(fid => fid !== id);
+    setFavoriteIds(updated);
     try {
-      setFavoriteIds(prev => {
-        const updated = prev.filter(fid => fid !== id);
-        AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(updated));
-        return updated;
-      });
+      await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(updated));
     } catch (error) {
-      console.error('Failed to remove favorite:', error);
+      console.error('Failed to persist favorite removal, rolling back:', error);
+      setFavoriteIds(previous);
     }
   }, []);
 

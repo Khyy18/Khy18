@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useCallback} from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import {useQuery} from '@tanstack/react-query';
 import {RouteProp, useRoute} from '@react-navigation/native';
 import {WebView} from 'react-native-webview';
+import type {ShouldStartLoadRequest} from 'react-native-webview/lib/WebViewTypes';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import {useTheme} from '../theme/ThemeContext';
 import {useFavorites} from '../hooks/useFavorites';
@@ -21,6 +22,19 @@ import PriceChart from '../components/PriceChart';
 import DiscountBadge from '../components/DiscountBadge';
 import {RootStackParamList} from '../navigation/AppNavigator';
 
+const ALLOWED_DOMAINS = ['wildberries.ru', 'ozon.ru'];
+
+const isAllowedUrl = (url: string): boolean => {
+  try {
+    const hostname = new URL(url).hostname;
+    return ALLOWED_DOMAINS.some(
+      domain => hostname === domain || hostname.endsWith('.' + domain),
+    );
+  } catch {
+    return false;
+  }
+};
+
 type DetailRouteProp = RouteProp<RootStackParamList, 'ProductDetail'>;
 
 const ProductDetailScreen: React.FC = () => {
@@ -29,6 +43,10 @@ const ProductDetailScreen: React.FC = () => {
   const {productId} = route.params;
   const {isFavorite, toggleFavorite} = useFavorites();
   const [webViewVisible, setWebViewVisible] = useState(false);
+
+  const handleShouldStartLoad = useCallback((event: ShouldStartLoadRequest): boolean => {
+    return isAllowedUrl(event.url);
+  }, []);
 
   const {data: product, isLoading} = useQuery({
     queryKey: ['product', productId],
@@ -159,6 +177,8 @@ const ProductDetailScreen: React.FC = () => {
           </Pressable>
           <WebView
             source={{uri: product.affiliateUrl}}
+            originWhitelist={['https://*.wildberries.ru', 'https://*.ozon.ru', 'https://wildberries.ru', 'https://ozon.ru']}
+            onShouldStartLoadWithRequest={handleShouldStartLoad}
             style={styles.webView}
           />
         </View>

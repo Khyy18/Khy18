@@ -11,8 +11,6 @@ const delay = (ms?: number): Promise<void> =>
     setTimeout(resolve, ms ?? Math.floor(Math.random() * 200) + 300),
   );
 
-let favorites: string[] = [];
-
 export const getDeals = async (
   page: number = 1,
   limit: number = 10,
@@ -61,21 +59,24 @@ export const createAlert = async (
   return newAlert;
 };
 
-export const getFavorites = async (): Promise<Product[]> => {
-  await delay();
-  return mockProducts.filter(p => favorites.includes(p.id));
-};
-
-export const addFavorite = async (id: string): Promise<void> => {
+export const toggleAlert = async (
+  id: string,
+  active: boolean,
+): Promise<Alert> => {
   await delay(100);
-  if (!favorites.includes(id)) {
-    favorites.push(id);
+  const alert = mockAlerts.find(a => a.id === id);
+  if (alert) {
+    alert.active = active;
   }
+  return alert ?? {id, keyword: '', maxPrice: 0, category: '', active, createdAt: ''};
 };
 
-export const removeFavorite = async (id: string): Promise<void> => {
+export const deleteAlert = async (id: string): Promise<void> => {
   await delay(100);
-  favorites = favorites.filter(fid => fid !== id);
+  const index = mockAlerts.findIndex(a => a.id === id);
+  if (index !== -1) {
+    mockAlerts.splice(index, 1);
+  }
 };
 
 export const getProfile = async (): Promise<UserProfile> => {
