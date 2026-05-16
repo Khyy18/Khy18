@@ -386,13 +386,23 @@ async def onboarding_step2(
             detail="Complete previous steps first. Current step: " + current.value,
         )
 
-    # Test SMTP connection
+    # Test SMTP connection and authentication
     try:
         smtp = aiosmtplib.SMTP(
             hostname=data.smtp_host, port=data.smtp_port, timeout=10
         )
         await smtp.connect()
+        try:
+            await smtp.login(data.smtp_user, data.smtp_password)
+        except Exception as auth_exc:
+            await smtp.quit()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"SMTP authentication failed: {str(auth_exc)}",
+            )
         await smtp.quit()
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -400,6 +410,9 @@ async def onboarding_step2(
         )
 
     # Store SMTP config in tenant settings
+    # TODO: SMTP passwords should be encrypted at rest before production deployment.
+    # Consider using a secrets manager or application-level encryption (e.g., Fernet)
+    # for the password field before persisting to the database.
     settings = dict(tenant.settings) if tenant.settings else {}
     settings["smtp"] = {
         "host": data.smtp_host,

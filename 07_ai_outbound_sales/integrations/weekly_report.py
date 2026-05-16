@@ -275,6 +275,8 @@ class WeeklyReportGenerator:
 
         if prev_val > 0:
             delta_percent = round(((curr_val - prev_val) / prev_val) * 100, 1)
+        elif prev_val == 0 and curr_val > 0:
+            delta_percent = 100.0
         else:
             delta_percent = 0.0
 

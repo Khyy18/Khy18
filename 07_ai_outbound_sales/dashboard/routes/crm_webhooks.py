@@ -5,6 +5,7 @@ import hmac
 import json
 import secrets
 from typing import AsyncGenerator, Optional
+from urllib.parse import urlparse
 from uuid import UUID
 
 import httpx
@@ -70,6 +71,19 @@ async def create_webhook(
     session: AsyncSession = Depends(_get_session),
 ) -> dict:
     """Create a new webhook for the current tenant."""
+    # Validate webhook URL: must be well-formed with http or https scheme
+    parsed = urlparse(data.url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Webhook URL must use http:// or https:// scheme.",
+        )
+    if not parsed.netloc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Webhook URL must have a valid hostname.",
+        )
+
     secret = secrets.token_hex(32)
     webhook = Webhook(
         tenant_id=current_user.tenant_id,

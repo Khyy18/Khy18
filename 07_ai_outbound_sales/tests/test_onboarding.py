@@ -343,6 +343,7 @@ async def test_step2_tests_smtp_and_advances(async_session, session_factory):
     with patch("dashboard.routes.onboarding.aiosmtplib") as mock_aiosmtplib:
         mock_smtp_instance = AsyncMock()
         mock_smtp_instance.connect = AsyncMock()
+        mock_smtp_instance.login = AsyncMock()
         mock_smtp_instance.quit = AsyncMock()
         mock_aiosmtplib.SMTP.return_value = mock_smtp_instance
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,30 +43,33 @@ class ReportPreferencesResponse(BaseModel):
 async def get_weekly_report(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(_get_session),
+    deliver: bool = Query(default=False),
 ) -> dict:
     """Generate weekly report on-demand for the current user's tenant.
 
-    Returns JSON with all metrics, delta percentages, and delivery status.
+    Returns JSON with all metrics and delta percentages.
+    Delivery (email/Telegram) only happens when ?deliver=true is passed.
     """
     tenant_id = current_user.tenant_id
     generator = WeeklyReportGenerator()
 
     report_data = await generator.generate_report(tenant_id, session)
 
-    # Check if preferences are configured and deliver
-    result = await session.execute(
-        select(Tenant).where(Tenant.id == tenant_id)
-    )
-    tenant = result.scalar_one_or_none()
-
     delivery_status = {"delivered_via": [], "success": False}
-    if tenant:
-        settings_data = tenant.settings or {}
-        preferences = settings_data.get("report_preferences", {})
-        if preferences:
-            delivery_status = await generator.deliver_report(
-                tenant_id, report_data, session
-            )
+    if deliver:
+        # Only deliver when explicitly requested
+        result = await session.execute(
+            select(Tenant).where(Tenant.id == tenant_id)
+        )
+        tenant = result.scalar_one_or_none()
+
+        if tenant:
+            settings_data = tenant.settings or {}
+            preferences = settings_data.get("report_preferences", {})
+            if preferences:
+                delivery_status = await generator.deliver_report(
+                    tenant_id, report_data, session
+                )
 
     report_data["delivery_status"] = delivery_status
     return report_data
