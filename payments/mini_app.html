@@ -88,6 +88,11 @@
         tg.ready();
         tg.expand();
 
+        // initData доступен для отправки на бэкенд через заголовок X-Telegram-Init-Data
+        // При будущих fetch-запросах к серверу включать:
+        // headers: { 'X-Telegram-Init-Data': tg.initData }
+        document.body.setAttribute('data-init-data-available', tg.initData ? 'true' : 'false');
+
         // Чтение параметров из URL или initDataUnsafe
         const params = new URLSearchParams(window.location.search);
         const invoiceUrl = params.get('invoice_url') || '';

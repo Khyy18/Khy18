@@ -4,6 +4,7 @@ pytest-asyncio
 pytest-aiohttp
 ruff
 playwright
+playwright-stealth
 fpdf2
 scipy
 pyyaml

@@ -12,6 +12,12 @@ MAX_RESPONSES_PER_HOUR = 10
 KWORK_COOKIES_PATH = os.getenv("KWORK_COOKIES_PATH", "kwork_cookies.json")
 FLRU_COOKIES_PATH = os.getenv("FLRU_COOKIES_PATH", "flru_cookies.json")
 
+# Настройки антидетекта
+PROXY_URL = os.getenv("FREELANCE_PROXY_URL", "")
+STEALTH_ENABLED = os.getenv("FREELANCE_STEALTH_ENABLED", "true").lower() in ("1", "true", "yes")
+MIN_ACTION_DELAY = float(os.getenv("FREELANCE_MIN_ACTION_DELAY", "1.0"))
+MAX_ACTION_DELAY = float(os.getenv("FREELANCE_MAX_ACTION_DELAY", "3.0"))
+
 # Шаблоны откликов (русский язык) с плейсхолдерами {title} и {budget}
 RESPONSE_TEMPLATES = [
     (

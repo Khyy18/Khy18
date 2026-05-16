@@ -6,6 +6,7 @@ import os
 
 from aiohttp import web
 
+from payments.init_data_validator import validate_init_data
 from payments.service import PaymentService
 from rate_limiter.middleware import RateLimiterMiddleware
 
@@ -34,6 +35,13 @@ async def _handle_update(request: web.Request) -> web.Response:
         if header_token != webhook_secret:
             return web.Response(status=403, text="forbidden")
 
+    # Валидация initData из Mini App (если заголовок присутствует)
+    init_data_header = request.headers.get("X-Telegram-Init-Data")
+    if init_data_header:
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        if not validate_init_data(init_data_header, bot_token):
+            return web.Response(status=401, text="invalid init data")
+
     try:
         update = await request.json()
     except Exception:
@@ -41,7 +49,7 @@ async def _handle_update(request: web.Request) -> web.Response:
 
     payment_service: PaymentService = request.app["payment_service"]
 
-    # pre_checkout_query
+    # pre_checkout_query (приходит напрямую от Telegram, не от Mini App)
     pre_checkout = update.get("pre_checkout_query")
     if pre_checkout:
         query_id = pre_checkout.get("id", "")

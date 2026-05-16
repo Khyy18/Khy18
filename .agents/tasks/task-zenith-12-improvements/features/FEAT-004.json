@@ -1,0 +1,42 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Telegram initData HMAC-SHA256 validation, Anti-detect for Playwright (stealth, proxy, fingerprint randomization), and E2E tests with mock server. Implements server-side initData validation in payments/webhook.py. Enhances freelance_automation with playwright-stealth, user-agent rotation, human-like delays, proxy support, fingerprint randomization. Creates tests/e2e/ with mock server and Playwright E2E tests.",
+  "status": "in_progress",
+  "steps": [
+    "Add playwright-stealth to requirements.txt",
+    "Create payments/init_data_validator.py: validate_init_data(init_data_str: str, bot_token: str) -> bool function. Implementation: parse init_data as URL-encoded params, extract 'hash' field, sort remaining params alphabetically, join with newline, compute HMAC-SHA256 using WebAppData secret key (HMAC-SHA256 of bot_token with key 'WebAppDataSecret'), compare computed hash with extracted hash. Return True if match. Follow official Telegram documentation for Web App data validation",
+    "Update payments/webhook.py _handle_update: for requests that include initData (e.g., from Mini App), validate using validate_init_data(). Add header or body field 'X-Telegram-Init-Data'. If validation fails, return 401 Unauthorized. Apply to payment-related endpoints only (not pre_checkout_query which comes from Telegram servers directly)",
+    "Update payments/mini_app.html: when sending requests to backend, include Telegram.WebApp.initData in request headers as 'X-Telegram-Init-Data'",
+    "Create freelance_automation/stealth.py: StealthConfig dataclass with proxy (optional SOCKS5/HTTP URL), user_agents list (10+ realistic desktop Chrome/Firefox UAs), min_delay/max_delay (seconds, default 1.0-3.0), enable_stealth (bool, default True). Function apply_stealth(page) that applies playwright-stealth. Function random_delay() that sleeps random seconds between min/max. Function get_random_user_agent() returning random UA from list",
+    "Update freelance_automation/base.py: add optional stealth_config: StealthConfig parameter to login() signature (backward compatible with default None). Add proxy_url and user_agent to FreelancePlatform base class as optional attributes",
+    "Update freelance_automation/kwork.py KworkPlatform: integrate stealth - on login(), if stealth config provided: launch browser with proxy, set user-agent, apply playwright-stealth to page. In fetch_new_orders and respond_to_order, add random_delay() calls between page interactions (goto, fill, click) to simulate human behavior. Randomize viewport size slightly",
+    "Update freelance_automation/flru.py FLruPlatform: same stealth integration as kwork.py - proxy, user-agent rotation, random delays between actions, playwright-stealth application",
+    "Update freelance_automation/config.py: add PROXY_URL (from env FREELANCE_PROXY_URL), STEALTH_ENABLED (from env, default True), MIN_ACTION_DELAY, MAX_ACTION_DELAY",
+    "Create tests/e2e/__init__.py",
+    "Create tests/e2e/conftest.py: pytest fixtures for mock HTTP server (aiohttp test server simulating kwork.ru/fl.ru pages - login page, projects list with sample cards, project detail with response form). Fixture for Playwright browser instance",
+    "Create tests/e2e/mock_server.py: aiohttp app that serves mock HTML pages mimicking Kwork.ru and FL.ru project listings. Include realistic HTML structure matching the selectors used in kwork.py (.card__content, .wants-card__header-title) and flru.py (#projects-list, .b-post)",
+    "Create tests/e2e/test_kwork_login.py: test KworkPlatform can load cookies and navigate to mock Kwork server. Test fetch_new_orders returns parsed orders from mock HTML. Test respond_to_order fills form on mock server",
+    "Create tests/e2e/test_flru_login.py: test FLruPlatform can load cookies and navigate to mock FL.ru server. Test fetch_new_orders parses mock HTML correctly. Test respond_to_order works against mock",
+    "Create tests/test_init_data_validator.py: test validate_init_data with known-good test vectors (construct valid initData string, compute correct hash, verify returns True). Test tampered data returns False. Test missing hash returns False. Test empty string returns False"
+  ],
+  "acceptance_criteria": [
+    "payments/init_data_validator.py correctly validates Telegram initData using HMAC-SHA256",
+    "payments/webhook.py validates initData for Mini App requests and returns 401 on failure",
+    "freelance_automation/stealth.py provides stealth configuration with proxy, UA rotation, delays",
+    "kwork.py and flru.py integrate stealth (delays between actions, proxy support, playwright-stealth)",
+    "tests/e2e/ directory with mock server and E2E tests exists",
+    "tests/test_init_data_validator.py passes",
+    "All existing tests still pass",
+    "ruff check passes"
+  ],
+  "verification": [
+    "pip install -r requirements.txt",
+    "ruff check . --select=E,F,I --ignore=F401,E501",
+    "pytest tests/ -v --tb=short -k 'not e2e'",
+    "pytest tests/test_init_data_validator.py -v",
+    "python -c \"from payments.init_data_validator import validate_init_data; from freelance_automation.stealth import StealthConfig, apply_stealth, random_delay\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

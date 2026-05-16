@@ -1,11 +1,20 @@
 """Реализация платформы FL.ru через Playwright."""
 
+from __future__ import annotations
+
 import json
 from typing import Optional
 
 from playwright.async_api import Browser, Page, async_playwright
 
 from freelance_automation.base import FreelancePlatform, Order
+from freelance_automation.stealth import (
+    StealthConfig,
+    apply_stealth,
+    get_random_user_agent,
+    get_random_viewport,
+    random_delay,
+)
 from logging_config import get_logger
 
 log = get_logger(__name__)
@@ -17,17 +26,33 @@ class FLruPlatform(FreelancePlatform):
     BASE_URL = "https://www.fl.ru"
     PROJECTS_URL = "https://www.fl.ru/projects/"
 
-    def __init__(self) -> None:
+    def __init__(self, stealth_config: Optional[StealthConfig] = None) -> None:
         self._browser: Optional[Browser] = None
         self._page: Optional[Page] = None
         self._playwright = None
+        self.stealth_config = stealth_config
 
     async def login(self, cookies_path: str) -> bool:
         """Авторизация на FL.ru через загрузку cookies из JSON файла."""
         try:
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(headless=True)
-            context = await self._browser.new_context()
+
+            # Параметры запуска браузера
+            launch_kwargs: dict = {"headless": True}
+            context_kwargs: dict = {}
+
+            if self.stealth_config:
+                # Прокси
+                if self.stealth_config.proxy:
+                    launch_kwargs["proxy"] = {"server": self.stealth_config.proxy}
+                # User-Agent и viewport
+                ua = get_random_user_agent(self.stealth_config)
+                viewport = get_random_viewport()
+                context_kwargs["user_agent"] = ua
+                context_kwargs["viewport"] = viewport
+
+            self._browser = await self._playwright.chromium.launch(**launch_kwargs)
+            context = await self._browser.new_context(**context_kwargs)
 
             # Загрузка cookies из файла
             with open(cookies_path, "r", encoding="utf-8") as f:
@@ -35,6 +60,11 @@ class FLruPlatform(FreelancePlatform):
             await context.add_cookies(cookies)
 
             self._page = await context.new_page()
+
+            # Применение playwright-stealth
+            if self.stealth_config and self.stealth_config.enable_stealth:
+                await apply_stealth(self._page)
+
             await self._page.goto(self.BASE_URL)
 
             log.info("auth_success", platform="fl.ru")
@@ -42,6 +72,13 @@ class FLruPlatform(FreelancePlatform):
         except Exception as e:
             log.error("auth_failed", platform="fl.ru", error=str(e))
             return False
+
+    async def _delay(self) -> None:
+        """Задержка между действиями для имитации поведения человека."""
+        if self.stealth_config:
+            await random_delay(
+                self.stealth_config.min_delay, self.stealth_config.max_delay
+            )
 
     async def fetch_new_orders(self, keywords: list[str] | None = None) -> list[Order]:
         """Получение новых заказов со страницы проектов FL.ru."""
@@ -51,6 +88,7 @@ class FLruPlatform(FreelancePlatform):
 
         try:
             await self._page.goto(self.PROJECTS_URL)
+            await self._delay()
             await self._page.wait_for_selector("#projects-list", timeout=10000)
 
             cards = await self._page.query_selector_all("#projects-list .b-post")
@@ -112,6 +150,7 @@ class FLruPlatform(FreelancePlatform):
 
         try:
             await self._page.goto(order.url)
+            await self._delay()
             await self._page.wait_for_selector(".b-post__form", timeout=10000)
 
             # Заполнение формы отклика
@@ -120,11 +159,13 @@ class FLruPlatform(FreelancePlatform):
                 log.error("response_form_not_found", order_id=order.id)
                 return False
 
+            await self._delay()
             await textarea.fill(text)
 
             # Отправка формы
             submit_btn = await self._page.query_selector(".b-post__form button[type='submit']")
             if submit_btn:
+                await self._delay()
                 await submit_btn.click()
                 await self._page.wait_for_timeout(2000)
 

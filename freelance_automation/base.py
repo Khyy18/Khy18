@@ -1,9 +1,11 @@
 """Базовый класс и модели для фриланс-платформ."""
 
-from dataclasses import dataclass
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Optional
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 
 @dataclass
@@ -20,6 +22,9 @@ class Order:
 
 class FreelancePlatform(ABC):
     """Абстрактный базовый класс для фриланс-платформы."""
+
+    # Опциональная конфигурация антидетекта (StealthConfig)
+    stealth_config = None
 
     @abstractmethod
     async def login(self, cookies_path: str) -> bool:
