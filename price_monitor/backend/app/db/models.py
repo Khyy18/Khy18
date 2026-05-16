@@ -37,6 +37,7 @@ class User(Base):
     payments = relationship("Payment", back_populates="user", cascade="all, delete-orphan")
     clicks = relationship("Click", back_populates="user")
     chat_messages = relationship("ChatMessage", back_populates="user", cascade="all, delete-orphan")
+    badges = relationship("Badge", back_populates="user", cascade="all, delete-orphan")
 
 class Product(Base):
     __tablename__ = "products"
@@ -261,3 +262,16 @@ class ContentScript(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     product = relationship("Product")
+
+class Badge(Base):
+    __tablename__ = "badges"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    badge_type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    icon = Column(String, nullable=True)
+    earned_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="badges")

@@ -1,10 +1,11 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useProfile } from '../hooks/useApi';
+import { useProfile, useBadges } from '../hooks/useApi';
 
 export const Profile: React.FC = () => {
   const navigate = useNavigate();
   const { data: profile, isLoading } = useProfile();
+  const { data: badges } = useBadges();
 
   if (isLoading) {
     return (
@@ -73,6 +74,30 @@ export const Profile: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {badges && badges.length > 0 && (
+        <div className="bg-tg-secondary-bg rounded-xl p-4 mb-4">
+          <h2 className="font-medium text-tg-text mb-3">Достижения</h2>
+          <div className="grid grid-cols-2 gap-2">
+            {badges.map((badge) => (
+              <div
+                key={badge.id}
+                className="flex items-center gap-2 p-2 bg-tg-bg rounded-lg"
+              >
+                <span className="text-2xl">{badge.icon}</span>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-tg-text truncate">
+                    {badge.title}
+                  </p>
+                  <p className="text-[10px] text-tg-hint truncate">
+                    {badge.description}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-2">
         <button

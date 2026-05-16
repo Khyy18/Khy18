@@ -18,6 +18,7 @@ from app.routers import (
     auth,
     categories,
     chatbot,
+    compare,
     content,
     deals,
     favorites,
@@ -62,6 +63,7 @@ app.add_middleware(
 # Register all routers
 app.include_router(auth.router)
 app.include_router(deals.router)
+app.include_router(compare.router)
 app.include_router(categories.router)
 app.include_router(alerts.router)
 app.include_router(favorites.router)

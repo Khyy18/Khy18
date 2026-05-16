@@ -106,4 +106,48 @@ class PaymentService:
         await db.commit()
         return {"ok": True, "vip_until": user.vip_expires_at.isoformat()}
 
+    async def create_telegram_stars_payment(
+        self,
+        user_id: int,
+        stars_amount: int,
+        db: AsyncSession,
+    ) -> dict:
+        """Create a Telegram Stars payment. 1 Star = 1 day VIP."""
+        payment = Payment(
+            user_id=user_id,
+            amount=float(stars_amount),
+            currency="XTR",  # Telegram Stars currency code
+            status="pending",
+            plan=f"{stars_amount}_stars",
+            provider="telegram_stars",
+        )
+        db.add(payment)
+        await db.commit()
+        await db.refresh(payment)
+        return {
+            "payment_id": payment.id,
+            "stars_amount": stars_amount,
+            "vip_days": stars_amount,
+        }
+
+    async def handle_successful_stars_payment(
+        self,
+        user_id: int,
+        stars_amount: int,
+        db: AsyncSession,
+    ) -> dict:
+        """Process successful Telegram Stars payment - activate VIP."""
+        from sqlalchemy import select
+
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            return {"ok": False, "error": "User not found"}
+
+        days = stars_amount  # 1 star = 1 day
+        user.is_vip = True
+        user.vip_expires_at = datetime.utcnow() + timedelta(days=days)
+        await db.commit()
+        return {"ok": True, "vip_until": user.vip_expires_at.isoformat()}
+
 payment_service = PaymentService()

@@ -73,3 +73,28 @@ export interface PaginatedResponse<T> {
   page: number;
   has_next: boolean;
 }
+
+export interface CompareResult {
+  products: CompareProduct[];
+}
+
+export interface CompareProduct {
+  id: string;
+  title: string;
+  image_url: string;
+  current_price: number;
+  original_price: number;
+  discount_percent: number;
+  marketplace: 'wb' | 'ozon';
+  rating: number;
+  price_history: PricePoint[];
+}
+
+export interface Badge {
+  id: string;
+  badge_type: string;
+  title: string;
+  description: string;
+  icon: string;
+  earned_at: string;
+}

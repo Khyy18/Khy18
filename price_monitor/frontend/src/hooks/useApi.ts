@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { Product, Alert, Category, ArbitrageItem, UserProfile, ChatMessage, PaginatedResponse } from '../types';
+import type { Product, Alert, Category, ArbitrageItem, UserProfile, ChatMessage, PaginatedResponse, CompareResult, Badge } from '../types';
 
 interface ArbitrageApiResult {
   id: number;
@@ -154,5 +154,20 @@ export function useSendMessage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chat'] });
     },
+  });
+}
+
+export function useCompare(ids: string[]) {
+  return useQuery({
+    queryKey: ['compare', ids],
+    queryFn: () => apiClient<CompareResult>(`/deals/compare?ids=${ids.join(',')}`),
+    enabled: ids.length >= 2,
+  });
+}
+
+export function useBadges() {
+  return useQuery({
+    queryKey: ['badges'],
+    queryFn: () => apiClient<Badge[]>('/profile/badges'),
   });
 }

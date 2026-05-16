@@ -13,6 +13,7 @@ import { Profile } from './pages/Profile';
 import { Chat } from './pages/Chat';
 import { Arbitrage } from './pages/Arbitrage';
 import { Landing } from './pages/Landing';
+import { Compare } from './pages/Compare';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,6 +43,7 @@ const AppContent: React.FC = () => {
               <Route path="/profile" element={<Profile />} />
               <Route path="/chat" element={<Chat />} />
               <Route path="/arbitrage" element={<Arbitrage />} />
+              <Route path="/compare" element={<Compare />} />
             </Routes>
             <Navigation />
           </div>
