@@ -63,12 +63,18 @@ class AsyncRedisCache:
             pass
 
     async def invalidate_pattern(self, pattern: str):
+        """Delete keys matching pattern using SCAN (non-blocking) instead of KEYS."""
         if not self._available:
             return
         try:
-            keys = await self._redis.keys(pattern)
-            if keys:
-                await self._redis.delete(*keys)
+            batch = []
+            async for key in self._redis.scan_iter(match=pattern, count=100):
+                batch.append(key)
+                if len(batch) >= 100:
+                    await self._redis.delete(*batch)
+                    batch = []
+            if batch:
+                await self._redis.delete(*batch)
         except Exception:
             pass
 
@@ -77,13 +83,19 @@ class AsyncRedisCache:
 cache = AsyncRedisCache()
 
 
-def cached(ttl: int = 3, key_prefix: str = ""):
-    """Decorator to cache FastAPI endpoint responses."""
+def cached(ttl: int = 3, key: str = ""):
+    """Decorator to cache FastAPI endpoint responses.
+
+    Args:
+        ttl: Cache TTL in seconds.
+        key: Explicit cache key string. If not provided, uses the function name.
+             This avoids including non-serializable kwargs (like DB sessions) in the key.
+    """
 
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
-            cache_key = f"{key_prefix or func.__name__}:{str(kwargs)}"
+            cache_key = key or func.__name__
 
             # Try cache
             cached_value = await cache.get(cache_key)

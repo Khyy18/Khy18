@@ -24,7 +24,7 @@ async def test_cached_decorator():
     """Декоратор @cached вызывает функцию при промахе и работает как no-op без Redis."""
     call_count = 0
 
-    @cached(ttl=5, key_prefix="test")
+    @cached(ttl=5, key="test_my_function")
     async def my_function(x=1):
         nonlocal call_count
         call_count += 1

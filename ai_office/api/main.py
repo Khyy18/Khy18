@@ -32,6 +32,11 @@ async def lifespan(app: FastAPI):
     setup_logging(level=settings.log_level, log_format=settings.log_format)
     await init_db()
     await cache.connect()
+    # Seed templates once at startup
+    from ai_office.api.routes.templates import seed_templates
+    from ai_office.core.database import async_session
+    async with async_session() as session:
+        await seed_templates(session)
     yield
     await cache.disconnect()
 

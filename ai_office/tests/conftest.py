@@ -42,6 +42,8 @@ async def async_session():
 @pytest_asyncio.fixture
 async def test_client(async_session: AsyncSession):
     """Фикстура HTTP клиента для тестирования FastAPI."""
+    from ai_office.api.routes.templates import reset_templates_seeded
+    reset_templates_seeded()
 
     async def override_get_session():
         yield async_session

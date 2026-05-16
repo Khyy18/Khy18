@@ -100,27 +100,35 @@ async def delegate_to_agent(agent_name: str, task_description: str) -> str:
                     )
                 )
 
-    # Store delegation trace
-    trace_messages = []
-    for msg in messages:
-        role = "system"
-        if hasattr(msg, "type"):
-            role = msg.type
-        content = getattr(msg, "content", str(msg))
-        trace_messages.append({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.utcnow().isoformat(),
-        })
+    # Store delegation trace inside a try/except to avoid losing
+    # observability if the trace commit fails after delegation completed.
+    try:
+        trace_messages = []
+        for msg in messages:
+            role = "system"
+            if hasattr(msg, "type"):
+                role = msg.type
+            content = getattr(msg, "content", str(msg))
+            trace_messages.append({
+                "role": role,
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+            })
 
-    async with async_session() as session:
-        trace = DelegationTrace(
-            source_agent="delegation",
-            target_agent=agent_name_lower,
-            task_id=task.id,
-            messages_json=json.dumps(trace_messages, ensure_ascii=False),
+        async with async_session() as session:
+            trace = DelegationTrace(
+                source_agent="delegation",
+                target_agent=agent_name_lower,
+                task_id=task.id,
+                messages_json=json.dumps(trace_messages, ensure_ascii=False),
+            )
+            session.add(trace)
+            await session.commit()
+    except Exception as e:
+        # Log but don't crash - the delegation itself already succeeded
+        import logging
+        logging.getLogger(__name__).warning(
+            f"Failed to store delegation trace: {e}"
         )
-        session.add(trace)
-        await session.commit()
 
     return response.content

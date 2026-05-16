@@ -84,6 +84,9 @@ DEFAULT_TEMPLATES = [
 
 async def seed_templates(session: AsyncSession):
     """Заполнить таблицу шаблонов дефолтными значениями, если она пуста."""
+    global _templates_seeded
+    if _templates_seeded:
+        return
     count_result = await session.execute(select(func.count(TaskTemplate.id)))
     count = count_result.scalar() or 0
     if count == 0:
@@ -91,6 +94,17 @@ async def seed_templates(session: AsyncSession):
             tmpl = TaskTemplate(**tmpl_data)
             session.add(tmpl)
         await session.commit()
+    _templates_seeded = True
+
+
+def reset_templates_seeded():
+    """Reset the seeding flag (used in tests with fresh DBs)."""
+    global _templates_seeded
+    _templates_seeded = False
+
+
+# Module-level flag: once templates are seeded, skip the DB check on subsequent calls
+_templates_seeded = False
 
 
 @router.get("/templates", response_model=List[TemplateResponse])

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import {
   DndContext,
   closestCorners,
@@ -16,6 +16,7 @@ import { useDroppable } from '@dnd-kit/core'
 import { Plus } from 'lucide-react'
 import KanbanCard from './KanbanCard'
 import TemplatePicker from './TemplatePicker'
+import { showToast } from './Toast'
 
 /**
  * Колонка Kanban-доски
@@ -65,9 +66,10 @@ function KanbanColumn({ id, title, tasks, isViewer }) {
  * Kanban-доска с тремя колонками и drag-and-drop
  * Перетаскивание между колонками вызывает PATCH /api/tasks/{id}
  */
-export default function KanbanBoard({ tasks, isViewer = false }) {
+export default function KanbanBoard({ tasks, isViewer = false, onTaskStatusChange }) {
   const [activeTask, setActiveTask] = useState(null)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
+  const [localOverrides, setLocalOverrides] = useState({})
 
   const columns = [
     { id: 'open', title: 'Открытые' },
@@ -78,9 +80,17 @@ export default function KanbanBoard({ tasks, isViewer = false }) {
   // Извлекаем массив задач из пагинированного ответа если нужно
   const taskList = Array.isArray(tasks) ? tasks : (tasks?.items || [])
 
+  // Apply local optimistic overrides to task statuses
+  const effectiveTaskList = taskList.map((t) => {
+    if (localOverrides[t.id]) {
+      return { ...t, status: localOverrides[t.id] }
+    }
+    return t
+  })
+
   // Группировка задач по статусу
   const getColumnTasks = (columnId) => {
-    return taskList.filter((t) => t.status === columnId)
+    return effectiveTaskList.filter((t) => t.status === columnId)
   }
 
   // Сенсоры для drag-and-drop
@@ -135,12 +145,15 @@ export default function KanbanBoard({ tasks, isViewer = false }) {
 
     // Если задача переместилась в другую колонку - обновляем статус
     if (sourceColumn && targetColumn !== sourceColumn) {
-      updateTaskStatus(activeId, targetColumn)
+      updateTaskStatus(activeId, targetColumn, sourceColumn)
     }
   }
 
-  // PATCH запрос для обновления статуса задачи
-  const updateTaskStatus = async (taskId, newStatus) => {
+  // PATCH запрос для обновления статуса задачи с optimistic update
+  const updateTaskStatus = async (taskId, newStatus, previousStatus) => {
+    // Optimistic update: immediately reflect the new status locally
+    setLocalOverrides((prev) => ({ ...prev, [taskId]: newStatus }))
+
     try {
       const response = await fetch(`/api/tasks/${taskId}`, {
         method: 'PATCH',
@@ -148,10 +161,29 @@ export default function KanbanBoard({ tasks, isViewer = false }) {
         body: JSON.stringify({ status: newStatus }),
       })
       if (!response.ok) {
-        console.error('Failed to update task status:', response.status)
+        // Revert on failure
+        setLocalOverrides((prev) => {
+          const next = { ...prev }
+          delete next[taskId]
+          return next
+        })
+        showToast('Не удалось обновить статус задачи', 'error')
+      } else {
+        // Clear override once confirmed (WS/poll will supply the real data)
+        setLocalOverrides((prev) => {
+          const next = { ...prev }
+          delete next[taskId]
+          return next
+        })
       }
     } catch (err) {
-      console.error('Error updating task status:', err)
+      // Revert on network error
+      setLocalOverrides((prev) => {
+        const next = { ...prev }
+        delete next[taskId]
+        return next
+      })
+      showToast('Ошибка сети при обновлении задачи', 'error')
     }
   }
 

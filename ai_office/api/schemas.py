@@ -108,6 +108,7 @@ class DashboardResponse(BaseModel):
     cost_week_history: list[float] = []
     avg_response_ms: int = 0
     response_time_history: list[int] = []
+    response_time_estimated: bool = True
     active_agents: int = 0
     hourly_activity: list[int] = []
 
@@ -132,7 +133,7 @@ class FeedbackCreate(BaseModel):
     user_telegram_id: int
     agent_name: str
     message_id: Optional[str] = None
-    rating: Optional[int] = None
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
     is_positive: Optional[bool] = None
     comment: Optional[str] = None
 
