@@ -2,7 +2,7 @@
   "id": "FEAT-003",
   "type": "feat",
   "description": "ARQ task queue module, health-check endpoint with aiohttp server, and rate limiter middleware. Creates task_queue/ module on ARQ (asyncio Redis queue) for background jobs. Adds /health endpoint (JSON: status, uptime, db_ok, redis_ok, last_heartbeat). Implements token bucket rate limiter for webhook routes.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Add arq to requirements.txt",
     "Create task_queue/__init__.py with exported symbols",
@@ -35,5 +35,5 @@
     "python -c \"from task_queue import tasks, worker, enqueue; from health.server import create_health_app; from rate_limiter.middleware import RateLimiterMiddleware\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "arq 0.25.0 installed (latest compatible with Python 3.9). RedisSettings.from_dsn available. Pre-existing: test_telegram_keyboard_has_5_rows fails (expects 5, gets 7). Pre-existing: test_freelance_automation.py collection error due to list[str]|None syntax (Python 3.9). All 18 new tests pass. ruff check passes on all new/modified files. .agents dir is gitignored - must use git add -f."
 }
