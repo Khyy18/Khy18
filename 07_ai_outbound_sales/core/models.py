@@ -109,6 +109,12 @@ class OnboardingStep(str, enum.Enum):
     completed = "completed"
 
 
+class VoiceAddonPlan(str, enum.Enum):
+    voice_starter = "voice_starter"
+    voice_pro = "voice_pro"
+    voice_scale = "voice_scale"
+
+
 class CallStatus(str, enum.Enum):
     initiated = "initiated"
     ringing = "ringing"
@@ -166,6 +172,7 @@ class Tenant(Base):
     lead_feedbacks = relationship("LeadFeedback", back_populates="tenant")
     calls = relationship("Call", back_populates="tenant")
     call_scripts = relationship("CallScript", back_populates="tenant")
+    voice_addons = relationship("VoiceAddon", back_populates="tenant")
 
 
 class User(Base):
@@ -514,3 +521,23 @@ class Call(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     tenant = relationship("Tenant", back_populates="calls")
+
+
+class VoiceAddon(Base):
+    """Voice AI add-on subscription for a tenant."""
+
+    __tablename__ = "voice_addons"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    plan_name = Column(Enum(VoiceAddonPlan), nullable=False)
+    stripe_subscription_id = Column(String, nullable=True)
+    calls_limit = Column(Integer, nullable=False)
+    calls_used_this_period = Column(Integer, default=0, nullable=False)
+    overage_rate_cents = Column(Integer, default=50, nullable=False)
+    period_start = Column(DateTime(timezone=True), nullable=True)
+    period_end = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="voice_addons")

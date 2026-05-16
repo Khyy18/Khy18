@@ -14,7 +14,7 @@ from channels.voice.stt import DeepgramSTT
 from channels.voice.tts import ElevenLabsTTS
 from channels.voice.twilio_client import TwilioClient
 from scheduler.voice_scheduler import VoiceScheduler
-from tests.conftest import make_call, make_tenant, make_lead
+from tests.conftest import make_call, make_tenant, make_lead, make_voice_addon
 
 
 # ---------- TwilioClient Tests ----------
@@ -223,8 +223,10 @@ async def test_call_manager_start_call_creates_record(session_factory, async_ses
     # Seed required records
     tenant = make_tenant(id=tenant_id)
     lead = make_lead(id=lead_id, tenant_id=tenant_id)
+    addon = make_voice_addon(tenant_id=tenant_id)
     async_session.add(tenant)
     async_session.add(lead)
+    async_session.add(addon)
     await async_session.commit()
 
     mock_twilio = AsyncMock()

@@ -42,6 +42,8 @@ from core.models import (
     CallScript,
     CallStatus,
     CallOutcome,
+    VoiceAddon,
+    VoiceAddonPlan,
 )
 
 
@@ -408,3 +410,25 @@ def make_call_script(
     }
     defaults.update(kwargs)
     return CallScript(**defaults)
+
+
+def make_voice_addon(
+    tenant_id: uuid.UUID | None = None,
+    **kwargs,
+) -> VoiceAddon:
+    """Create a VoiceAddon instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "plan_name": VoiceAddonPlan.voice_starter,
+        "stripe_subscription_id": "sub_voice_test_123",
+        "calls_limit": 50,
+        "calls_used_this_period": 0,
+        "overage_rate_cents": 50,
+        "period_start": datetime.now(timezone.utc),
+        "period_end": None,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return VoiceAddon(**defaults)

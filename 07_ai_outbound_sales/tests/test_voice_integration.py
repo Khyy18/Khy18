@@ -15,7 +15,7 @@ from channels.voice.call_manager import CallManager
 from core.models import Call, CallStatus, Lead
 from dashboard.routes.voice_webhooks import _validate_twilio_signature
 from scheduler.voice_scheduler import VoiceScheduler
-from tests.conftest import make_call, make_lead, make_tenant
+from tests.conftest import make_call, make_lead, make_tenant, make_voice_addon
 
 
 class _AsyncWSIter:
@@ -603,7 +603,8 @@ async def test_call_manager_start_call_fetches_phone_number(
         tenant_id=tenant_id,
         enrichment_data={"phone": "+15559876543", "company_size": 50},
     )
-    async_session.add_all([tenant, lead])
+    addon = make_voice_addon(tenant_id=tenant_id)
+    async_session.add_all([tenant, lead, addon])
     await async_session.commit()
 
     mock_twilio = AsyncMock()

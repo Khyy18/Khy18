@@ -57,7 +57,29 @@ class CallManager:
         campaign_id: str | uuid.UUID | None = None,
         script_id: str | uuid.UUID | None = None,
     ) -> dict[str, Any]:
-        """Initiate an outbound call and create the DB record."""
+        """Initiate an outbound call and create the DB record.
+
+        Checks voice addon billing before proceeding. If no active addon
+        exists, the call is rejected.
+        """
+        # Check voice addon billing
+        from integrations.voice_usage import (
+            NoActiveVoiceAddonError,
+            check_and_increment_usage,
+        )
+
+        async with self._session_factory() as session:
+            try:
+                await check_and_increment_usage(session, tenant_id)
+                await session.commit()
+            except NoActiveVoiceAddonError as e:
+                return {
+                    "call_id": None,
+                    "twilio_sid": None,
+                    "status": "rejected",
+                    "error": str(e),
+                }
+
         call_record = await self._create_call_record(
             lead_id=lead_id,
             tenant_id=tenant_id,
