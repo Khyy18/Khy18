@@ -1,0 +1,44 @@
+import os
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+DB_PATH = "bot.db"
+BASE_FEE_PER_DAY = 150.0
+NDFL_RATE = 0.13
+PFR_RATE = 0.22
+OMS_RATE = 0.051
+FSS_RATE = 0.029
+FSS_NS_RATE = 0.002
+WORKING_DAYS_MONTH = 22
+AVG_DAYS_MONTH = 29.3
+
+# Sentry DSN for error monitoring (no-op if empty)
+SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+
+# Backend API base URL
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
+BACKEND_TOKEN = os.environ.get("BACKEND_TOKEN", "")
+
+# Telegram Mini App URL (empty = no WebApp button)
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "")
+
+# Webhook mode (if WEBHOOK_URL is set, bot uses webhook instead of polling)
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "8443"))
+
+# Role-based access control: comma-separated chat IDs
+BOT_ADMIN_IDS = os.environ.get("BOT_ADMIN_IDS", "")
+BOT_CASHIER_IDS = os.environ.get("BOT_CASHIER_IDS", "")
+BOT_DIRECTOR_IDS = os.environ.get("BOT_DIRECTOR_IDS", "")
+
+# Groq API for voice transcription
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "whisper-large-v3")
+
+# Auto-backup: comma-separated chat IDs to send backups to
+BACKUP_CHAT_IDS = os.environ.get("BACKUP_CHAT_IDS", "")
+
+
+def get_db_path() -> str:
+    """Return the database path. Used by models to allow easy patching in tests."""
+    return DB_PATH
