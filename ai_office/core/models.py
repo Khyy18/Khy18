@@ -127,6 +127,8 @@ class Task(Base):
     workspace_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("workspaces.id"), nullable=True
     )
+    sla_target_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    response_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     def __repr__(self) -> str:
         return f"<Task(id={self.id}, status='{self.status}', priority='{self.priority}')>"
@@ -237,3 +239,59 @@ class Feedback(Base):
     workspace_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("workspaces.id"), nullable=True
     )
+
+
+class ApprovalRequest(Base):
+    """Запрос на одобрение критического действия."""
+
+    __tablename__ = "approval_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(100))
+    action_type: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text)
+    metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    requested_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_by_user_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
+
+
+class KnowledgeFact(Base):
+    """Факт в графе знаний (тройка: субъект-предикат-объект)."""
+
+    __tablename__ = "knowledge_facts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject: Mapped[str] = mapped_column(String(300))
+    predicate: Mapped[str] = mapped_column(String(200))
+    object_value: Mapped[str] = mapped_column(String(500))
+    source_agent: Mapped[str] = mapped_column(String(100))
+    confidence: Mapped[float] = mapped_column(Float, default=0.8)
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AuditEntry(Base):
+    """Запись аудита для compliance."""
+
+    __tablename__ = "audit_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("workspaces.id"), nullable=True
+    )
+    actor_type: Mapped[str] = mapped_column(String(20))  # user/agent/system
+    actor_id: Mapped[str] = mapped_column(String(200))
+    action: Mapped[str] = mapped_column(String(100))
+    resource_type: Mapped[str] = mapped_column(String(100))
+    resource_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    details_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(server_default=func.now())

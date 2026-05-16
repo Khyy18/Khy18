@@ -489,6 +489,49 @@ async def handle_voice_message(client: Client, message: Message) -> None:
     await message.reply(response_text)
 
 
+async def handle_approval_callback(client: Client, callback_query) -> None:
+    """Обработчик inline-кнопок одобрения/отклонения.
+
+    callback_data format: 'approve_{request_id}' or 'reject_{request_id}'
+    """
+    data = callback_query.data or ""
+    user_id = callback_query.from_user.id
+
+    if data.startswith("approve_"):
+        request_id = int(data.replace("approve_", ""))
+        approved = True
+    elif data.startswith("reject_"):
+        request_id = int(data.replace("reject_", ""))
+        approved = False
+    else:
+        return
+
+    try:
+        from ai_office.core.approval import approval_manager
+
+        async with async_session() as session:
+            await approval_manager.handle_callback(
+                session=session,
+                request_id=request_id,
+                approved=approved,
+                user_id=user_id,
+            )
+
+        status_text = "одобрено" if approved else "отклонено"
+        await callback_query.answer(f"Действие {status_text}!")
+        check_mark = "\U00002705 Одобрено"
+        cross_mark = "\U0000274c Отклонено"
+        decision_text = check_mark if approved else cross_mark
+        await callback_query.message.edit_text(
+            f"{callback_query.message.text}\n\n"
+            f"{decision_text} "
+            f"пользователем {callback_query.from_user.first_name}"
+        )
+    except Exception as e:
+        logger.error("Error handling approval callback: %s", str(e), exc_info=True)
+        await callback_query.answer("Ошибка при обработке запроса")
+
+
 async def handle_document_message(client: Client, message: Message) -> None:
     """Обработчик документов - парсинг и анализ файлов.
 
