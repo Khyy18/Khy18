@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../providers/salary_provider.dart';
+import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/result_card.dart';
@@ -172,6 +173,12 @@ class _SalaryScreenState extends ConsumerState<SalaryScreen> {
                         '${_fmt(calcState.salaryResult!.netSalary)} руб.',
                   ),
                 ),
+                const SizedBox(height: 16),
+                GradientButton(
+                  text: 'Скачать Excel',
+                  icon: Icons.download,
+                  onPressed: _exportExcel,
+                ),
               ],
             ],
           ),
@@ -232,6 +239,35 @@ class _SalaryScreenState extends ConsumerState<SalaryScreen> {
         ),
       ],
     );
+  }
+
+  void _exportExcel() async {
+    try {
+      final api = ApiService();
+      await api.exportSalaryExcel(
+        oklad: double.parse(_okladController.text),
+        rate: _rate,
+        stazhPercent: _stazhPercent,
+        categoryPercent: _categoryPercent,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Excel скачан'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   void _calculate() {

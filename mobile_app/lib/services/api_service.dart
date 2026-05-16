@@ -293,6 +293,120 @@ class ApiService {
     throw ApiException('Failed to generate payment', response.statusCode);
   }
 
+  // OCR
+  Future<Map<String, dynamic>> processOcr(String imageBase64) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/ocr/process'),
+      headers: _headers,
+      body: json.encode({'image_base64': imageBase64, 'filename': 'scan.jpg'}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(response.body) as Map<String, dynamic>;
+    }
+    throw ApiException('Failed to process OCR', response.statusCode);
+  }
+
+  Future<List<int>> exportOcrToExcel(
+      Map<String, String> fields, String docType) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/ocr/to-excel'),
+      headers: _headers,
+      body: json.encode({
+        'doc_type': docType,
+        'fields': fields,
+        'title': 'Распознанный документ',
+      }),
+    );
+    if (response.statusCode == 200) {
+      return response.bodyBytes.toList();
+    }
+    throw ApiException('Failed to export to Excel', response.statusCode);
+  }
+
+  // Excel exports for calculators
+  Future<List<int>> exportSalaryExcel({
+    required double oklad,
+    required double rate,
+    required double stazhPercent,
+    required double categoryPercent,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/salary/export-excel'),
+      headers: _headers,
+      body: json.encode({
+        'employees': [
+          {
+            'fio': 'Сотрудник',
+            'oklad': oklad,
+            'rate': rate,
+            'stazh_percent': stazhPercent,
+            'category_percent': categoryPercent,
+          }
+        ],
+      }),
+    );
+    if (response.statusCode == 200) {
+      return response.bodyBytes.toList();
+    }
+    throw ApiException('Failed to export salary Excel', response.statusCode);
+  }
+
+  Future<List<int>> exportVacationExcel({
+    required double totalEarnings,
+    required int days,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/vacation/export-excel'),
+      headers: _headers,
+      body: json.encode({
+        'total_12_months': totalEarnings,
+        'days': days,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return response.bodyBytes.toList();
+    }
+    throw ApiException('Failed to export vacation Excel', response.statusCode);
+  }
+
+  Future<List<int>> exportSickExcel({
+    required double earnings2y,
+    required String stazhBracket,
+    required int days,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/sick/export-excel'),
+      headers: _headers,
+      body: json.encode({
+        'earnings_2y': earnings2y,
+        'stazh_bracket': stazhBracket,
+        'days': days,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return response.bodyBytes.toList();
+    }
+    throw ApiException('Failed to export sick Excel', response.statusCode);
+  }
+
+  Future<List<int>> exportJournalExcel({
+    String? startDate,
+    String? endDate,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/journal/export-excel'),
+      headers: _headers,
+      body: json.encode({
+        'start_date': startDate,
+        'end_date': endDate,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return response.bodyBytes.toList();
+    }
+    throw ApiException('Failed to export journal Excel', response.statusCode);
+  }
+
   // AI Chat
   Future<String> chatAI(String message) async {
     final response = await http.post(

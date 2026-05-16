@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../providers/journal_provider.dart';
+import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/empty_state.dart';
 
@@ -18,6 +19,30 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(journalProvider.notifier).fetch());
+  }
+
+  void _exportExcel() async {
+    try {
+      final api = ApiService();
+      await api.exportJournalExcel();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Excel скачан'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -36,6 +61,13 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
             icon: const Icon(Icons.arrow_back_ios_new, size: 20),
             onPressed: () => context.go('/'),
           ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.download_outlined),
+              tooltip: 'Выгрузить в Excel',
+              onPressed: _exportExcel,
+            ),
+          ],
         ),
       body: Column(
         children: [

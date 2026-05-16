@@ -254,6 +254,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         roles: [UserRole.admin, UserRole.cashier],
       ),
       _MenuItem(
+        icon: Icons.document_scanner_outlined,
+        label: 'Скан',
+        route: '/scan',
+        roles: [UserRole.admin, UserRole.cashier, UserRole.director],
+      ),
+      _MenuItem(
         icon: Icons.search,
         label: 'КБК',
         route: '/kbk',

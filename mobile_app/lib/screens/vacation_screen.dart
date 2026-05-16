@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../providers/salary_provider.dart';
+import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/gradient_button.dart';
 import '../widgets/result_card.dart';
@@ -117,12 +118,45 @@ class _VacationScreenState extends ConsumerState<VacationScreen> {
                   value: '${_fmt(calcState.vacationResult!.netPay)} руб.',
                 ),
               ),
+              const SizedBox(height: 16),
+              GradientButton(
+                text: 'Скачать Excel',
+                icon: Icons.download,
+                onPressed: _exportExcel,
+              ),
             ],
           ],
         ),
       ),
     ),
     );
+  }
+
+  void _exportExcel() async {
+    try {
+      final api = ApiService();
+      await api.exportVacationExcel(
+        totalEarnings: double.parse(_earningsController.text),
+        days: _days,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Excel скачан'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ошибка: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   void _calculate() {

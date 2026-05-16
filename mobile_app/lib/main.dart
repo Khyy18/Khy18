@@ -30,6 +30,7 @@ import 'screens/lock_screen.dart';
 import 'screens/pin_setup_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/document_scan_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -244,6 +245,18 @@ class KindergartenApp extends ConsumerWidget {
           path: '/profile',
           pageBuilder: (context, state) => CustomTransitionPage(
             child: const ProfileScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
+        ),
+        GoRoute(
+          path: '/scan',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const DocumentScanScreen(),
             transitionDuration: const Duration(milliseconds: 300),
             transitionsBuilder:
                 (context, animation, secondaryAnimation, child) {
