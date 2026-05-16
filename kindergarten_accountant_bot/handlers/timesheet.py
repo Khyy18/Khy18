@@ -24,6 +24,7 @@ from kindergarten_accountant_bot.models.timesheet import (
 from kindergarten_accountant_bot.utils.constants import MARK_EMOJIS, MARK_TYPES
 from kindergarten_accountant_bot.utils.formatting import _card
 from kindergarten_accountant_bot.utils.keyboards import back_to_menu_button
+from kindergarten_accountant_bot.utils.pagination import paginate_items
 
 # Conversation states for add employee
 ADD_FIO, ADD_POSITION, ADD_RATE = range(3)
@@ -132,7 +133,7 @@ async def add_employee_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def list_employees(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show employee list with delete buttons."""
+    """Show employee list with delete buttons (paginated)."""
     query = update.callback_query
     await query.answer()
     employees = await get_employees()
@@ -142,20 +143,49 @@ async def list_employees(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=back_to_menu_button(),
         )
         return
+    page = context.user_data.get("page_ts_list_page", 0)
+    await _show_employees_page(query, context, employees, page)
+
+
+async def _show_employees_page(query, context, employees, page):
+    """Render a specific page of the employee list."""
+    context.user_data["page_ts_list_page"] = page
+    page_items, nav_buttons = paginate_items(
+        employees, page, page_size=5, callback_prefix="page_ts_list"
+    )
     keyboard = []
-    for emp in employees:
+    for emp in page_items:
         keyboard.append(
             [InlineKeyboardButton(
                 f"\u274c {emp['fio']} ({emp['position']})",
                 callback_data=f"ts_del_{emp['id']}",
             )]
         )
+    keyboard.extend(nav_buttons)
     keyboard.append([InlineKeyboardButton("\u25c0 Главное меню", callback_data="back_to_menu")])
     await query.edit_message_text(
         "<b>Сотрудники</b>\n\nНажмите для удаления:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
+
+
+async def paginate_employees(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle pagination callback for employee list."""
+    query = update.callback_query
+    await query.answer()
+    page_str = query.data.replace("page_ts_list_", "")
+    if page_str == "noop":
+        return
+    page = int(page_str)
+    employees = await get_employees()
+    if not employees:
+        await query.edit_message_text(
+            "Список сотрудников пуст.",
+            reply_markup=back_to_menu_button(),
+        )
+        return
+    await _show_employees_page(query, context, employees, page)
 
 
 async def delete_employee_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -400,6 +430,7 @@ timesheet_handler = [
     CallbackQueryHandler(timesheet_menu, pattern="^menu_timesheet$"),
     add_employee_conv,
     CallbackQueryHandler(list_employees, pattern="^ts_list_employees$"),
+    CallbackQueryHandler(paginate_employees, pattern=r"^page_ts_list_"),
     CallbackQueryHandler(delete_employee_handler, pattern=r"^ts_del_\d+$"),
     mark_conv,
     summary_conv,

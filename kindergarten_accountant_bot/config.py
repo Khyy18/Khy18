@@ -31,6 +31,13 @@ BOT_ADMIN_IDS = os.environ.get("BOT_ADMIN_IDS", "")
 BOT_CASHIER_IDS = os.environ.get("BOT_CASHIER_IDS", "")
 BOT_DIRECTOR_IDS = os.environ.get("BOT_DIRECTOR_IDS", "")
 
+# Groq API for voice transcription
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "whisper-large-v3")
+
+# Auto-backup: comma-separated chat IDs to send backups to
+BACKUP_CHAT_IDS = os.environ.get("BACKUP_CHAT_IDS", "")
+
 
 def get_db_path() -> str:
     """Return the database path. Used by models to allow easy patching in tests."""

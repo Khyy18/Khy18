@@ -28,6 +28,8 @@ from kindergarten_accountant_bot.handlers.journal import journal_handler
 from kindergarten_accountant_bot.handlers.ai_handler import ai_command, ai_message_handler
 from kindergarten_accountant_bot.handlers.payroll import payroll_handler
 from kindergarten_accountant_bot.handlers.audit import audit_handler
+from kindergarten_accountant_bot.handlers.voice_handler import voice_message_handler
+from kindergarten_accountant_bot.handlers.backup_handler import backup_command, setup_backup_jobs
 
 # Initialize Sentry if DSN is configured
 if SENTRY_DSN:
@@ -61,9 +63,13 @@ def _build_application() -> Application:
     app.add_handler(payroll_handler)
     app.add_handler(audit_handler)
     app.add_handler(CommandHandler("ai", ai_command))
+    app.add_handler(CommandHandler("backup", backup_command))
+    # Voice handler - before text fallback
+    app.add_handler(MessageHandler(filters.VOICE, voice_message_handler))
     # AI free-text handler - placed last as fallback for unhandled text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_message_handler))
     setup_reminder_jobs(app)
+    setup_backup_jobs(app)
     return app
 
 

@@ -26,6 +26,7 @@ from kindergarten_accountant_bot.models.payment import (
 )
 from kindergarten_accountant_bot.utils.formatting import _card, format_money
 from kindergarten_accountant_bot.utils.keyboards import back_to_menu_button
+from kindergarten_accountant_bot.utils.pagination import paginate_items
 
 # Conversation states for add child
 ADD_CHILD_FIO, ADD_CHILD_GROUP, ADD_CHILD_PARENT, ADD_CHILD_DISCOUNT = range(4)
@@ -138,7 +139,7 @@ async def add_child_discount(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def list_children_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show children list with delete buttons."""
+    """Show children list with delete buttons (paginated)."""
     query = update.callback_query
     await query.answer()
     children = await get_children()
@@ -148,20 +149,49 @@ async def list_children_handler(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=back_to_menu_button(),
         )
         return
+    page = context.user_data.get("page_pr_list_page", 0)
+    await _show_children_page(query, context, children, page)
+
+
+async def _show_children_page(query, context, children, page):
+    """Render a specific page of the children list."""
+    context.user_data["page_pr_list_page"] = page
+    page_items, nav_buttons = paginate_items(
+        children, page, page_size=5, callback_prefix="page_pr_list"
+    )
     keyboard = []
-    for child in children:
+    for child in page_items:
         keyboard.append(
             [InlineKeyboardButton(
                 f"\u274c {child['child_fio']} ({child['group_name']})",
                 callback_data=f"pr_del_{child['id']}",
             )]
         )
+    keyboard.extend(nav_buttons)
     keyboard.append([InlineKeyboardButton("\u25c0 Главное меню", callback_data="back_to_menu")])
     await query.edit_message_text(
         "<b>Дети</b>\n\nНажмите для удаления:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
+
+
+async def paginate_children(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle pagination callback for children list."""
+    query = update.callback_query
+    await query.answer()
+    page_str = query.data.replace("page_pr_list_", "")
+    if page_str == "noop":
+        return
+    page = int(page_str)
+    children = await get_children()
+    if not children:
+        await query.edit_message_text(
+            "Список детей пуст.",
+            reply_markup=back_to_menu_button(),
+        )
+        return
+    await _show_children_page(query, context, children, page)
 
 
 async def delete_child_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -362,7 +392,7 @@ async def pay_input_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def debt_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show debt report."""
+    """Show debt report (paginated)."""
     query = update.callback_query
     await query.answer()
     debts = await get_debts()
@@ -372,9 +402,19 @@ async def debt_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=back_to_menu_button(),
         )
         return
+    page = context.user_data.get("page_pr_debt_page", 0)
+    await _show_debt_page(query, context, debts, page)
+
+
+async def _show_debt_page(query, context, debts, page):
+    """Render a specific page of the debt report."""
+    context.user_data["page_pr_debt_page"] = page
+    page_items, nav_buttons = paginate_items(
+        debts, page, page_size=5, callback_prefix="page_pr_debt"
+    )
 
     body_lines = []
-    for record in debts:
+    for record in page_items:
         due = record["amount_due"]
         paid = record["amount_paid"]
         remaining = due - paid
@@ -390,11 +430,34 @@ async def debt_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     card = _card("Отчёт по задолженности", "\U0001f4cb", body_lines)
+
+    # Build keyboard with nav buttons and back to menu
+    keyboard = []
+    keyboard.extend(nav_buttons)
+    keyboard.append([InlineKeyboardButton("\u25c0 Главное меню", callback_data="back_to_menu")])
     await query.edit_message_text(
         card,
-        reply_markup=back_to_menu_button(),
+        reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
+
+
+async def paginate_debt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle pagination callback for debt report."""
+    query = update.callback_query
+    await query.answer()
+    page_str = query.data.replace("page_pr_debt_", "")
+    if page_str == "noop":
+        return
+    page = int(page_str)
+    debts = await get_debts()
+    if not debts:
+        await query.edit_message_text(
+            "\u2705 Задолженностей нет!",
+            reply_markup=back_to_menu_button(),
+        )
+        return
+    await _show_debt_page(query, context, debts, page)
 
 
 # --- Handler registration ---
@@ -439,8 +502,10 @@ parents_handler = [
     CallbackQueryHandler(parents_menu, pattern="^menu_parents$"),
     add_child_conv,
     CallbackQueryHandler(list_children_handler, pattern="^pr_list_children$"),
+    CallbackQueryHandler(paginate_children, pattern=r"^page_pr_list_"),
     CallbackQueryHandler(delete_child_handler, pattern=r"^pr_del_\d+$"),
     calc_fee_conv,
     pay_conv,
     CallbackQueryHandler(debt_report, pattern="^pr_debt_report$"),
+    CallbackQueryHandler(paginate_debt, pattern=r"^page_pr_debt_"),
 ]
