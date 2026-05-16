@@ -2,7 +2,7 @@
   "id": "FEAT-004",
   "type": "feat",
   "description": "Telegram initData HMAC-SHA256 validation, Anti-detect for Playwright (stealth, proxy, fingerprint randomization), and E2E tests with mock server. Implements server-side initData validation in payments/webhook.py. Enhances freelance_automation with playwright-stealth, user-agent rotation, human-like delays, proxy support, fingerprint randomization. Creates tests/e2e/ with mock server and Playwright E2E tests.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Add playwright-stealth to requirements.txt",
     "Create payments/init_data_validator.py: validate_init_data(init_data_str: str, bot_token: str) -> bool function. Implementation: parse init_data as URL-encoded params, extract 'hash' field, sort remaining params alphabetically, join with newline, compute HMAC-SHA256 using WebAppData secret key (HMAC-SHA256 of bot_token with key 'WebAppDataSecret'), compare computed hash with extracted hash. Return True if match. Follow official Telegram documentation for Web App data validation",
@@ -38,5 +38,5 @@
     "python -c \"from payments.init_data_validator import validate_init_data; from freelance_automation.stealth import StealthConfig, apply_stealth, random_delay\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "Python 3.9 is the runtime in this sandbox (despite 3.11 being available). Added from __future__ import annotations to base.py, kwork.py, flru.py for PEP 604 union type syntax compatibility. playwright-stealth installed successfully. One pre-existing test failure: test_telegram_keyboard_has_5_rows (expects 5 rows but 7 exist). E2E tests are correctly marked with pytest.mark.e2e and skipif for when playwright is not available."
 }
