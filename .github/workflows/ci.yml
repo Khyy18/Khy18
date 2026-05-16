@@ -102,6 +102,13 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: '3.22.x'
+
+      - name: Create local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          echo "flutter.sdk=$FLUTTER_HOME" >> android/local.properties
+        working-directory: mobile_app
 
       - name: Install dependencies
         run: flutter pub get
