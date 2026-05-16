@@ -171,6 +171,26 @@ class ApiService {
     throw ApiException('Failed to load timesheet', response.statusCode);
   }
 
+  Future<Map<String, dynamic>> bulkMarkTimesheet({
+    required String date,
+    required String status,
+    required List<int> employeeIds,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/timesheet/bulk-mark'),
+      headers: _headers,
+      body: json.encode({
+        'date': date,
+        'status': status,
+        'employee_ids': employeeIds,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(response.body) as Map<String, dynamic>;
+    }
+    throw ApiException('Failed to bulk mark timesheet', response.statusCode);
+  }
+
   // Journal
   Future<List<JournalEntry>> getJournal({
     String? startDate,

@@ -2,12 +2,14 @@
 
 import calendar
 import io
+from typing import List
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +21,52 @@ from backend.schemas.timesheet import TimesheetMarkCreate, TimesheetMarkResponse
 from backend.security.encryption import decrypt_value
 
 router = APIRouter(prefix="/timesheet", tags=["timesheet"])
+
+
+class BulkMarkRequest(BaseModel):
+    date: str  # YYYY-MM-DD
+    status: str  # "present" / "absent" / "sick" / "vacation"
+    employee_ids: List[int]
+
+
+# Map human-readable status to mark codes
+_STATUS_TO_MARK = {
+    "present": "Я",
+    "absent": "П",
+    "sick": "Б",
+    "vacation": "О",
+}
+
+
+@router.post("/bulk-mark")
+async def bulk_mark(
+    data: BulkMarkRequest,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Depends(verify_bearer_token),
+):
+    """Mark multiple employees with same status for a given date."""
+    mark_type = _STATUS_TO_MARK.get(data.status, data.status)
+    count = 0
+    for emp_id in data.employee_ids:
+        # Check if mark already exists for this employee/date
+        existing = await db.execute(
+            select(TimesheetMark).where(
+                TimesheetMark.employee_id == emp_id,
+                TimesheetMark.date == data.date,
+            )
+        )
+        mark = existing.scalar_one_or_none()
+        if mark:
+            mark.mark_type = mark_type
+        else:
+            db.add(TimesheetMark(
+                employee_id=emp_id,
+                date=data.date,
+                mark_type=mark_type,
+            ))
+        count += 1
+    await db.commit()
+    return {"updated": count}
 
 
 @router.post("/mark", response_model=TimesheetMarkResponse, status_code=201)

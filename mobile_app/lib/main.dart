@@ -24,7 +24,6 @@ import 'screens/children_screen.dart';
 import 'screens/journal_screen.dart';
 import 'screens/kbk_screen.dart';
 import 'screens/reminders_screen.dart';
-import 'screens/payment_screen.dart';
 import 'screens/ai_chat_screen.dart';
 import 'screens/lock_screen.dart';
 import 'screens/pin_setup_screen.dart';
@@ -205,18 +204,7 @@ class KindergartenApp extends ConsumerWidget {
             },
           ),
         ),
-        GoRoute(
-          path: '/payment',
-          pageBuilder: (context, state) => CustomTransitionPage(
-            child: const PaymentScreen(),
-            transitionDuration: const Duration(milliseconds: 300),
-            transitionsBuilder:
-                (context, animation, secondaryAnimation, child) {
-              return SlideAndFadeTransition(
-                  animation: animation, child: child);
-            },
-          ),
-        ),
+
         GoRoute(
           path: '/ai_chat',
           pageBuilder: (context, state) => CustomTransitionPage(
@@ -269,20 +257,9 @@ class KindergartenApp extends ConsumerWidget {
       redirect: (context, state) {
         final isLoggedIn = authState.isAuthenticated;
         final isLoginRoute = state.matchedLocation == '/login';
-        final isOnboardingRoute = state.matchedLocation == '/onboarding';
 
         if (!isLoggedIn && !isLoginRoute) return '/login';
-        if (isLoggedIn && isLoginRoute) {
-          final box = Hive.box<String>('settings');
-          final onboardingDone = box.get('onboarding_complete');
-          if (onboardingDone != 'true') return '/onboarding';
-          return '/';
-        }
-        if (isLoggedIn && state.matchedLocation == '/' ) {
-          final box = Hive.box<String>('settings');
-          final onboardingDone = box.get('onboarding_complete');
-          if (onboardingDone != 'true') return '/onboarding';
-        }
+        if (isLoggedIn && isLoginRoute) return '/';
         return null;
       },
     );

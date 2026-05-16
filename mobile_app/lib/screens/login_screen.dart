@@ -5,11 +5,35 @@ import 'package:google_fonts/google_fonts.dart';
 import '../providers/auth_provider.dart';
 import '../theme/app_colors.dart';
 
-class LoginScreen extends ConsumerWidget {
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends ConsumerState<LoginScreen> {
+  final _controller = TextEditingController();
+  String? _error;
+
+  void _submit() {
+    final value = _controller.text.trim();
+    if (value.length < 4) {
+      setState(() => _error = 'Минимум 4 символа');
+      return;
+    }
+    setState(() => _error = null);
+    ref.read(authProvider.notifier).login(value);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -43,7 +67,27 @@ class LoginScreen extends ConsumerWidget {
               )
                   .animate()
                   .fadeIn(delay: 200.ms, duration: 600.ms),
-              const Spacer(flex: 3),
+              const Spacer(flex: 2),
+              TextField(
+                controller: _controller,
+                obscureText: true,
+                onSubmitted: (_) => _submit(),
+                decoration: InputDecoration(
+                  labelText: 'Пароль / PIN',
+                  errorText: _error,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(
+                      color: AppColors.primary,
+                      width: 2,
+                    ),
+                  ),
+                ),
+              ).animate().fadeIn(delay: 300.ms, duration: 400.ms),
+              const SizedBox(height: 20),
               Center(
                 child: Container(
                   width: double.infinity,
@@ -65,24 +109,15 @@ class LoginScreen extends ConsumerWidget {
                     color: Colors.transparent,
                     child: InkWell(
                       borderRadius: BorderRadius.circular(28),
-                      onTap: () {
-                        ref.read(authProvider.notifier).login('demo_token');
-                      },
+                      onTap: _submit,
                       child: Center(
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.telegram, color: Colors.white, size: 24),
-                            const SizedBox(width: 12),
-                            Text(
-                              'Войти через Telegram',
-                              style: GoogleFonts.manrope(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
+                        child: Text(
+                          'Войти',
+                          style: GoogleFonts.manrope(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ),
