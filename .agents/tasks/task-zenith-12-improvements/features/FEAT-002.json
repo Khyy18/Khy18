@@ -2,7 +2,7 @@
   "id": "FEAT-002",
   "type": "feat",
   "description": "Structured logging (structlog), Sentry integration, and Prometheus metrics. Replaces print/logging with structlog JSON formatting. Adds sentry-sdk with SENTRY_DSN env var. Creates monitoring/ module with prometheus_client counters/histograms and /metrics endpoint.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Add structlog, sentry-sdk, prometheus-client to requirements.txt",
     "Create logging_config.py at project root: configure structlog with JSON formatting for prod, colored console for dev. Add get_logger(name) helper. Detect mode from LOG_FORMAT env var (json/console, default console)",
@@ -35,5 +35,5 @@
     "python -c \"import logging_config; import sentry_setup; from monitoring import metrics, middleware, endpoint\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "structlog 25.5.0 uses wrap_for_formatter (not wrap_events_in_msg_field). aiohttp 3.13+ requires Content-Type via headers dict (not content_type param) when value contains charset. pytest-aiohttp added for aiohttp_client fixture. Pre-existing: freelance_automation/base.py uses list[str]|None syntax requiring Python 3.10+ (fails on 3.9). Pre-existing: test_telegram_keyboard_has_5_rows expects 5 rows but gets 7. config.py I001 import-sort issue was fixed."
 }
