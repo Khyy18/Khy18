@@ -6,6 +6,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../providers/auth_provider.dart';
 import '../services/notification_service.dart';
 import '../theme/app_colors.dart';
 import '../widgets/floating_nav_bar.dart';
@@ -16,6 +17,9 @@ class DashboardScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final authState = ref.watch(authProvider);
+    final role = authState.role;
+
     return Scaffold(
       body: Stack(
         children: [
@@ -122,62 +126,7 @@ class DashboardScreen extends ConsumerWidget {
                     crossAxisSpacing: 12,
                     mainAxisSpacing: 12,
                     childAspectRatio: 0.9,
-                    children: [
-                      _FunctionCard(
-                        icon: Icons.calculate_outlined,
-                        label: 'Зарплата',
-                        onTap: () => context.go('/salary'),
-                        delay: 100,
-                      ),
-                      _FunctionCard(
-                        icon: Icons.beach_access_outlined,
-                        label: 'Отпуск',
-                        onTap: () => context.go('/vacation'),
-                        delay: 150,
-                      ),
-                      _FunctionCard(
-                        icon: Icons.local_hospital_outlined,
-                        label: 'Больничный',
-                        onTap: () => context.go('/sick'),
-                        delay: 200,
-                      ),
-                      _FunctionCard(
-                        icon: Icons.calendar_month_outlined,
-                        label: 'Табель',
-                        onTap: () => context.go('/timesheet'),
-                        delay: 250,
-                      ),
-                      _FunctionCard(
-                        icon: Icons.child_care_outlined,
-                        label: 'Дети',
-                        onTap: () => context.go('/children'),
-                        delay: 300,
-                      ),
-                      _FunctionCard(
-                        icon: Icons.book_outlined,
-                        label: 'Журнал',
-                        onTap: () => context.go('/journal'),
-                        delay: 350,
-                      ),
-                      _FunctionCard(
-                        icon: Icons.search,
-                        label: 'КБК',
-                        onTap: () => context.go('/kbk'),
-                        delay: 400,
-                      ),
-                      _FunctionCard(
-                        icon: Icons.notifications_outlined,
-                        label: 'Дедлайны',
-                        onTap: () => context.go('/reminders'),
-                        delay: 450,
-                      ),
-                      _FunctionCard(
-                        icon: Icons.payment_outlined,
-                        label: 'Платёжки',
-                        onTap: () => context.go('/payment'),
-                        delay: 500,
-                      ),
-                    ],
+                    children: _buildMenuItems(context, role),
                   ),
                   const SizedBox(height: 20),
                   _AiCard(onTap: () => context.go('/ai_chat')),
@@ -212,6 +161,79 @@ class DashboardScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  List<Widget> _buildMenuItems(BuildContext context, UserRole role) {
+    final allItems = <_MenuItem>[
+      _MenuItem(
+        icon: Icons.calculate_outlined,
+        label: 'Зарплата',
+        route: '/salary',
+        roles: [UserRole.admin, UserRole.cashier],
+      ),
+      _MenuItem(
+        icon: Icons.beach_access_outlined,
+        label: 'Отпуск',
+        route: '/vacation',
+        roles: [UserRole.admin, UserRole.cashier, UserRole.director],
+      ),
+      _MenuItem(
+        icon: Icons.local_hospital_outlined,
+        label: 'Больничный',
+        route: '/sick',
+        roles: [UserRole.admin, UserRole.cashier, UserRole.director],
+      ),
+      _MenuItem(
+        icon: Icons.calendar_month_outlined,
+        label: 'Табель',
+        route: '/timesheet',
+        roles: [UserRole.admin, UserRole.director],
+      ),
+      _MenuItem(
+        icon: Icons.child_care_outlined,
+        label: 'Дети',
+        route: '/children',
+        roles: [UserRole.admin, UserRole.director],
+      ),
+      _MenuItem(
+        icon: Icons.book_outlined,
+        label: 'Журнал',
+        route: '/journal',
+        roles: [UserRole.admin, UserRole.cashier],
+      ),
+      _MenuItem(
+        icon: Icons.search,
+        label: 'КБК',
+        route: '/kbk',
+        roles: [UserRole.admin, UserRole.cashier, UserRole.director],
+      ),
+      _MenuItem(
+        icon: Icons.notifications_outlined,
+        label: 'Дедлайны',
+        route: '/reminders',
+        roles: [UserRole.admin, UserRole.cashier, UserRole.director],
+      ),
+      _MenuItem(
+        icon: Icons.payment_outlined,
+        label: 'Платёжки',
+        route: '/payment',
+        roles: [UserRole.admin, UserRole.cashier],
+      ),
+    ];
+
+    final visibleItems =
+        allItems.where((item) => item.roles.contains(role)).toList();
+
+    return visibleItems.asMap().entries.map((entry) {
+      final index = entry.key;
+      final item = entry.value;
+      return _FunctionCard(
+        icon: item.icon,
+        label: item.label,
+        onTap: () => context.go(item.route),
+        delay: 100 + (index * 50),
+      );
+    }).toList();
   }
 
   String _getDateString() {
@@ -413,6 +435,20 @@ class _AiCard extends StatelessWidget {
         .fadeIn(delay: 600.ms, duration: 400.ms)
         .slideY(begin: 0.1, end: 0);
   }
+}
+
+class _MenuItem {
+  final IconData icon;
+  final String label;
+  final String route;
+  final List<UserRole> roles;
+
+  const _MenuItem({
+    required this.icon,
+    required this.label,
+    required this.route,
+    required this.roles,
+  });
 }
 
 class _NotificationBanner extends StatefulWidget {

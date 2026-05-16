@@ -6,6 +6,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'providers/auth_provider.dart';
 import 'services/local_storage.dart';
 import 'services/notification_service.dart';
+import 'services/secure_storage_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/page_transitions.dart';
 
@@ -21,6 +22,8 @@ import 'screens/kbk_screen.dart';
 import 'screens/reminders_screen.dart';
 import 'screens/payment_screen.dart';
 import 'screens/ai_chat_screen.dart';
+import 'screens/lock_screen.dart';
+import 'screens/pin_setup_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -172,6 +175,18 @@ class KindergartenApp extends ConsumerWidget {
             },
           ),
         ),
+        GoRoute(
+          path: '/pin_setup',
+          pageBuilder: (context, state) => CustomTransitionPage(
+            child: const PinSetupScreen(),
+            transitionDuration: const Duration(milliseconds: 300),
+            transitionsBuilder:
+                (context, animation, secondaryAnimation, child) {
+              return SlideAndFadeTransition(
+                  animation: animation, child: child);
+            },
+          ),
+        ),
       ],
       redirect: (context, state) {
         final isLoggedIn = authState.isAuthenticated;
@@ -183,13 +198,100 @@ class KindergartenApp extends ConsumerWidget {
       },
     );
 
-    return MaterialApp.router(
-      title: 'Детский сад',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
-      themeMode: ThemeMode.light,
-      routerConfig: router,
+    return AppLifecycleWrapper(
+      child: MaterialApp.router(
+        title: 'Детский сад',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        darkTheme: AppTheme.dark,
+        themeMode: ThemeMode.light,
+        routerConfig: router,
+      ),
     );
+  }
+}
+
+/// Wrapper widget that handles app lifecycle for re-authentication
+class AppLifecycleWrapper extends StatefulWidget {
+  final Widget child;
+
+  const AppLifecycleWrapper({super.key, required this.child});
+
+  @override
+  State<AppLifecycleWrapper> createState() => _AppLifecycleWrapperState();
+}
+
+class _AppLifecycleWrapperState extends State<AppLifecycleWrapper>
+    with WidgetsBindingObserver {
+  final SecureStorageService _storageService = SecureStorageService();
+  bool _isLocked = false;
+  bool _checkingLock = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkInitialLock();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  Future<void> _checkInitialLock() async {
+    final lockEnabled = await _storageService.isLockEnabled();
+    if (lockEnabled) {
+      final lastAuth = await _storageService.getLastAuthTime();
+      if (lastAuth == null ||
+          DateTime.now().difference(lastAuth).inMinutes >= 2) {
+        setState(() {
+          _isLocked = true;
+          _checkingLock = false;
+        });
+        return;
+      }
+    }
+    setState(() => _checkingLock = false);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkReauthNeeded();
+    }
+  }
+
+  Future<void> _checkReauthNeeded() async {
+    final lockEnabled = await _storageService.isLockEnabled();
+    if (!lockEnabled) return;
+
+    final lastAuth = await _storageService.getLastAuthTime();
+    if (lastAuth == null ||
+        DateTime.now().difference(lastAuth).inMinutes >= 2) {
+      setState(() => _isLocked = true);
+    }
+  }
+
+  void _onUnlocked() {
+    setState(() => _isLocked = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_checkingLock) {
+      return const MaterialApp(
+        home: Scaffold(body: SizedBox.shrink()),
+      );
+    }
+    if (_isLocked) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.light,
+        home: LockScreen(onUnlocked: _onUnlocked),
+      );
+    }
+    return widget.child;
   }
 }

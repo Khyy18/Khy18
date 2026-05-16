@@ -100,6 +100,16 @@ class LocalStorage {
     return box.get('auth_token');
   }
 
+  Future<void> saveUserRole(String role) async {
+    final box = Hive.box<String>(_settingsBox);
+    await box.put('user_role', role);
+  }
+
+  String? getUserRole() {
+    final box = Hive.box<String>(_settingsBox);
+    return box.get('user_role');
+  }
+
   Future<void> clearAll() async {
     await Hive.box<String>(_employeesBox).clear();
     await Hive.box<String>(_childrenBox).clear();

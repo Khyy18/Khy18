@@ -1,26 +1,32 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/local_storage.dart';
 
+enum UserRole { admin, cashier, director }
+
 class AuthState {
   final bool isAuthenticated;
   final String? token;
   final bool isLoading;
+  final UserRole role;
 
   const AuthState({
     this.isAuthenticated = false,
     this.token,
     this.isLoading = false,
+    this.role = UserRole.admin,
   });
 
   AuthState copyWith({
     bool? isAuthenticated,
     String? token,
     bool? isLoading,
+    UserRole? role,
   }) {
     return AuthState(
       isAuthenticated: isAuthenticated ?? this.isAuthenticated,
       token: token ?? this.token,
       isLoading: isLoading ?? this.isLoading,
+      role: role ?? this.role,
     );
   }
 }
@@ -35,14 +41,38 @@ class AuthNotifier extends StateNotifier<AuthState> {
   void _loadToken() {
     final token = _storage.getAuthToken();
     if (token != null) {
-      state = AuthState(isAuthenticated: true, token: token);
+      final role = _storage.getUserRole();
+      state = AuthState(
+        isAuthenticated: true,
+        token: token,
+        role: _parseRole(role),
+      );
     }
   }
 
-  Future<void> login(String token) async {
+  UserRole _parseRole(String? roleStr) {
+    switch (roleStr) {
+      case 'cashier':
+        return UserRole.cashier;
+      case 'director':
+        return UserRole.director;
+      case 'admin':
+      default:
+        return UserRole.admin;
+    }
+  }
+
+  Future<void> login(String token, {String? role}) async {
     state = state.copyWith(isLoading: true);
     await _storage.saveAuthToken(token);
-    state = AuthState(isAuthenticated: true, token: token);
+    if (role != null) {
+      await _storage.saveUserRole(role);
+    }
+    state = AuthState(
+      isAuthenticated: true,
+      token: token,
+      role: _parseRole(role),
+    );
   }
 
   Future<void> logout() async {
