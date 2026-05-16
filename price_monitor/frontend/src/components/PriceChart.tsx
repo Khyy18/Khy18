@@ -64,10 +64,31 @@ export const PriceChart: React.FC<PriceChartProps> = ({ points, forecast }) => {
     plugins: {
       tooltip: {
         callbacks: {
-          label: (ctx: unknown) => {
-            const item = ctx as { parsed: { y: number | null } };
-            const val = item.parsed.y;
-            return val != null ? `${val.toLocaleString('ru-RU')} \u0440` : '';
+          title: (items: { dataIndex: number }[]) => {
+            if (!items.length) return '';
+            const idx = items[0].dataIndex;
+            const point = allPoints[idx];
+            if (!point) return '';
+            const d = new Date(point.date);
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            return `${day}.${month}.${year}`;
+          },
+          label: (ctx: { parsed: { y: number | null } }) => {
+            const val = ctx.parsed.y;
+            if (val == null) return '';
+            return `${val.toLocaleString('ru-RU')} \u0440`;
+          },
+          afterLabel: (ctx: { dataIndex: number; parsed: { y: number | null } }) => {
+            const val = ctx.parsed.y;
+            const idx = ctx.dataIndex;
+            if (val == null || idx === 0) return '';
+            const prevPoint = allPoints[idx - 1];
+            if (!prevPoint || prevPoint.price === 0) return '';
+            const change = ((val - prevPoint.price) / prevPoint.price) * 100;
+            const sign = change >= 0 ? '+' : '';
+            return `${sign}${change.toFixed(1)}% vs prev`;
           },
         },
       },

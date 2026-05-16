@@ -30,7 +30,7 @@ const AppContent: React.FC = () => {
       <Route
         path="*"
         element={
-          <div className="min-h-screen bg-tg-bg">
+          <div className="min-h-screen bg-tg-bg animate-fade-in">
             <Routes>
               <Route path="/" element={<Feed />} />
               <Route path="/product/:id" element={<ProductDetail />} />

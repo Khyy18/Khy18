@@ -22,6 +22,16 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+@keyframes shimmer {
+  0% { background-position: -400% 0; }
+  100% { background-position: 400% 0; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 @layer utilities {
   .scrollbar-hide {
     -ms-overflow-style: none;
@@ -29,5 +39,15 @@ body {
   }
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
+  }
+
+  .animate-shimmer {
+    background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+    background-size: 400% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.3s ease-out forwards;
   }
 }

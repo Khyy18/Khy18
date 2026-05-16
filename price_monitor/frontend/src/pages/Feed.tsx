@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useInfiniteProducts, useCategories } from '../hooks/useApi';
 import { ProductCard } from '../components/ProductCard';
+import { SkeletonList } from '../components/SkeletonList';
 
 export const Feed: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string | undefined>();
@@ -67,16 +68,13 @@ export const Feed: React.FC = () => {
 
       <div className="px-4 grid grid-cols-2 gap-3">
         {isLoading
-          ? Array.from({ length: 6 }).map((_, i) => (
-              <div
-                key={i}
-                className="bg-tg-secondary-bg rounded-xl h-56 animate-pulse"
-              />
-            ))
+          ? null
           : products.map((product) => (
               <ProductCard key={product.id} product={product} />
             ))}
       </div>
+
+      {isLoading && <SkeletonList />}
 
       {isFetchingNextPage && (
         <div className="flex justify-center py-4">
