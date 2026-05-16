@@ -65,6 +65,9 @@ class Settings(BaseSettings):
         description="URL подключения к базе данных",
     )
 
+    # Redis
+    redis_url: str = Field(default="", description="URL Redis (опционально, для кэширования)")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

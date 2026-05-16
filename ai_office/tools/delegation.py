@@ -1,5 +1,8 @@
 """Инструмент делегирования задач между агентами."""
 
+import json
+from datetime import datetime
+
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from sqlalchemy import select
@@ -7,7 +10,7 @@ from sqlalchemy import select
 from ai_office.core.config import settings
 from ai_office.core.database import async_session
 from ai_office.core.llm_provider import llm_provider
-from ai_office.core.models import ActivityLog, Agent, Task
+from ai_office.core.models import ActivityLog, Agent, DelegationTrace, Task
 from ai_office.core.rate_limiter import Priority
 
 
@@ -96,5 +99,28 @@ async def delegate_to_agent(agent_name: str, task_description: str) -> str:
                         tool_call_id=tool_call["id"],
                     )
                 )
+
+    # Store delegation trace
+    trace_messages = []
+    for msg in messages:
+        role = "system"
+        if hasattr(msg, "type"):
+            role = msg.type
+        content = getattr(msg, "content", str(msg))
+        trace_messages.append({
+            "role": role,
+            "content": content,
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+
+    async with async_session() as session:
+        trace = DelegationTrace(
+            source_agent="delegation",
+            target_agent=agent_name_lower,
+            task_id=task.id,
+            messages_json=json.dumps(trace_messages, ensure_ascii=False),
+        )
+        session.add(trace)
+        await session.commit()
 
     return response.content

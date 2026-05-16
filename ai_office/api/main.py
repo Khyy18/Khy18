@@ -17,9 +17,13 @@ from ai_office.api.routes.delegations import router as delegations_router
 from ai_office.api.routes.usage import router as usage_router
 from ai_office.api.routes.metrics import router as metrics_router
 from ai_office.api.routes.dashboard import router as dashboard_router
+from ai_office.api.routes.templates import router as templates_router
+from ai_office.api.routes.feedback import router as feedback_router
+from ai_office.api.routes.delegation_trace import router as delegation_trace_router
 from ai_office.api.middleware import TelegramAuthMiddleware
 from ai_office.api.observability import RequestLoggingMiddleware
 from ai_office.api.websocket import websocket_endpoint
+from ai_office.core.cache import cache
 
 
 @asynccontextmanager
@@ -27,7 +31,9 @@ async def lifespan(app: FastAPI):
     """Контекст жизненного цикла приложения - создание таблиц при старте."""
     setup_logging(level=settings.log_level, log_format=settings.log_format)
     await init_db()
+    await cache.connect()
     yield
+    await cache.disconnect()
 
 
 app = FastAPI(
@@ -63,6 +69,9 @@ app.include_router(delegations_router)
 app.include_router(usage_router)
 app.include_router(metrics_router)
 app.include_router(dashboard_router)
+app.include_router(templates_router)
+app.include_router(feedback_router)
+app.include_router(delegation_trace_router)
 
 
 @app.get("/api/health")

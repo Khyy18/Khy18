@@ -141,3 +141,49 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     role: Mapped[str] = mapped_column(String(50), server_default="viewer")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class DelegationTrace(Base):
+    """Трассировка делегирований между агентами."""
+
+    __tablename__ = "delegation_traces"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_agent: Mapped[str] = mapped_column(String(100))
+    target_agent: Mapped[str] = mapped_column(String(100))
+    task_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("tasks.id"), nullable=True
+    )
+    messages_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class TaskTemplate(Base):
+    """Шаблон задачи для быстрого создания."""
+
+    __tablename__ = "task_templates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    description_template: Mapped[str] = mapped_column(Text)
+    default_priority: Mapped[str] = mapped_column(String(20), default="medium")
+    default_executor_name: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True
+    )
+    category: Mapped[str] = mapped_column(String(100))
+    icon: Mapped[str] = mapped_column(String(50))
+
+
+class Feedback(Base):
+    """Обратная связь пользователей по работе агентов."""
+
+    __tablename__ = "feedback"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger)
+    agent_name: Mapped[str] = mapped_column(String(100))
+    message_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    rating: Mapped[Optional[int]] = mapped_column(nullable=True)
+    is_positive: Mapped[Optional[bool]] = mapped_column(nullable=True)
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

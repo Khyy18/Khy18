@@ -110,3 +110,64 @@ class DashboardResponse(BaseModel):
     response_time_history: list[int] = []
     active_agents: int = 0
     hourly_activity: list[int] = []
+
+
+class TemplateResponse(BaseModel):
+    """Ответ с информацией о шаблоне задачи."""
+
+    id: int
+    name: str
+    description_template: str
+    default_priority: str
+    default_executor_name: Optional[str] = None
+    category: str
+    icon: str
+
+    model_config = {"from_attributes": True}
+
+
+class FeedbackCreate(BaseModel):
+    """Схема создания обратной связи."""
+
+    user_telegram_id: int
+    agent_name: str
+    message_id: Optional[str] = None
+    rating: Optional[int] = None
+    is_positive: Optional[bool] = None
+    comment: Optional[str] = None
+
+
+class FeedbackResponse(BaseModel):
+    """Ответ с информацией об обратной связи."""
+
+    id: int
+    user_telegram_id: int
+    agent_name: str
+    rating: Optional[int] = None
+    is_positive: Optional[bool] = None
+    comment: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class FeedbackStatsResponse(BaseModel):
+    """Статистика обратной связи по агенту."""
+
+    agent_name: str
+    avg_rating: Optional[float] = None
+    total_count: int
+    positive_percentage: float
+
+
+class DelegationTraceResponse(BaseModel):
+    """Ответ с трассировкой делегирования."""
+
+    id: int
+    source_agent: str
+    target_agent: str
+    task_id: Optional[int] = None
+    messages: list
+    created_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}

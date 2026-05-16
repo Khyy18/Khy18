@@ -8,8 +8,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://redis:6379
     ports:
       - "8000:8000"
     volumes:
@@ -30,6 +34,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
     restart: unless-stopped
 
   nginx:

@@ -13,7 +13,9 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { useDroppable } from '@dnd-kit/core'
+import { Plus } from 'lucide-react'
 import KanbanCard from './KanbanCard'
+import TemplatePicker from './TemplatePicker'
 
 /**
  * Колонка Kanban-доски
@@ -65,6 +67,7 @@ function KanbanColumn({ id, title, tasks, isViewer }) {
  */
 export default function KanbanBoard({ tasks, isViewer = false }) {
   const [activeTask, setActiveTask] = useState(null)
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
 
   const columns = [
     { id: 'open', title: 'Открытые' },
@@ -159,19 +162,31 @@ export default function KanbanBoard({ tasks, isViewer = false }) {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
-      <div className="grid grid-cols-3 gap-3">
-        {columns.map((column) => (
-          <KanbanColumn
-            key={column.id}
-            id={column.id}
-            title={column.title}
-            tasks={getColumnTasks(column.id)}
-            isViewer={isViewer}
-          />
-        ))}
+      <div className="relative">
+        <div className="grid grid-cols-3 gap-3">
+          {columns.map((column) => (
+            <KanbanColumn
+              key={column.id}
+              id={column.id}
+              title={column.title}
+              tasks={getColumnTasks(column.id)}
+              isViewer={isViewer}
+            />
+          ))}
+        </div>
+
+        {/* FAB button for creating tasks from template */}
+        {!isViewer && (
+          <button
+            onClick={() => setShowTemplatePicker(true)}
+            className="absolute bottom-4 right-4 w-10 h-10 bg-accent rounded-full flex items-center justify-center shadow-lg hover:bg-accent/80 transition-colors"
+          >
+            <Plus size={20} className="text-white" />
+          </button>
+        )}
       </div>
 
-      {/* Оверлей при перетаскивании */}
+      {/* Drag overlay */}
       <DragOverlay>
         {activeTask ? (
           <div className="kanban-dragging">
@@ -179,6 +194,14 @@ export default function KanbanBoard({ tasks, isViewer = false }) {
           </div>
         ) : null}
       </DragOverlay>
+
+      {/* Template picker modal */}
+      {showTemplatePicker && (
+        <TemplatePicker
+          onClose={() => setShowTemplatePicker(false)}
+          onTaskCreated={() => setShowTemplatePicker(false)}
+        />
+      )}
     </DndContext>
   )
 }
