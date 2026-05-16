@@ -1,0 +1,11 @@
+fastapi>=0.109
+uvicorn[standard]>=0.27
+sqlalchemy[asyncio]>=2.0
+aiosqlite>=0.19
+pydantic>=2.5
+pydantic-settings>=2.1
+python-jose[cryptography]>=3.3
+httpx>=0.25
+openai>=1.10
+apscheduler>=3.10
+passlib[bcrypt]>=1.7
