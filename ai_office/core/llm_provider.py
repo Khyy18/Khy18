@@ -1,12 +1,13 @@
 """LLM Multi-Provider с retry, fallback и трекингом токенов."""
 
 import asyncio
-import logging
+import time
 from typing import Any, Optional
 
 from langchain_openai import ChatOpenAI
 
 from ai_office.core.config import settings
+from ai_office.core.logging import get_logger
 from ai_office.core.rate_limiter import (
     BudgetExhaustedError,
     Priority,
@@ -15,7 +16,7 @@ from ai_office.core.rate_limiter import (
     rate_limiter,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Per-token pricing (USD per token)
 TOKEN_PRICING = {
@@ -202,17 +203,21 @@ class LLMProvider:
             await budget_tracker.check_budget()
             await rate_limiter.acquire(agent_name, priority)
 
+        from ai_office.api.observability import metrics_collector
+
         last_error: Optional[Exception] = None
 
         for provider_idx, provider in enumerate(self._providers):
             # Try this provider with retries
             for attempt in range(settings.llm_max_retries):
+                start_time = time.perf_counter()
                 try:
                     model = self._create_chat_model(provider, **kwargs)
                     if tools:
                         model = model.bind_tools(tools)
 
                     response = await model.ainvoke(messages)
+                    latency = time.perf_counter() - start_time
 
                     # Log usage
                     model_name = self._get_model_name(provider)
@@ -225,6 +230,25 @@ class LLMProvider:
                         agent_name=agent_name,
                     )
 
+                    # Record metrics for observability
+                    await metrics_collector.increment_counter(
+                        "ai_office_llm_calls_total",
+                        labels={"provider": provider, "model": model_name, "status": "success"},
+                    )
+                    await metrics_collector.observe_histogram(
+                        "ai_office_llm_latency_seconds",
+                        latency,
+                        labels={"provider": provider},
+                    )
+
+                    logger.info(
+                        "LLM call success provider=%s model=%s tokens=%d latency_ms=%.1f",
+                        provider,
+                        model_name,
+                        prompt_tokens + completion_tokens,
+                        latency * 1000,
+                    )
+
                     # Update current index to successful provider
                     self._current_index = provider_idx
                     return response
@@ -232,16 +256,37 @@ class LLMProvider:
                 except (BudgetExhaustedError, RateLimitedError):
                     raise
                 except Exception as e:
+                    latency = time.perf_counter() - start_time
                     last_error = e
+                    model_name = self._get_model_name(provider)
+
+                    # Record failure metrics
+                    await metrics_collector.increment_counter(
+                        "ai_office_llm_calls_total",
+                        labels={"provider": provider, "model": model_name, "status": "error"},
+                    )
+                    await metrics_collector.observe_histogram(
+                        "ai_office_llm_latency_seconds",
+                        latency,
+                        labels={"provider": provider},
+                    )
+
                     logger.warning(
-                        f"LLM call failed (provider={provider}, attempt={attempt + 1}): {e}"
+                        "LLM call failed provider=%s model=%s attempt=%d latency_ms=%.1f error=%s",
+                        provider,
+                        model_name,
+                        attempt + 1,
+                        latency * 1000,
+                        str(e),
                     )
                     if attempt < settings.llm_max_retries - 1:
                         backoff = 2**attempt  # 1s, 2s, 4s
                         await asyncio.sleep(backoff)
 
             # All retries exhausted for this provider, try next
-            logger.warning(f"Provider '{provider}' exhausted all retries, trying fallback...")
+            logger.warning(
+                "Provider '%s' exhausted all retries, trying fallback...", provider
+            )
 
         # All providers failed
         raise last_error or RuntimeError("All LLM providers failed")

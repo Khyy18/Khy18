@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     agent_rpm_limit: int = Field(default=20, description="Лимит запросов/мин на агента")
     enable_rate_limiter: bool = Field(default=True, description="Включить rate limiter")
 
+    # Logging
+    log_level: str = Field(default="INFO", description="Уровень логирования (DEBUG, INFO, WARNING, ERROR)")
+    log_format: str = Field(default="json", description="Формат логов: json или text")
+
     # Proactive Scheduler
     enable_proactive: bool = Field(default=True, description="Включить проактивные задачи")
     standup_hour: int = Field(default=9, description="Час ежедневного стендапа (UTC)")

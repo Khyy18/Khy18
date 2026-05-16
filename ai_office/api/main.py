@@ -5,20 +5,25 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from ai_office.core.config import settings
 from ai_office.core.database import init_db
+from ai_office.core.logging import setup_logging
 from ai_office.api.routes.agents import router as agents_router
 from ai_office.api.routes.tasks import router as tasks_router
 from ai_office.api.routes.activity import router as activity_router
 from ai_office.api.routes.plans import router as plans_router
 from ai_office.api.routes.delegations import router as delegations_router
 from ai_office.api.routes.usage import router as usage_router
+from ai_office.api.routes.metrics import router as metrics_router
 from ai_office.api.middleware import TelegramAuthMiddleware
+from ai_office.api.observability import RequestLoggingMiddleware
 from ai_office.api.websocket import websocket_endpoint
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Контекст жизненного цикла приложения - создание таблиц при старте."""
+    setup_logging(level=settings.log_level, log_format=settings.log_format)
     await init_db()
     yield
 
@@ -38,6 +43,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Request logging middleware (before auth)
+app.add_middleware(RequestLoggingMiddleware)
+
 # Аутентификация через Telegram initData
 app.add_middleware(TelegramAuthMiddleware)
 
@@ -51,6 +59,7 @@ app.include_router(activity_router)
 app.include_router(plans_router)
 app.include_router(delegations_router)
 app.include_router(usage_router)
+app.include_router(metrics_router)
 
 
 @app.get("/api/health")

@@ -15,7 +15,7 @@ from ai_office.core.config import settings
 class TelegramAuthMiddleware(BaseHTTPMiddleware):
     """Валидация Telegram Mini App initData через HMAC-SHA256."""
 
-    SKIP_PATHS = {"/api/health", "/api/ws", "/docs", "/openapi.json"}
+    SKIP_PATHS = {"/api/health", "/api/ws", "/api/metrics", "/docs", "/openapi.json"}
 
     async def dispatch(self, request: Request, call_next):
         # Пропускаем аутентификацию в dev-режиме
