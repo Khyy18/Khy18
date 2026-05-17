@@ -83,9 +83,10 @@ export function useWebSocket({
 
         if (shouldReconnectRef.current && retriesRef.current < maxRetries) {
           retriesRef.current += 1;
+          const backoffDelay = reconnectInterval * Math.min(retriesRef.current, 5);
           reconnectTimerRef.current = setTimeout(() => {
             connect();
-          }, reconnectInterval);
+          }, backoffDelay);
         }
       };
 

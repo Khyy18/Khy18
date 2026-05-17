@@ -140,6 +140,10 @@ class AIPipeline:
             return self._http_client
         return get_http_client()
 
+    async def cleanup(self) -> None:
+        """Clean up resources, including closing the Simli avatar session."""
+        await self._avatar_streamer.close_session()
+
     async def process_audio(self, audio_bytes: bytes) -> dict:
         """Process incoming audio through the full pipeline.
 
@@ -192,6 +196,10 @@ class AIPipeline:
         else:
             # Fallback to non-streaming TTS
             audio_response = await synthesize_speech(response_text, self.client)
+
+        # Lazily create Simli session on first use
+        if self._avatar_streamer.is_configured and not self._avatar_streamer._session_id:
+            await self._avatar_streamer.create_session()
 
         video_response = await self._avatar_streamer.send_audio_get_video(audio_response)
 

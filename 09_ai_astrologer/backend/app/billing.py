@@ -103,12 +103,15 @@ class BillingManager:
     async def _persist_event(self, event: BillingEvent) -> None:
         """Persist billing event to PostgreSQL for audit trail."""
         try:
-            from app.database import _async_session, BillingEventLog
+            if not hasattr(self, '_db_session_maker'):
+                from app.database import _async_session, BillingEventLog
+                self._db_session_maker = _async_session
+                self._BillingEventLog = BillingEventLog
 
-            if _async_session is None:
+            if self._db_session_maker is None:
                 return  # Database not configured
-            async with _async_session() as session:
-                log_entry = BillingEventLog(
+            async with self._db_session_maker() as session:
+                log_entry = self._BillingEventLog(
                     session_id=event.session_id,
                     user_id=event.user_id,
                     event_type=event.event_type,

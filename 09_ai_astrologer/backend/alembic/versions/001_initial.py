@@ -23,8 +23,11 @@ def upgrade() -> None:
         sa.Column("balance", sa.Integer(), nullable=False, server_default="0"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("telegram_id"),
+        if_not_exists=True,
     )
-    op.create_index("ix_users_telegram_id", "users", ["telegram_id"])
+    op.create_index(
+        "ix_users_telegram_id", "users", ["telegram_id"], if_not_exists=True
+    )
 
     op.create_table(
         "sessions",
@@ -38,8 +41,11 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("session_id"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
+        if_not_exists=True,
     )
-    op.create_index("ix_sessions_session_id", "sessions", ["session_id"])
+    op.create_index(
+        "ix_sessions_session_id", "sessions", ["session_id"], if_not_exists=True
+    )
 
     op.create_table(
         "billing_event_logs",
@@ -51,9 +57,13 @@ def upgrade() -> None:
         sa.Column("balance_after", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("timestamp", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
+        if_not_exists=True,
     )
     op.create_index(
-        "ix_billing_event_logs_session_id", "billing_event_logs", ["session_id"]
+        "ix_billing_event_logs_session_id",
+        "billing_event_logs",
+        ["session_id"],
+        if_not_exists=True,
     )
 
 

@@ -83,7 +83,12 @@ async def create_invoice(request: CreateInvoiceRequest, http_request: Request):
     # Resolve user_id from session_id if not provided directly
     user_id = request.user_id
     if not user_id and request.session_id:
-        session_store = http_request.app.state.session_store
+        session_store = getattr(http_request.app.state, 'session_store', None)
+        if session_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Session store not available",
+            )
         session = await session_store.get_session(request.session_id)
         if not session:
             raise HTTPException(

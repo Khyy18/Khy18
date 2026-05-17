@@ -370,6 +370,8 @@ async def websocket_call(websocket: WebSocket, session_id: str):
         session.status = CallStatus.ENDED
         await store.save_session(session)
         await billing_manager.stop_billing_loop(session_id)
+        # Cleanup pipeline resources (e.g., Simli session)
+        await pipeline.cleanup()
         # Cleanup token
         await store.delete_token(session_id)
 
