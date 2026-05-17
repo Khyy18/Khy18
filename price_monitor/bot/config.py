@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_token: str = ""
+    telegram_admin_id: int = 0
     telegram_channel_id: int = 0
     telegram_vip_channel_id: int = 0
 

@@ -18,6 +18,7 @@ from bot.handlers.alerts import router as alerts_router
 from bot.handlers.subscription import router as subscription_router
 from bot.handlers.seller import router as seller_router
 from bot.handlers.referral import router as referral_router
+from bot.handlers.admin_api import router as admin_api_router
 from bot.scheduler.tasks import cleanup_old_data_job, parse_prices_job, publish_digests_job
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -52,6 +53,7 @@ async def main() -> None:
     dp.include_router(subscription_router)
     dp.include_router(seller_router)
     dp.include_router(referral_router)
+    dp.include_router(admin_api_router)
 
     # Планировщик задач
     scheduler = AsyncIOScheduler()
