@@ -174,6 +174,9 @@ async def websocket_call(websocket: WebSocket, session_id: str, token: str = Que
                 if action == "end_call":
                     state = CallState.ending
                     break
+                elif action == "speech_end":
+                    # Frontend VAD detected end of speech - trigger transcription
+                    await pipeline.force_transcribe()
                 elif action == "mute":
                     await websocket.send_json({
                         "type": "status",
@@ -198,7 +201,7 @@ async def websocket_call(websocket: WebSocket, session_id: str, token: str = Que
 
         # Останавливаем per-session billing task
         try:
-            from app.main import billing_worker
+            from app.billing.instance import billing_worker
             await billing_worker.stop_session_billing(session_id)
         except Exception as e:
             logger.error(f"Failed to stop session billing for {session_id}: {e}")

@@ -63,7 +63,10 @@ export function useMediaStream({ sendAudio } = {}) {
       return;
     }
 
-    const recorder = new MediaRecorder(streamRef.current, { mimeType });
+    const recorder = new MediaRecorder(
+      new MediaStream(streamRef.current.getAudioTracks()),
+      { mimeType }
+    );
     recorderRef.current = recorder;
 
     recorder.ondataavailable = (event) => {

@@ -18,6 +18,10 @@ export function useVAD(stream, { threshold = 0.01, silenceTimeout = 600, onSpeec
   const intervalRef = useRef(null);
   const silenceStartRef = useRef(null);
   const wasSpeakingRef = useRef(false);
+  const onSpeechEndRef = useRef(onSpeechEnd);
+
+  // Keep the ref up to date without triggering effect re-runs
+  onSpeechEndRef.current = onSpeechEnd;
 
   useEffect(() => {
     if (!stream) return;
@@ -67,8 +71,8 @@ export function useVAD(stream, { threshold = 0.01, silenceTimeout = 600, onSpeec
             wasSpeakingRef.current = false;
             setIsSpeaking(false);
             silenceStartRef.current = null;
-            if (onSpeechEnd) {
-              onSpeechEnd();
+            if (onSpeechEndRef.current) {
+              onSpeechEndRef.current();
             }
           }
         }
@@ -88,7 +92,7 @@ export function useVAD(stream, { threshold = 0.01, silenceTimeout = 600, onSpeec
       silenceStartRef.current = null;
       wasSpeakingRef.current = false;
     };
-  }, [stream, threshold, silenceTimeout, onSpeechEnd]);
+  }, [stream, threshold, silenceTimeout]);
 
   return { isSpeaking };
 }

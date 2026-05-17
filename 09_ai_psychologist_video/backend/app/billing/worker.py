@@ -128,13 +128,18 @@ class BillingWorker:
         """
         Atomic SQL deduction: UPDATE balance, SELECT new balance, create transaction.
         Returns new_balance or None on error.
+
+        Thread safety note: SQLite uses database-level locking (WAL mode). Only one
+        writer can execute at a time, so concurrent _deduct_balance calls for the same
+        user are serialized at the database level. The async_session_factory context
+        manager wraps all statements in a single transaction, ensuring atomicity.
         """
         try:
             async with async_session_factory() as session:
-                # Atomic deduction
+                # Atomic deduction (str(rate) preserves Decimal precision)
                 await session.execute(
                     text("UPDATE users SET balance = balance - :rate WHERE id = :user_id"),
-                    {"rate": float(rate), "user_id": user_id},
+                    {"rate": str(rate), "user_id": user_id},
                 )
                 # Get new balance
                 result = await session.execute(
@@ -151,7 +156,7 @@ class BillingWorker:
                     text(
                         "UPDATE sessions SET total_cost = total_cost + :rate WHERE id = :session_id"
                     ),
-                    {"rate": float(rate), "session_id": session_id},
+                    {"rate": str(rate), "session_id": session_id},
                 )
 
                 # Create debit transaction

@@ -27,6 +27,8 @@ class AIPipeline:
     """
 
     MAX_HISTORY_LENGTH = 50  # Maximum number of messages to keep in history
+    # Fallback: transcribe after accumulating this many chunks (~10s at 250ms interval)
+    MAX_CHUNKS_BEFORE_TRANSCRIBE = 40
 
     def __init__(self, session_id: str):
         self.session_id = session_id
@@ -36,10 +38,8 @@ class AIPipeline:
         ]
         self._last_transcription: str = ""
 
-        # VAD state
-        self._silence_counter: int = 0
-        self._is_speaking: bool = False
-        self._vad_threshold: float = 500.0  # Порог энергии для webm аудио
+        # Chunk counter for size-based fallback transcription
+        self._chunk_count: int = 0
 
     def _trim_history(self) -> None:
         """Trim conversation history to MAX_HISTORY_LENGTH, keeping system prompt."""
@@ -49,58 +49,43 @@ class AIPipeline:
             trimmed = self._conversation_history[-(self.MAX_HISTORY_LENGTH - 1):]
             self._conversation_history = [system_msg] + trimmed
 
-    def _calculate_audio_energy(self, chunk: bytes) -> float:
-        """
-        Вычисление энергии аудио-чанка.
-
-        Для webm-encoded аудио используем дисперсию байтовых значений
-        как прокси для наличия речевого контента vs тишины.
-        """
-        if not chunk:
-            return 0.0
-        byte_values = list(chunk)
-        if len(byte_values) == 0:
-            return 0.0
-        mean = sum(byte_values) / len(byte_values)
-        variance = sum((b - mean) ** 2 for b in byte_values) / len(byte_values)
-        return variance
-
     async def process_audio_chunk(self, chunk: bytes) -> None:
         """
-        Обработка аудио-чанка от клиента с VAD логикой.
+        Обработка аудио-чанка от клиента.
 
-        Накапливаем аудио-чанки в буфере. Определяем паузы в речи
-        через energy-based VAD. При обнаружении паузы (2 тихих чанка
-        подряд при интервале 250мс = 500мс тишины) запускаем STT.
+        Накапливаем аудио-чанки в буфере. Транскрипция запускается либо:
+        1. По сигналу speech_end от клиентского VAD (через force_transcribe())
+        2. По достижению MAX_CHUNKS_BEFORE_TRANSCRIBE как fallback (~10 секунд)
         """
         self._audio_buffer.append(chunk)
+        self._chunk_count += 1
 
-        energy = self._calculate_audio_energy(chunk)
+        # Size-based fallback: transcribe after ~10 seconds of audio
+        if self._chunk_count >= self.MAX_CHUNKS_BEFORE_TRANSCRIBE:
+            await self._trigger_transcription()
 
-        if energy >= self._vad_threshold:
-            # Есть речевая активность
-            self._silence_counter = 0
-            self._is_speaking = True
-        else:
-            # Тихий чанк
-            self._silence_counter += 1
+    async def force_transcribe(self) -> None:
+        """
+        Принудительный запуск транскрипции по сигналу speech_end от фронтенда.
+        Вызывается из WebSocket handler при получении control message.
+        """
+        if self._audio_buffer:
+            await self._trigger_transcription()
 
-        # Если говорили и обнаружили паузу (>= 2 тихих чанка = 500мс тишины)
-        if self._is_speaking and self._silence_counter >= 2:
-            audio_data = b"".join(self._audio_buffer)
-            self._audio_buffer.clear()
-            self._silence_counter = 0
-            self._is_speaking = False
+    async def _trigger_transcription(self) -> None:
+        """Собираем буфер и отправляем на STT."""
+        audio_data = b"".join(self._audio_buffer)
+        self._audio_buffer.clear()
+        self._chunk_count = 0
 
-            # Транскрибируем накопленный аудио
-            transcription = await self._transcribe_audio(audio_data)
-            if transcription.strip():
-                self._last_transcription = transcription
-                logger.info(
-                    "Transcription for session %s: %s",
-                    self.session_id,
-                    transcription[:100],
-                )
+        transcription = await self._transcribe_audio(audio_data)
+        if transcription.strip():
+            self._last_transcription = transcription
+            logger.info(
+                "Transcription for session %s: %s",
+                self.session_id,
+                transcription[:100],
+            )
 
     async def _transcribe_audio(self, audio_data: bytes) -> str:
         """

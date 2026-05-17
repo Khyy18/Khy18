@@ -1,13 +1,17 @@
 """
 Endpoint для получения LiveKit токена доступа.
 В production здесь используется livekit-api для генерации реального AccessToken.
-Сейчас возвращает mock-ответ для разработки.
+Сейчас возвращает mock-ответ для разработки (development stub).
 """
+
+import logging
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.auth.dependencies import get_current_user_id
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/call", tags=["call"])
 
@@ -38,6 +42,10 @@ async def get_livekit_token(
 
     Пока возвращаем mock для разработки.
     """
+    # Development stub - replace with real LiveKit token generation in production
+    logger.warning(
+        "LiveKit token endpoint is serving mock data. Set LIVEKIT_API_KEY for production."
+    )
     return LiveKitTokenResponse(
         token="mock-livekit-token",
         url="wss://livekit.example.com",

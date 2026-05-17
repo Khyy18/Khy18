@@ -9,14 +9,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.models.database import init_db
-from app.billing.worker import BillingWorker
+from app.billing.instance import billing_worker
 from app.auth.router import router as auth_router
 from app.billing.payment import router as billing_router
 from app.sessions.router import router as sessions_router
 from app.call.websocket import websocket_call
 from app.call.livekit import router as livekit_router
-
-billing_worker = BillingWorker()
 
 
 @asynccontextmanager
