@@ -16,7 +16,7 @@ class TelegramAuthMiddleware(BaseHTTPMiddleware):
     """Валидация Telegram Mini App initData через HMAC-SHA256."""
 
     SKIP_PATHS = {"/api/health", "/api/ws", "/docs", "/openapi.json", "/api/billing/plans", "/api/billing/webhook"}
-    SKIP_PREFIXES = ("/api/auth",)
+    SKIP_PREFIXES = ("/api/auth", "/api/admin", "/api/onboarding")
 
     async def dispatch(self, request: Request, call_next):
         # Пропускаем аутентификацию в dev-режиме
