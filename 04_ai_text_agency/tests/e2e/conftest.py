@@ -1,6 +1,7 @@
 """Фикстуры для E2E тестов фриланс-платформ."""
 
 import json
+import subprocess
 import tempfile
 
 import pytest
@@ -9,6 +10,37 @@ from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, TestServer
 
 from tests.e2e.mock_server import create_mock_app
+
+
+def _browser_binary_works() -> bool:
+    """Check if Playwright Chromium binary is functional."""
+    try:
+        import pathlib
+        cache_dir = pathlib.Path.home() / ".cache" / "ms-playwright"
+        if not cache_dir.exists():
+            return False
+        # Find chrome-headless-shell binary and try to execute it
+        for binary in cache_dir.rglob("chrome-headless-shell"):
+            if binary.is_file():
+                result = subprocess.run(
+                    [str(binary), "--version"],
+                    capture_output=True,
+                    timeout=5,
+                )
+                return result.returncode == 0
+        return False
+    except Exception:
+        return False
+
+
+_BROWSER_AVAILABLE = _browser_binary_works()
+
+
+@pytest.fixture(autouse=True)
+def _skip_if_no_browser():
+    """Skip e2e tests if browser binary is not functional."""
+    if not _BROWSER_AVAILABLE:
+        pytest.skip("Playwright browser binary not functional (missing system libraries)")
 
 
 @pytest_asyncio.fixture
