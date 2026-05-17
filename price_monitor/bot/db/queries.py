@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select, update
@@ -204,7 +204,7 @@ async def update_user_vip(telegram_id: int, is_vip: bool, days: int = 30) -> Non
     """Обновить VIP-статус пользователя с установкой даты истечения."""
     async with async_session() as session:
         if is_vip:
-            expires_at = datetime.utcnow() + timedelta(days=days)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=days)
             await session.execute(
                 update(User)
                 .where(User.telegram_id == telegram_id)

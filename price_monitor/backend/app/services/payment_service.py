@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -101,7 +101,7 @@ class PaymentService:
         payment.status = "confirmed"
         days = PLAN_DAYS.get(payment.plan, 30)
         user.is_vip = True
-        user.vip_expires_at = datetime.utcnow() + timedelta(days=days)
+        user.vip_expires_at = datetime.now(timezone.utc) + timedelta(days=days)
 
         await db.commit()
         return {"ok": True, "vip_until": user.vip_expires_at.isoformat()}
@@ -170,7 +170,7 @@ class PaymentService:
 
         days = stars_amount  # 1 star = 1 day
         user.is_vip = True
-        user.vip_expires_at = datetime.utcnow() + timedelta(days=days)
+        user.vip_expires_at = datetime.now(timezone.utc) + timedelta(days=days)
         await db.commit()
         return {"ok": True, "vip_until": user.vip_expires_at.isoformat()}
 

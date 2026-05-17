@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
 from fastapi import Depends, HTTPException, Request, status
@@ -26,7 +26,7 @@ def create_access_token(data: dict) -> str:
     """Create a JWT access token."""
 
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expire_minutes)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.jwt_algorithm)
 
@@ -72,10 +72,10 @@ def verify_telegram_init_data(init_data: str) -> dict | None:
         data_check_string = "\n".join(data_pairs)
 
         # Compute HMAC
-        secret_key = hmac.new(
+        secret_key = hmac.HMAC(
             b"WebAppData", settings.telegram_bot_token.encode(), hashlib.sha256
         ).digest()
-        computed_hash = hmac.new(
+        computed_hash = hmac.HMAC(
             secret_key, data_check_string.encode(), hashlib.sha256
         ).hexdigest()
 

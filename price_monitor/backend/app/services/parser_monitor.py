@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
@@ -40,7 +40,7 @@ class ParserMonitor:
                 if count == 0:
                     status = "no_data"
                 elif last_run:
-                    age = (datetime.utcnow() - last_run).total_seconds()
+                    age = (datetime.now(timezone.utc) - last_run).total_seconds()
                     if age > 3600:
                         status = "stale"
 

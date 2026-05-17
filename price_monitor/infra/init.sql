@@ -152,6 +152,16 @@ CREATE TABLE IF NOT EXISTS reviews (
     analyzed_at TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS badges (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    badge_type VARCHAR(100) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    description VARCHAR(512),
+    icon VARCHAR(50),
+    earned_at TIMESTAMP DEFAULT NOW()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_products_marketplace ON products(marketplace);
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
@@ -164,6 +174,7 @@ CREATE INDEX IF NOT EXISTS idx_clicks_partner ON clicks(partner_id);
 CREATE INDEX IF NOT EXISTS idx_short_links_short_id ON short_links(short_id);
 CREATE INDEX IF NOT EXISTS idx_partners_widget_code ON partners(widget_code);
 CREATE INDEX IF NOT EXISTS idx_arbitrage_results_found_at ON arbitrage_results(found_at);
+CREATE INDEX IF NOT EXISTS idx_badges_user ON badges(user_id);
 
 CREATE TABLE IF NOT EXISTS niche_analyses (
     id SERIAL PRIMARY KEY,

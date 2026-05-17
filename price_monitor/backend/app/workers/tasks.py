@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from arq import cron
 from arq.connections import RedisSettings
@@ -85,7 +85,7 @@ async def task_cleanup_expired_vip(ctx: dict) -> dict:
         result = await db.execute(
             select(User).where(
                 User.is_vip == True,
-                User.vip_expires_at < datetime.utcnow(),
+                User.vip_expires_at < datetime.now(timezone.utc),
             )
         )
         expired_users = result.scalars().all()

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +17,7 @@ class NicheDetector:
 
     async def analyze(self, db: AsyncSession, days: int = 7) -> list[dict]:
         """Analyze category growth over the specified period."""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
         # Get product counts per category (recent vs older)
         recent_query = (

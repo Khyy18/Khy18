@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,7 +75,7 @@ class GamificationService:
 
         # Check veteran badge (account age >= 30 days)
         if "veteran_30" not in existing_types and user.created_at:
-            age = datetime.utcnow() - user.created_at
+            age = datetime.now(timezone.utc) - user.created_at
             if age >= timedelta(days=30):
                 badge = await self._award_badge(user_id, "veteran_30", db)
                 awarded.append(badge)

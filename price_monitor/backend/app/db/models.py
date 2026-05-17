@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
@@ -30,7 +30,7 @@ class User(Base):
     interests = Column(Text, default="[]")
     referral_code = Column(String, unique=True, nullable=True)
     fcm_token = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     alerts = relationship("Alert", back_populates="user", cascade="all, delete-orphan")
     favorites = relationship("Favorite", back_populates="user", cascade="all, delete-orphan")
@@ -52,7 +52,7 @@ class Product(Base):
     image_url = Column(String, nullable=True)
     rating = Column(Float, default=0.0)
     reviews_summary = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     price_history = relationship("PriceHistory", back_populates="product", cascade="all, delete-orphan")
     favorites = relationship("Favorite", back_populates="product", cascade="all, delete-orphan")
@@ -69,7 +69,7 @@ class PriceHistory(Base):
     old_price = Column(Float, nullable=True)
     discount_percent = Column(Float, nullable=True)
     is_fraud = Column(Boolean, default=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     product = relationship("Product", back_populates="price_history")
 
@@ -82,7 +82,7 @@ class Alert(Base):
     max_price = Column(Float, nullable=True)
     category = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="alerts")
 
@@ -92,7 +92,7 @@ class Favorite(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="favorites")
     product = relationship("Product", back_populates="favorites")
@@ -108,7 +108,7 @@ class Payment(Base):
     plan = Column(String, nullable=True)
     provider = Column(String, nullable=False)
     provider_payment_id = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="payments")
 
@@ -120,7 +120,7 @@ class Click(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     partner_id = Column(Integer, ForeignKey("partners.id"), nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     ip = Column(String, nullable=True)
     user_agent = Column(String, nullable=True)
     converted = Column(Boolean, default=False)
@@ -140,7 +140,7 @@ class Post(Base):
     impressions = Column(Integer, default=0)
     clicks = Column(Integer, default=0)
     ctr = Column(Float, default=0.0)
-    published_at = Column(DateTime, default=datetime.utcnow)
+    published_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     product = relationship("Product", back_populates="posts")
 
@@ -151,7 +151,7 @@ class ChatMessage(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="chat_messages")
 
@@ -163,7 +163,7 @@ class ShortLink(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     affiliate_url = Column(String, nullable=False)
     partner_id = Column(Integer, ForeignKey("partners.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     product = relationship("Product")
     partner = relationship("Partner", back_populates="short_links")
@@ -175,7 +175,7 @@ class PushLog(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     title = Column(String, nullable=False)
     body = Column(Text, nullable=False)
-    sent_at = Column(DateTime, default=datetime.utcnow)
+    sent_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User")
 
@@ -192,7 +192,7 @@ class Partner(Base):
     total_conversions = Column(Integer, default=0)
     balance = Column(Float, default=0.0)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User")
     clicks = relationship("Click", back_populates="partner")
@@ -210,7 +210,7 @@ class ArbitrageResult(Base):
     price_ozon = Column(Float, nullable=False)
     diff_percent = Column(Float, nullable=False)
     match_score = Column(Float, nullable=False)
-    found_at = Column(DateTime, default=datetime.utcnow)
+    found_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     product_wb = relationship("Product", foreign_keys=[product_wb_id])
     product_ozon = relationship("Product", foreign_keys=[product_ozon_id])
@@ -225,7 +225,7 @@ class Review(Base):
     rating = Column(Integer, nullable=True)
     is_fake = Column(Boolean, default=False)
     fake_score = Column(Float, default=0.0)
-    analyzed_at = Column(DateTime, default=datetime.utcnow)
+    analyzed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     product = relationship("Product", back_populates="reviews")
 
@@ -238,7 +238,7 @@ class NicheAnalysis(Base):
     avg_price = Column(Float, nullable=True)
     product_count = Column(Integer, default=0)
     recommendation = Column(Text, nullable=True)
-    analyzed_at = Column(DateTime, default=datetime.utcnow)
+    analyzed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class SellerCopy(Base):
     __tablename__ = "seller_copies"
@@ -248,7 +248,7 @@ class SellerCopy(Base):
     title = Column(String, nullable=False)
     description = Column(Text, nullable=False)
     keywords = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     product = relationship("Product")
 
@@ -259,7 +259,7 @@ class ContentScript(Base):
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     script_type = Column(String, nullable=False)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     product = relationship("Product")
 
@@ -272,6 +272,6 @@ class Badge(Base):
     title = Column(String, nullable=False)
     description = Column(String, nullable=True)
     icon = Column(String, nullable=True)
-    earned_at = Column(DateTime, default=datetime.utcnow)
+    earned_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="badges")

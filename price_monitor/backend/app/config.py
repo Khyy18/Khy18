@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     # Партнерская программа
     partner_commission_percent: float = 5.0
 
+    # CORS
+    allowed_origins: str = "http://localhost:5173,http://localhost:5174"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 settings = Settings()
