@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.config import settings
 from app.db.models import Base
 
-# Use PostgreSQL if available, fallback to SQLite for dev
-_url = settings.postgresql_url if "postgresql" in settings.postgresql_url else settings.database_url
+# Use SQLite by default (database_url), PostgreSQL only if explicitly configured via env
+import os
+_url = os.environ.get("DATABASE_URL", settings.database_url)
 
 engine = create_async_engine(_url, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
