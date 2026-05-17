@@ -173,6 +173,7 @@ class Tenant(Base):
     calls = relationship("Call", back_populates="tenant")
     call_scripts = relationship("CallScript", back_populates="tenant")
     voice_addons = relationship("VoiceAddon", back_populates="tenant")
+    objections = relationship("Objection", back_populates="tenant")
 
 
 class User(Base):
@@ -544,6 +545,23 @@ class VoiceAddon(Base):
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     tenant = relationship("Tenant", back_populates="voice_addons")
+
+
+class Objection(Base):
+    """Stores objections extracted from call transcripts with responses."""
+
+    __tablename__ = "objections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    objection_text = Column(Text, nullable=False)
+    category = Column(String, nullable=False)
+    responses = Column(JSONB, default=list)
+    times_encountered = Column(Integer, default=1)
+    context = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="objections")
 
 
 class LeadInteraction(Base):

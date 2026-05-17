@@ -27,6 +27,7 @@ from core.models import (
     Message,
     MessageDirection,
     MessageStatus,
+    Objection,
     Plan,
     PlanName,
     Sequence,
@@ -455,3 +456,24 @@ def make_lead_interaction(
     }
     defaults.update(kwargs)
     return LeadInteraction(**defaults)
+
+
+def make_objection(
+    tenant_id: uuid.UUID | None = None,
+    **kwargs,
+) -> Objection:
+    """Create an Objection instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "objection_text": "It's too expensive for our budget",
+        "category": "pricing",
+        "responses": [
+            {"text": "I understand budget concerns. Let me show the ROI.", "success_rate": 0.7, "times_used": 5}
+        ],
+        "times_encountered": 3,
+        "context": "Raised during pricing discussion",
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return Objection(**defaults)

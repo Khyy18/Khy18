@@ -343,3 +343,61 @@ Set delivery preferences per tenant:
   "telegram_chat_id": "123456789"
 }
 ```
+
+## AI Agents (Deep Intelligence)
+
+Advanced AI agents that optimize outbound sales operations through data analysis, ML predictions, and adaptive communication.
+
+### Script Optimizer (`agents/script_optimizer.py`)
+
+Analyzes call script performance by comparing transcripts with outcomes. Identifies which phrases and approaches correlate with successful calls (qualified leads) versus unsuccessful ones.
+
+**Capabilities:**
+- Analyze script performance across all calls using that script
+- Generate optimization suggestions with confidence scores for each script section (greeting, qualification, offer, closing)
+- Create A/B test variants from suggestions to validate improvements
+
+**API Endpoints:**
+- `GET /api/voice/scripts/{id}/optimization-suggestions` - Get actionable suggestions for a script
+
+### Lead Timing Predictor (`agents/timing_predictor.py`)
+
+ML model (Gradient Boosting) trained on historical call data to predict optimal contact times for leads. Uses features like timezone, industry, seniority level, day of week, and hour.
+
+**Capabilities:**
+- Train on historical call outcome data per tenant
+- Predict best contact times for a specific lead (ranked time slots)
+- Raw probability prediction for arbitrary feature combinations
+- Handles insufficient training data gracefully (returns uniform distribution)
+
+### Persona Adapter (`agents/persona_adapter.py`)
+
+Detects lead persona type from enrichment data and adapts communication style. Uses rule-based detection with LLM fallback for ambiguous cases.
+
+**Persona Types:** C_LEVEL, VP, DIRECTOR, MANAGER, TECHNICAL, STARTUP_FOUNDER, SMB_OWNER
+
+**Capabilities:**
+- Detect persona from title, company size, and industry data
+- Generate PersonaProfile with formality level, technical depth, urgency preference, value framing, and tone
+- Adapt messages to match persona communication style via LLM
+- Provide voice-specific adjustments (pace, tone, vocabulary level) for voice calls
+
+### Objection Handler (`agents/objection_handler.py`)
+
+Extracts objections from call transcripts, builds a searchable library of objections with proven responses, and tracks success rates over time.
+
+**Objection Categories:** pricing, timing, authority, need, competitor, technical
+
+**Capabilities:**
+- Extract objections from call transcripts using LLM
+- Search the library for best responses to similar objections
+- Record outcomes to update response success rates over time
+- Batch-process historical calls to build the initial library
+
+**API Endpoints:**
+- `GET /api/voice/objections` - List objection library with pagination and category filter
+- `POST /api/voice/objections/{id}/response` - Add a new response to an objection
+- `GET /api/voice/objections/categories` - List categories with counts
+
+**Database:** `objections` table (migration 013) with JSONB responses array tracking text, success_rate, and times_used per response.
+

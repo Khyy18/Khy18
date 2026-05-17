@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import Call, CallScript, CallStatus, CallOutcome, User
+from core.models import Call, CallScript, CallStatus, CallOutcome, Objection, User
 from dashboard.auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -496,3 +496,164 @@ async def initiate_test_call(
         "phone_number": data.phone_number,
         "script_id": data.script_id,
     }
+
+
+# ---------- Script Optimization Endpoints ----------
+
+
+@router.get("/scripts/{script_id}/optimization-suggestions")
+async def get_script_optimization_suggestions(
+    script_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Get optimization suggestions for a call script based on performance data."""
+    # Verify script belongs to tenant
+    result = await session.execute(
+        select(CallScript).where(
+            CallScript.id == script_id,
+            CallScript.tenant_id == current_user.tenant_id,
+        )
+    )
+    script = result.scalar_one_or_none()
+    if script is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Script not found",
+        )
+
+    from agents.script_optimizer import ScriptOptimizerAgent
+    from core.config import settings as app_settings
+    from core.db import async_session_factory
+
+    try:
+        from core.llm import FallbackLLMClient
+        llm_client = FallbackLLMClient(app_settings)
+    except Exception:
+        from core.llm import LLMClient
+        llm_client = LLMClient(
+            provider="openai",
+            api_key=app_settings.openai_api_key,
+            model=app_settings.llm_openai_model,
+        )
+
+    optimizer = ScriptOptimizerAgent(
+        llm_client=llm_client,
+        session_factory=async_session_factory,
+        settings=app_settings,
+    )
+
+    suggestions = await optimizer.get_optimization_suggestions(
+        script_id=script.id,
+    )
+
+    return {
+        "script_id": script_id,
+        "suggestions": [s.model_dump() for s in suggestions],
+    }
+
+
+# ---------- Objection Library Endpoints ----------
+
+
+class AddResponseRequest(BaseModel):
+    text: str
+
+
+@router.get("/objections")
+async def list_objections(
+    category: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 50,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """List the objection library for the tenant with pagination."""
+    query = select(Objection).where(Objection.tenant_id == current_user.tenant_id)
+
+    if category:
+        query = query.where(Objection.category == category)
+
+    # Count total
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await session.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # Apply pagination
+    query = query.order_by(Objection.times_encountered.desc()).offset(offset).limit(limit)
+    result = await session.execute(query)
+    objections = result.scalars().all()
+
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "objections": [
+            {
+                "id": str(o.id),
+                "objection_text": o.objection_text,
+                "category": o.category,
+                "responses": o.responses or [],
+                "times_encountered": o.times_encountered,
+                "context": o.context,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+            for o in objections
+        ],
+    }
+
+
+@router.post("/objections/{objection_id}/response")
+async def add_objection_response(
+    objection_id: str,
+    data: AddResponseRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Add a new response to an objection."""
+    result = await session.execute(
+        select(Objection).where(
+            Objection.id == objection_id,
+            Objection.tenant_id == current_user.tenant_id,
+        )
+    )
+    objection = result.scalar_one_or_none()
+    if objection is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Objection not found",
+        )
+
+    responses = list(objection.responses) if objection.responses else []
+    responses.append({
+        "text": data.text,
+        "success_rate": 0.0,
+        "times_used": 0,
+    })
+    objection.responses = responses
+    await session.commit()
+
+    return {
+        "id": str(objection.id),
+        "objection_text": objection.objection_text,
+        "responses": objection.responses,
+    }
+
+
+@router.get("/objections/categories")
+async def list_objection_categories(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> list[dict]:
+    """List objection categories with counts."""
+    result = await session.execute(
+        select(Objection.category, func.count()).where(
+            Objection.tenant_id == current_user.tenant_id,
+        ).group_by(Objection.category)
+    )
+    categories = result.all()
+
+    return [
+        {"category": cat, "count": count}
+        for cat, count in categories
+    ]
