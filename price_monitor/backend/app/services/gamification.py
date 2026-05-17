@@ -75,7 +75,10 @@ class GamificationService:
 
         # Check veteran badge (account age >= 30 days)
         if "veteran_30" not in existing_types and user.created_at:
-            age = datetime.now(timezone.utc) - user.created_at
+            created = user.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - created
             if age >= timedelta(days=30):
                 badge = await self._award_badge(user_id, "veteran_30", db)
                 awarded.append(badge)
