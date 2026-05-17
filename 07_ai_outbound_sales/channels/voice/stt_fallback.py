@@ -1,3 +1,4 @@
+from __future__ import annotations
 """STT fallback: Deepgram primary with OpenAI Whisper API as fallback."""
 
 import logging

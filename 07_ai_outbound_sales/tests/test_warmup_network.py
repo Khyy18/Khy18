@@ -1,4 +1,5 @@
 """Tests for warmup network cross-tenant domain warming."""
+from __future__ import annotations
 
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch

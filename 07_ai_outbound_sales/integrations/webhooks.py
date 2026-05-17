@@ -1,4 +1,5 @@
 """Outgoing webhook dispatcher with HMAC-SHA256 signing and retry logic."""
+from __future__ import annotations
 
 import asyncio
 import hashlib

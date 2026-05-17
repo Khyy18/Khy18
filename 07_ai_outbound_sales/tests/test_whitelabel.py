@@ -1,4 +1,5 @@
 """Tests for white-label system, API key auth, webhooks, and CRM sync."""
+from __future__ import annotations
 
 import hashlib
 import hmac

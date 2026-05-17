@@ -1,4 +1,5 @@
 """Integration tests for WebSocket media stream, scheduler tick, and signature validation."""
+from __future__ import annotations
 
 import asyncio
 import base64

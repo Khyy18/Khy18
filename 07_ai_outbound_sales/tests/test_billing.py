@@ -1,4 +1,5 @@
 """Tests for the billing webhook handler."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone

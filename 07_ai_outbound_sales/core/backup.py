@@ -1,4 +1,5 @@
 """Automated data backup system for PostgreSQL and Redis."""
+from __future__ import annotations
 
 import asyncio
 import logging

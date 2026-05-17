@@ -1,4 +1,5 @@
 """Tests for calendar integration: CalendlyClient, CalendarManager, and calendar API routes."""
+from __future__ import annotations
 
 import uuid
 from unittest.mock import AsyncMock, patch, MagicMock

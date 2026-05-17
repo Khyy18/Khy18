@@ -1,4 +1,5 @@
 """E2E tests for the voice channel flow."""
+from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 

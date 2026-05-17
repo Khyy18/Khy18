@@ -1,4 +1,5 @@
 """Tests for AI Call Coaching Agent."""
+from __future__ import annotations
 
 import json
 import uuid

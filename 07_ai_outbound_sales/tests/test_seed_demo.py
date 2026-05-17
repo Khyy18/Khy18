@@ -1,4 +1,5 @@
 """Tests for the demo seed script."""
+from __future__ import annotations
 
 import ast
 import os

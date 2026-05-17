@@ -1,4 +1,5 @@
 """Intelligent LLM router that selects appropriate models based on task type."""
+from __future__ import annotations
 
 import enum
 import logging

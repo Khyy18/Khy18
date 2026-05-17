@@ -1,4 +1,5 @@
 """CRM synchronization adapters for HubSpot and Pipedrive."""
+from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod

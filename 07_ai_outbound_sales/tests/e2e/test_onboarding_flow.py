@@ -1,4 +1,5 @@
 """E2E tests for the onboarding step-based flow."""
+from __future__ import annotations
 
 from unittest.mock import patch
 

@@ -1,4 +1,5 @@
 """Tests for enhanced funnel analytics, conversion rates, and channel performance endpoints."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone

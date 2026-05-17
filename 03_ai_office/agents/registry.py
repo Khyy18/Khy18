@@ -1,5 +1,7 @@
 """Реестр агентов AI Office."""
 
+from __future__ import annotations
+
 from ai_office.agents.base import AgentConfig
 
 

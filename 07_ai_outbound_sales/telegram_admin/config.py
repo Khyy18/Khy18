@@ -1,4 +1,5 @@
 """Configuration for the Telegram Admin Bot."""
+from __future__ import annotations
 
 import os
 

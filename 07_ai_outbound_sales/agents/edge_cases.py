@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Edge Case Detector - handles uncommon conversation scenarios."""
 
 import logging

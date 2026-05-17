@@ -1,3 +1,4 @@
+from __future__ import annotations
 """TTS fallback: ElevenLabs primary with OpenAI TTS as fallback."""
 
 import logging

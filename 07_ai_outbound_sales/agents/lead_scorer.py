@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Lead scoring module: scores leads based on engagement signals and ICP fit."""
 
 import asyncio

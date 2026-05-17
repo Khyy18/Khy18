@@ -1,4 +1,5 @@
 """Tests for voice dashboard API routes and webhooks."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone

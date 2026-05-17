@@ -1,4 +1,5 @@
 """Tests for the self-serve onboarding flow."""
+from __future__ import annotations
 
 import json
 import uuid

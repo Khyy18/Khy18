@@ -1,4 +1,5 @@
 """Tests for multi-language voice support."""
+from __future__ import annotations
 
 import json
 import uuid

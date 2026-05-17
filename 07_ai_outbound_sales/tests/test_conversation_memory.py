@@ -1,4 +1,5 @@
 """Tests for Conversation Memory (Cross-Call) feature."""
+from __future__ import annotations
 
 import json
 import uuid

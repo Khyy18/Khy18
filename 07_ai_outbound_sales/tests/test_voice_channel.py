@@ -1,4 +1,5 @@
 """Comprehensive tests for the voice channel components."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone

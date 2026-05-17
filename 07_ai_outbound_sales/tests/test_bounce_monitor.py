@@ -1,4 +1,5 @@
 """Tests for BounceMonitor - record_bounce, should_pause at threshold, record_send."""
+from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 

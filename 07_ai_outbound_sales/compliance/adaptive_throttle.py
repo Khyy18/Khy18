@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Adaptive rate limiting that monitors channel health and adjusts sending rates."""
 
 import logging

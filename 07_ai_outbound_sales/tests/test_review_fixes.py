@@ -1,4 +1,5 @@
 """Tests for code review fixes: cross-tenant events, CRM since filter, ML deterministic hash, warmup TTL, Redis reuse."""
+from __future__ import annotations
 
 import hashlib
 import uuid

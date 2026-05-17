@@ -1,4 +1,5 @@
 """E2E tests for the authentication flow."""
+from __future__ import annotations
 
 import uuid
 from unittest.mock import patch

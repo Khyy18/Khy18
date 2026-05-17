@@ -1,4 +1,5 @@
 """Tests for the enhanced health check router."""
+from __future__ import annotations
 
 import os
 from unittest.mock import AsyncMock, patch, MagicMock

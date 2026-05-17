@@ -1,4 +1,5 @@
 """Tests for the referral system."""
+from __future__ import annotations
 
 import uuid
 

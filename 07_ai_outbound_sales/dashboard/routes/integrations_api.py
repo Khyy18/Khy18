@@ -1,4 +1,5 @@
 """External API endpoints for integrations (Zapier/Make/CRM)."""
+from __future__ import annotations
 
 import hashlib
 import secrets

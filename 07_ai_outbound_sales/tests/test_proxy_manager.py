@@ -1,4 +1,5 @@
 """Tests for channels/linkedin/proxy_manager.py - ProxyManager."""
+from __future__ import annotations
 
 import pytest
 

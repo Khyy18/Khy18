@@ -1,3 +1,4 @@
+from __future__ import annotations
 """White-label branding configuration for multi-tenant support."""
 
 from typing import Optional

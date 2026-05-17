@@ -1,5 +1,7 @@
 """Shared test fixtures for the AI Outbound Agency test suite."""
 
+from __future__ import annotations
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator

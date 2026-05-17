@@ -1,4 +1,5 @@
 """E2E tests for campaign CRUD operations."""
+from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 

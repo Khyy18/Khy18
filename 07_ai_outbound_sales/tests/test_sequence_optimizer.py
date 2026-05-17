@@ -1,4 +1,5 @@
 """Tests for Smart Sequencing / Sequence Optimizer Agent."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone

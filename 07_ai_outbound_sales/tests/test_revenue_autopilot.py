@@ -1,4 +1,5 @@
 """Tests for the Revenue Autopilot system."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone

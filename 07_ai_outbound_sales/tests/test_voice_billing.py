@@ -1,4 +1,5 @@
 """Tests for Voice AI add-on billing logic."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
