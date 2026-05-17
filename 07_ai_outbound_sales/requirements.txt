@@ -42,4 +42,5 @@ pytest-cov
 factory-boy
 aiosqlite
 ruff
+locust
 
