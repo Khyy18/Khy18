@@ -10,6 +10,9 @@ from ai_office.agents.nova import nova_config
 from ai_office.agents.marketing import iris_config
 from ai_office.agents.finance import oscar_config
 from ai_office.agents.outbound_sales import outbound_sales_config
+from ai_office.agents.zenith_trading import zenith_trading_config
+from ai_office.agents.text_agency import text_agency_config
+from ai_office.agents.combo_bot import combo_bot_config
 
 # Register all agents
 registry.register(alice_config)
@@ -21,3 +24,6 @@ registry.register(nova_config)
 registry.register(iris_config)
 registry.register(oscar_config)
 registry.register(outbound_sales_config)
+registry.register(zenith_trading_config)
+registry.register(text_agency_config)
+registry.register(combo_bot_config)

@@ -37,6 +37,24 @@ class Settings(BaseSettings):
         description="URL сервиса AI Outbound Sales",
     )
 
+    # Zenith Crypto Trading
+    zenith_api_url: str = Field(
+        default="http://localhost:8002",
+        description="URL сервиса Zenith Crypto Trading",
+    )
+
+    # AI Text Agency
+    text_agency_api_url: str = Field(
+        default="http://localhost:8003",
+        description="URL сервиса AI Text Agency",
+    )
+
+    # Combo Bot
+    combo_bot_api_url: str = Field(
+        default="http://localhost:8004",
+        description="URL сервиса Combo Bot",
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

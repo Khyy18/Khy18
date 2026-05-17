@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, ListTodo, Activity, GitBranch, Clock, TrendingUp } from 'lucide-react'
+import { Users, ListTodo, Activity, GitBranch, Clock, TrendingUp, Server } from 'lucide-react'
 import AgentCard from './components/AgentCard'
 import TaskCard from './components/TaskCard'
 import ActivityLog from './components/ActivityLog'
@@ -8,6 +8,9 @@ import AgentGraph from './components/AgentGraph'
 import TaskTimeline from './components/TaskTimeline'
 import AgentDetailView from './components/AgentDetailView'
 import SalesPanel from './components/SalesPanel'
+import ZenithPanel from './components/ZenithPanel'
+import TextAgencyPanel from './components/TextAgencyPanel'
+import ComboBotPanel from './components/ComboBotPanel'
 import { ToastContainer, showToast } from './components/Toast'
 import { useApi } from './hooks/useApi'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -100,7 +103,7 @@ export default function App() {
     { id: 'agents', label: 'Agents', icon: Users },
     { id: 'tasks', label: 'Tasks', icon: ListTodo },
     { id: 'activity', label: 'Activity', icon: Activity },
-    { id: 'sales', label: 'Sales', icon: TrendingUp },
+    { id: 'services', label: 'Services', icon: Server },
     { id: 'graph', label: 'Graph', icon: GitBranch },
     { id: 'timeline', label: 'Timeline', icon: Clock },
   ]
@@ -163,8 +166,13 @@ export default function App() {
               <ActivityLog activities={activity || []} />
             )}
 
-            {activeTab === 'sales' && (
-              <SalesPanel />
+            {activeTab === 'services' && (
+              <div className="space-y-6">
+                <SalesPanel />
+                <ZenithPanel />
+                <TextAgencyPanel />
+                <ComboBotPanel />
+              </div>
             )}
 
             {activeTab === 'graph' && (
