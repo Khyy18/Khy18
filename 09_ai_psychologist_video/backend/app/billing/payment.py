@@ -145,13 +145,25 @@ async def telegram_payment_webhook(request: Request):
         payment = message["successful_payment"]
         telegram_id = message["from"]["id"]
         stars_amount = payment["total_amount"]
-        invoice_payload = payment.get("invoice_payload", "")
+        charge_id = payment.get("telegram_payment_charge_id", "")
 
         # Конвертируем Stars в рубли
         rub_amount = Decimal(str(stars_amount)) * STARS_TO_RUB_RATE
 
+        # Уникальный source для дедупликации
+        tx_source = f"stars:{charge_id}" if charge_id else f"stars:{stars_amount}"
+
         # Начисляем на баланс
         async with async_session_factory() as session:
+            # Проверяем дедупликацию: если транзакция с таким source уже существует - пропускаем
+            if charge_id:
+                dup_check = await session.execute(
+                    select(Transaction).where(Transaction.source == tx_source)
+                )
+                if dup_check.scalar_one_or_none():
+                    logger.info(f"Stars payment duplicate skipped: {tx_source}")
+                    return {"ok": True}
+
             result = await session.execute(
                 select(User).where(User.telegram_id == telegram_id)
             )
@@ -163,7 +175,7 @@ async def telegram_payment_webhook(request: Request):
                     user_id=user.id,
                     amount=rub_amount,
                     type=TransactionType.deposit,
-                    source=f"stars:{stars_amount}",
+                    source=tx_source,
                 )
                 session.add(tx)
                 await session.commit()
@@ -253,8 +265,13 @@ async def yokassa_webhook(request: Request):
         allowed_ips = [ip.strip() for ip in settings.YOOKASSA_WEBHOOK_IPS.split(",") if ip.strip()]
         client_ip = request.client.host if request.client else ""
         # Учитываем X-Forwarded-For при работе за прокси
+        # Берем последний IP в цепочке (добавленный доверенным прокси)
         forwarded_for = request.headers.get("X-Forwarded-For", "")
-        real_ip = forwarded_for.split(",")[0].strip() if forwarded_for else client_ip
+        if forwarded_for:
+            parts = [p.strip() for p in forwarded_for.split(",") if p.strip()]
+            real_ip = parts[-1] if parts else client_ip
+        else:
+            real_ip = client_ip
         if allowed_ips and real_ip not in allowed_ips:
             logger.warning(f"YooKassa webhook: rejected IP {real_ip}")
             raise HTTPException(status_code=403, detail="IP not allowed")
@@ -274,8 +291,17 @@ async def yokassa_webhook(request: Request):
             return {"ok": True}
 
         rub_amount = Decimal(amount_value)
+        tx_source = f"yookassa:{payment_id}"
 
         async with async_session_factory() as session:
+            # Проверяем дедупликацию: если транзакция с таким source уже существует - пропускаем
+            dup_check = await session.execute(
+                select(Transaction).where(Transaction.source == tx_source)
+            )
+            if dup_check.scalar_one_or_none():
+                logger.info(f"YooKassa payment duplicate skipped: {tx_source}")
+                return {"ok": True}
+
             result = await session.execute(
                 select(User).where(User.id == user_id)
             )
@@ -287,7 +313,7 @@ async def yokassa_webhook(request: Request):
                     user_id=user.id,
                     amount=rub_amount,
                     type=TransactionType.deposit,
-                    source=f"yookassa:{payment_id}",
+                    source=tx_source,
                 )
                 session.add(tx)
                 await session.commit()

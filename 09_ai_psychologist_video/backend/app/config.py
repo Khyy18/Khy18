@@ -35,6 +35,7 @@ class Settings(BaseSettings):
 
     # --- Webhook безопасность ---
     TELEGRAM_WEBHOOK_SECRET: str = ""  # secret_token для верификации Telegram webhook
+    BOT_USERNAME: str = "ai_psychologist_bot"  # username бота для реферальных ссылок
 
     # --- CORS ---
     CORS_ORIGINS: str = "http://localhost:5173,https://localhost:5173"

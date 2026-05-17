@@ -7,6 +7,8 @@ Telegram Bot модуль: обработчики команд (aiogram 3.x) и 
 - /help - справка
 """
 
+import hashlib
+import hmac as hmac_mod
 import logging
 
 from aiogram import Bot, Dispatcher, Router as AiogramRouter
@@ -137,12 +139,24 @@ async def bot_webhook(request: Request):
     """
     Webhook endpoint для получения обновлений от Telegram.
     Telegram отправляет Update JSON на этот URL.
+    Верифицирует X-Telegram-Bot-Api-Secret-Token заголовок.
     """
     if not settings.BOT_TOKEN:
         raise HTTPException(
             status_code=503,
             detail="Bot token not configured. Webhook unavailable.",
         )
+
+    # Верификация секретного токена Telegram webhook
+    expected_secret = settings.TELEGRAM_WEBHOOK_SECRET
+    if not expected_secret:
+        # Фоллбек: используем SHA256 хеш BOT_TOKEN как секрет
+        expected_secret = hashlib.sha256(settings.BOT_TOKEN.encode()).hexdigest()
+
+    received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not hmac_mod.compare_digest(received_secret, expected_secret):
+        logger.warning("Bot webhook: invalid secret token")
+        raise HTTPException(status_code=403, detail="Invalid secret token")
 
     bot = _get_bot()
     dp = _get_dispatcher()

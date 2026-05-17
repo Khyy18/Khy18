@@ -3,12 +3,12 @@ Sessions router: create sessions, list sessions, get profile, session summary.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func as sa_func
 
 from app.auth.dependencies import get_current_user_id
 from app.config import settings
@@ -18,6 +18,8 @@ from app.models.database import (
     Session,
     SessionStatus,
     SessionNote,
+    Subscription,
+    SubscriptionPlan,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,7 @@ async def create_session(user_id: str = Depends(get_current_user_id)):
     """
     Create a new active session for the current user.
     Verifies the user has sufficient balance before creating.
+    Enforces subscription minutes_per_month limits if applicable.
     """
     async with async_session_factory() as session:
         result = await session.execute(
@@ -107,6 +110,43 @@ async def create_session(user_id: str = Depends(get_current_user_id)):
                 status_code=402,
                 detail="Insufficient balance to start a session",
             )
+
+        # Проверяем лимит подписки по минутам в месяц
+        sub_result = await session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user_id,
+                Subscription.expires_at > datetime.utcnow(),
+            )
+        )
+        active_sub = sub_result.scalar_one_or_none()
+
+        if active_sub:
+            # Определяем лимит минут для плана
+            from app.subscriptions.router import PLANS
+            plan_data = next((p for p in PLANS if p["id"] == active_sub.plan.value), None)
+            if plan_data:
+                minutes_limit = plan_data["minutes_per_month"]
+                # minutes_per_month == -1 означает безлимит
+                if minutes_limit > 0:
+                    # Считаем общее время сессий за текущий месяц
+                    month_start = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    usage_result = await session.execute(
+                        select(
+                            sa_func.coalesce(
+                                sa_func.sum(Session.total_cost / Session.rate_per_minute),
+                                0,
+                            )
+                        ).where(
+                            Session.user_id == user_id,
+                            Session.started_at >= month_start,
+                        )
+                    )
+                    used_minutes = float(usage_result.scalar() or 0)
+                    if used_minutes >= minutes_limit:
+                        raise HTTPException(
+                            status_code=402,
+                            detail=f"Monthly limit of {minutes_limit} minutes exceeded",
+                        )
 
         # Проверяем, нет ли уже активной сессии у пользователя
         active_check = await session.execute(

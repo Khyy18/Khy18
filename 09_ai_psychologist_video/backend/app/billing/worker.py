@@ -93,10 +93,18 @@ class BillingWorker:
         """
         Per-session billing loop: sleep 60s, deduct rate atomically,
         check balance, publish warnings or force_end.
+        Skips deduction if user has active premium subscription.
         """
         try:
             await asyncio.sleep(60)
             while True:
+                # Проверяем активную подписку premium - не списываем средства
+                if await self._has_active_premium(user_id):
+                    # Только обновляем total_cost для статистики, не списываем баланс
+                    await self._update_session_cost(session_id, rate)
+                    await asyncio.sleep(60)
+                    continue
+
                 new_balance = await self._deduct_balance(session_id, user_id, rate)
                 if new_balance is None:
                     # Ошибка при списании, прекращаем
@@ -123,6 +131,37 @@ class BillingWorker:
             logger.error(f"Session billing loop error for {session_id}: {e}")
         finally:
             self._session_tasks.pop(session_id, None)
+
+    async def _has_active_premium(self, user_id: str) -> bool:
+        """Проверяет, есть ли у пользователя активная premium подписка."""
+        try:
+            from app.models.database import Subscription, SubscriptionPlan
+            async with async_session_factory() as session:
+                result = await session.execute(
+                    select(Subscription).where(
+                        Subscription.user_id == user_id,
+                        Subscription.plan == SubscriptionPlan.premium,
+                        Subscription.expires_at > datetime.utcnow(),
+                    )
+                )
+                return result.scalar_one_or_none() is not None
+        except Exception as e:
+            logger.error(f"Error checking premium subscription for user {user_id}: {e}")
+            return False
+
+    async def _update_session_cost(self, session_id: str, rate: Decimal):
+        """Обновляет total_cost сессии без списания с баланса (для premium подписок)."""
+        try:
+            async with async_session_factory() as session:
+                await session.execute(
+                    text(
+                        "UPDATE sessions SET total_cost = total_cost + :rate WHERE id = :session_id"
+                    ),
+                    {"rate": str(rate), "session_id": session_id},
+                )
+                await session.commit()
+        except Exception as e:
+            logger.error(f"Update session cost error for {session_id}: {e}")
 
     async def _deduct_balance(self, session_id: str, user_id: str, rate: Decimal) -> Decimal | None:
         """

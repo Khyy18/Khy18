@@ -53,12 +53,7 @@ async def get_referral_link(user_id: str = Depends(get_current_user_id)):
     Генерация реферальной ссылки для пользователя.
     Формат: https://t.me/{bot_username}?start=ref_{user_id}
     """
-    # Извлекаем username бота из BOT_TOKEN (или используем placeholder)
-    bot_username = "ai_psychologist_bot"
-    if settings.BOT_TOKEN:
-        # BOT_TOKEN формат: 123456:ABC-DEF - username получаем через API,
-        # но для генерации ссылки используем фиксированное имя бота
-        pass
+    bot_username = settings.BOT_USERNAME
 
     link = f"https://t.me/{bot_username}?start=ref_{user_id}"
     return ReferralLinkResponse(link=link)
