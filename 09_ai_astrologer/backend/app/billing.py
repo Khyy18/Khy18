@@ -100,6 +100,27 @@ class BillingManager:
         channel = f"billing:{session_id}"
         await self._redis.publish(channel, event.model_dump_json())
 
+    async def _persist_event(self, event: BillingEvent) -> None:
+        """Persist billing event to PostgreSQL for audit trail."""
+        try:
+            from app.database import _async_session, BillingEventLog
+
+            if _async_session is None:
+                return  # Database not configured
+            async with _async_session() as session:
+                log_entry = BillingEventLog(
+                    session_id=event.session_id,
+                    user_id=event.user_id,
+                    event_type=event.event_type,
+                    amount=event.amount,
+                    balance_after=event.balance_after,
+                    timestamp=event.timestamp,
+                )
+                session.add(log_entry)
+                await session.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist billing event: {e}")
+
     async def subscribe_billing_events(self, session_id: str):
         """Subscribe to billing events for a session.
 
@@ -190,6 +211,7 @@ class BillingManager:
                         timestamp=datetime.utcnow(),
                     )
                     await self.publish_billing_event(session_id, warning_event)
+                    await self._persist_event(warning_event)
                     if ws:
                         try:
                             await ws.send_json(warning_event.model_dump(mode="json"))
@@ -208,6 +230,7 @@ class BillingManager:
                         timestamp=datetime.utcnow(),
                     )
                     await self.publish_billing_event(session_id, event)
+                    await self._persist_event(event)
                     if ws:
                         try:
                             await ws.send_json(event.model_dump(mode="json"))
@@ -241,6 +264,7 @@ class BillingManager:
                             timestamp=datetime.utcnow(),
                         )
                         await self.publish_billing_event(session_id, warning_event)
+                        await self._persist_event(warning_event)
                         if ws:
                             try:
                                 await ws.send_json(
@@ -258,6 +282,7 @@ class BillingManager:
                         timestamp=datetime.utcnow(),
                     )
                     await self.publish_billing_event(session_id, terminate_event)
+                    await self._persist_event(terminate_event)
                     if ws:
                         try:
                             await ws.send_json(

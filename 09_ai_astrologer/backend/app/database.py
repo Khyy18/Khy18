@@ -35,7 +35,6 @@ class User(Base):
     balance = Column(Integer, default=0, nullable=False)
 
     sessions = relationship("Session", back_populates="user")
-    billing_events = relationship("BillingEventLog", back_populates="user")
 
 
 class Session(Base):
@@ -61,13 +60,11 @@ class BillingEventLog(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(String(64), nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(String(64), nullable=False)
     event_type = Column(String(32), nullable=False)
     amount = Column(Integer, default=0, nullable=False)
     balance_after = Column(Integer, default=0, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    user = relationship("User", back_populates="billing_events")
 
 
 # Module-level engine and session maker

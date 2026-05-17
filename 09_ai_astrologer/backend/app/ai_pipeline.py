@@ -16,6 +16,7 @@ from app.circuit_breaker import (
 )
 from app.config import settings
 from app.http_client import get_http_client
+from app.avatar_streaming import SimliAvatarStreamer
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +115,12 @@ async def synthesize_speech(text: str, client: httpx.AsyncClient) -> bytes:
 
 
 async def get_lip_sync_video(audio_bytes: bytes) -> Optional[bytes]:
-    """Generate lip-sync video from audio (placeholder for Simli/LiveKit integration).
+    """Generate lip-sync video from audio.
 
-    This is a placeholder that will be implemented when the Simli or LiveKit
-    integration is ready. Currently returns None.
+    Deprecated: Use SimliAvatarStreamer.send_audio_get_video() instead.
+    Kept for backward compatibility.
     """
-    logger.info("Lip-sync generation placeholder called - not yet implemented")
+    logger.info("Lip-sync generation placeholder called - use SimliAvatarStreamer instead")
     return None
 
 
@@ -130,6 +131,7 @@ class AIPipeline:
         self.system_prompt = system_prompt
         self.conversation_history: list[dict[str, str]] = []
         self._http_client = http_client
+        self._avatar_streamer = SimliAvatarStreamer(http_client=http_client)
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -191,7 +193,7 @@ class AIPipeline:
             # Fallback to non-streaming TTS
             audio_response = await synthesize_speech(response_text, self.client)
 
-        video_response = await get_lip_sync_video(audio_response)
+        video_response = await self._avatar_streamer.send_audio_get_video(audio_response)
 
         return {
             "transcript": transcript,
