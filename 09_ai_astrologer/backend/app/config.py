@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     database_url: str = ""
     rate_limit_requests: int = 10
     rate_limit_window: int = 60
+    vad_energy_threshold: float = 0.01
+    vad_silence_duration_ms: int = 800
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

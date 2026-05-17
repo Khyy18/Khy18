@@ -8,57 +8,72 @@ Telegram Mini App для живых астрологических консул�
 ## Архитектура
 
 ```
-+---------------------+           +---------------------+
-|   TMA Frontend      |           |   FastAPI Backend   |
-|  (React + Vite)     |           |   (Python 3.11)     |
-|                     |           |                     |
-|  AstroCall UI       +--REST---->+  /api/session/start |
-|  Balance display    |           |  /api/balance/topup |
-|  User video preview |           |  Natal chart calc   |
-|                     |           |  (pyswisseph)       |
-|                     +--WS------>+  /ws/call/{id}      |
-|                     +--WS------>+  /ws/billing/{id}   |
-+---------------------+           +----------+----------+
++---------------------+           +---------------------------+
+|   TMA Frontend      |           |     FastAPI Backend       |
+|  (React + Vite)     |           |     (Python 3.11)        |
+|                     |           |                           |
+|  OnboardingScreen   +--REST---->+  /api/session/start       |
+|  PaymentModal       |           |  /api/balance/topup       |
+|  AstroCall UI       |           |  /api/geocode             |
+|  WebRTC abstraction |           |  /api/payments/*          |
+|                     |           |  /metrics                 |
+|                     +--WS------>+  /ws/call/{id}            |
+|                     +--WS------>+  /ws/billing/{id}         |
++---------------------+           +----------+----------------+
                                              |
-                                             | async
+                                             | async pipeline
                                              v
                                   +----------+----------+
                                   |     AI Pipeline     |
+                                  |   (circuit breakers)|
                                   |                     |
-                                  | 1. Groq STT         |
-                                  |    (Distil-Whisper) |
-                                  | 2. Claude LLM       |
-                                  |    (Anthropic API)  |
-                                  | 3. ElevenLabs TTS   |
-                                  |    (multilingual)   |
-                                  | 4. Lip-Sync Avatar  |
-                                  |    (Simli/LiveKit)  |
+                                  | 1. VAD (energy)     |
+                                  | 2. Groq STT         |
+                                  | 3. Claude LLM       |
+                                  | 4. ElevenLabs TTS   |
+                                  |    (streaming)      |
+                                  | 5. Lip-Sync Avatar  |
                                   +---------------------+
 
-                                  +---------------------+
-                                  |       Redis         |
-                                  |  - User balances    |
-                                  |  - Session state    |
-                                  +---------------------+
++---------------------+           +---------------------+
+|       Redis         |           |     PostgreSQL      |
+|  - User balances    |           |  - Users            |
+|  - Session state    |           |  - Sessions         |
+|  - Billing pub/sub  |           |  - Billing log      |
+|  - Rate limiting    |           |  (audit trail)      |
++---------------------+           +---------------------+
 ```
+
+### Ключевые архитектурные решения
+
+- **Redis pub/sub** для биллинга: billing worker публикует события в канал `billing:{session_id}`, WebSocket-хендлер подписывается и пересылает клиенту. Позволяет горизонтально масштабировать backend.
+- **PostgreSQL** для персистентного хранения: пользователи, сессии, аудит-лог биллинговых событий. Используется asyncpg через SQLAlchemy async.
+- **Circuit breakers** на внешних API (Groq, Anthropic, ElevenLabs): автоматическое отключение при каскадных ошибках, graceful degradation с fallback-ответами.
+- **Graceful shutdown**: SIGTERM-хендлер прекращает прием новых сессий, ожидает завершения активных, затем корректно закрывает все соединения.
+- **First-message auth** на WebSocket: вместо токена в query string, клиент отправляет `{"type": "auth", "token": "..."}` первым сообщением.
 
 ---
 
 ## Tech Stack
 
 ### Backend
-| Technology | Purpose |
+| Технология | Назначение |
 |---|---|
 | Python 3.11 | Runtime |
 | FastAPI | HTTP + WebSocket framework |
 | Uvicorn | ASGI server |
-| pyswisseph | Swiss Ephemeris for natal chart calculation |
-| Redis (async) | Balance storage, session state |
-| Pydantic v2 | Data validation and settings |
-| httpx | Async HTTP client for external APIs |
+| pyswisseph | Swiss Ephemeris для расчета натальной карты |
+| Redis (async) | Балансы, сессии, pub/sub, rate limiting |
+| PostgreSQL + asyncpg | Персистентное хранение, аудит |
+| SQLAlchemy 2.0 (async) | ORM |
+| Pydantic v2 | Валидация данных и настройки |
+| httpx | Async HTTP клиент с connection pooling |
+| tenacity | Retry-логика для circuit breakers |
+| prometheus-client | Метрики |
+| timezonefinder | Определение таймзоны по координатам |
 
 ### Frontend
-| Technology | Purpose |
+| Технология | Назначение |
 |---|---|
 | React 18 | UI framework |
 | TypeScript 5 | Type safety |
@@ -67,64 +82,69 @@ Telegram Mini App для живых астрологических консул�
 | @telegram-apps/sdk-react | Telegram Mini App SDK |
 
 ### External APIs
-| Service | Role |
+| Сервис | Роль |
 |---|---|
 | Groq (Distil-Whisper) | Speech-to-Text |
-| Anthropic Claude | LLM for astrologer persona |
-| ElevenLabs | Text-to-Speech |
-| Simli / LiveKit | Lip-sync avatar video (placeholder) |
+| Anthropic Claude | LLM для персонажа-астролога |
+| ElevenLabs | Text-to-Speech (streaming) |
+| Simli / LiveKit | Lip-sync avatar видео |
+| Nominatim (OSM) | Геокодинг городов |
+| Telegram Bot API | Платежи через Telegram Stars |
 
 ---
 
 ## Модули
 
-### Модуль 1: Natal Chart (Натальная карта)
+### backend/app/astro.py -- Natal Chart
+Расчет полной натальной карты через Swiss Ephemeris: позиции 10 планет, 12 домов (Плацидус), аспекты с орбисами.
 
-**Файл:** `backend/app/astro.py`
+### backend/app/prompts.py -- System Prompt Persona
+Формирует системный промпт для Claude, определяющий персонажа "Стеллу". Натальная карта инжектится для персонализации.
 
-Рассчитывает полную натальную карту с помощью Swiss Ephemeris (pyswisseph):
-- Позиции 10 планет (Солнце, Луна, Меркурий, Венера, Марс, Юпитер, Сатурн, Уран, Нептун, Плутон)
-- 12 домов (система Плацидуса)
-- Асцендент и MC (Середина Неба)
-- Аспекты между планетами (конъюнкция, оппозиция, трин, квадрат, секстиль) с учетом орбисов
+### backend/app/billing.py -- Billing Manager
+Поминутная тарификация через Redis. Lua-скрипт для атомарного check-and-deduct. Pub/sub для рассылки событий. LOW_BALANCE_WARNING перед исчерпанием.
 
-Вход: дата, время рождения, широта/долгота места рождения.
-Выход: объект `NatalChart` с полным описанием карты.
+### backend/app/session_store.py -- Redis Session Store
+Хранение UserSession, conversation history, pipeline context, auth-токенов в Redis с TTL.
 
-### Модуль 2: System Prompt Persona (AI-персонаж)
+### backend/app/telegram_auth.py -- Telegram Auth
+Валидация initData через HMAC-SHA256 по алгоритму Telegram. FastAPI dependency для защиты эндпоинтов.
 
-**Файл:** `backend/app/prompts.py`
+### backend/app/circuit_breaker.py -- Circuit Breaker
+Паттерн circuit breaker для внешних API. Состояния: closed/open/half-open. Exponential backoff через tenacity.
 
-Формирует системный промпт для Claude, определяющий персонажа "Стеллу":
-- 22-летняя девушка-астролог и блогер
-- Общается неформально, с молодежным сленгом
-- Отвечает 1-3 предложениями (формат голосового сообщения)
-- Эмоциональная, позитивная, поддерживающая
-- Натальная карта пользователя инжектится в промпт для персонализации
+### backend/app/streaming_tts.py -- Streaming TTS
+Потоковая генерация речи через ElevenLabs streaming API. Разбивает текст на предложения, стримит чанки.
 
-### Модуль 3: Billing / WebSocket (Биллинг)
+### backend/app/vad.py -- Voice Activity Detection
+Energy-based VAD для детекции речи. Определяет конец фразы по длительности тишины. Буферизация аудио.
 
-**Файл:** `backend/app/billing.py`
+### backend/app/geocoding.py -- Geocoding
+Поиск города через Nominatim (OSM), определение координат и таймзоны через timezonefinder.
 
-Система поминутной тарификации через Redis и WebSocket:
-- Хранение баланса в Redis (`balance:{user_id}`)
-- Background task списывает монеты каждые N секунд (настраивается)
-- WebSocket отправляет `BALANCE_UPDATE` после каждого списания
-- При нулевом балансе отправляет `TERMINATE_CALL` и завершает сессию
-- Поддержка пополнения баланса через REST endpoint
+### backend/app/database.py -- PostgreSQL Database
+SQLAlchemy async с моделями User, Session, BillingEventLog. Автоматическое создание таблиц при старте.
 
-### Модуль 4: Call UI (Интерфейс звонка)
+### backend/app/rate_limiter.py -- Rate Limiter
+Sliding window rate limiter на Redis sorted sets. FastAPI dependency для защиты эндпоинтов от abuse.
 
-**Файл:** `frontend/src/components/AstroCall.tsx`
+### backend/app/metrics.py -- Prometheus Metrics
+Кастомные метрики: active_calls, call_duration, billing_events, external_api_latency, external_api_errors.
 
-React-компонент полноэкранного видеозвонка:
-- Видео AI-аватара на весь экран
-- Круглое превью камеры пользователя (верхний правый угол)
-- Индикатор соединения (зеленый/красный)
-- Анимированный статус ("Астролог слушает...", "Советуется со звездами...")
-- Кнопки: mute микрофона, завершить звонок, отображение баланса
-- Экран "Баланс исчерпан" с кнопкой пополнения
-- Поддержка Telegram WebApp API
+### backend/app/payments.py -- Telegram Stars Payments
+Интеграция с Telegram Stars: создание invoice, обработка webhook, пакеты (stars -> coins).
+
+### backend/app/http_client.py -- Shared HTTP Client
+Единый httpx.AsyncClient с connection pooling (100 connections, 30s timeout).
+
+### frontend/src/components/OnboardingScreen.tsx -- Onboarding
+Пошаговый ввод данных рождения: дата, время, город (с автокомплитом через /api/geocode). Telegram-стиль.
+
+### frontend/src/components/PaymentModal.tsx -- Payment Modal
+Модальное окно покупки монет через Telegram Stars. Пакеты на выбор.
+
+### frontend/src/components/AstroCall.tsx -- Call UI
+Полноэкранный видеозвонок: аватар, превью камеры, статус pipeline, кнопки управления, баланс.
 
 ---
 
@@ -133,6 +153,7 @@ React-компонент полноэкранного видеозвонка:
 ### POST /api/session/start
 
 Создает новую сессию: рассчитывает натальную карту, инициализирует AI pipeline.
+Требует заголовок `X-Telegram-Init-Data` (валидация через HMAC-SHA256).
 
 **Request:**
 ```json
@@ -143,7 +164,8 @@ React-компонент полноэкранного видеозвонка:
     "time": "14:30",
     "lat": 55.7558,
     "lon": 37.6173,
-    "city": "Москва"
+    "city": "Москва",
+    "tz_offset": 3.0
   },
   "balance": 100
 }
@@ -153,19 +175,9 @@ React-компонент полноэкранного видеозвонка:
 ```json
 {
   "session_id": "uuid-string",
-  "natal_chart": {
-    "planets": {
-      "Sun": { "sign": "Pisces", "degree": "24.51", "house": "10" },
-      "Moon": { "sign": "Leo", "degree": "12.33", "house": "3" }
-    },
-    "houses": { "1": "Gemini", "2": "Cancer" },
-    "ascendant": "Gemini",
-    "mc": "Pisces",
-    "aspects": [
-      { "planet1": "Sun", "planet2": "Moon", "aspect_type": "Trine", "orb": "2.18" }
-    ]
-  },
-  "balance": 100
+  "natal_chart": { "planets": {...}, "houses": {...}, "ascendant": "Gemini", "mc": "Pisces", "aspects": [...] },
+  "balance": 100,
+  "token": "session-auth-token-for-websocket"
 }
 ```
 
@@ -173,49 +185,62 @@ React-компонент полноэкранного видеозвонка:
 
 Возвращает текущий статус сессии.
 
+### POST /api/balance/topup
+
+Пополнение баланса пользователя. Rate limited: 5 запросов в 60 секунд.
+
+### GET /api/geocode?city={query}
+
+Поиск города по названию. Возвращает список подсказок с координатами и таймзоной.
+
 **Response:**
 ```json
 {
-  "session_id": "uuid-string",
-  "status": "active",
-  "balance": 80,
-  "user_id": "tg_12345"
+  "suggestions": [
+    {
+      "display_name": "Москва, Россия",
+      "lat": 55.7558,
+      "lon": 37.6173,
+      "timezone": "Europe/Moscow"
+    }
+  ]
 }
 ```
 
-Возможные статусы: `idle`, `connecting`, `active`, `ended`.
+### POST /api/payments/create-invoice
 
-### POST /api/balance/topup
-
-Пополнение баланса пользователя.
+Создает invoice для оплаты через Telegram Stars.
 
 **Request:**
 ```json
 {
   "user_id": "tg_12345",
-  "amount": 50
+  "stars_amount": 100
 }
 ```
 
 **Response:**
 ```json
 {
-  "user_id": "tg_12345",
-  "new_balance": 130
+  "invoice_url": "https://t.me/$...",
+  "stars_amount": 100,
+  "coins_amount": 250
 }
 ```
+
+Доступные пакеты: 50 stars = 100 coins, 100 stars = 250 coins, 200 stars = 600 coins, 500 stars = 1800 coins.
+
+### POST /api/payments/webhook
+
+Обработка webhook от Telegram: pre_checkout_query (одобрение) и successful_payment (зачисление монет).
+
+### GET /metrics
+
+Prometheus-метрики в формате text/plain.
 
 ### GET /health
 
-Health check endpoint.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "service": "ai-astrologer"
-}
-```
+Health check. Возвращает `{"status": "shutting_down"}` при graceful shutdown.
 
 ---
 
@@ -223,12 +248,23 @@ Health check endpoint.
 
 ### WS /ws/call/{session_id}
 
-Двунаправленный канал для обмена аудио/видео данными во время звонка.
+Двунаправленный канал для обмена аудио/видео данными.
 
-**Client -> Server:** Binary audio frames (WebM/Opus)
+**Аутентификация (первое сообщение):**
+```json
+{"type": "auth", "token": "session-token-from-start-response"}
+```
+
+**Pipeline State Events (Server -> Client):**
+```json
+{"type": "pipeline_state", "state": "LISTENING"}
+{"type": "pipeline_state", "state": "THINKING"}
+{"type": "pipeline_state", "state": "SPEAKING"}
+```
+
+**Client -> Server:** Binary audio frames (WebM/Opus или 16-bit PCM)
 
 **Server -> Client:** JSON response + binary audio
-
 ```json
 {
   "type": "response",
@@ -239,43 +275,40 @@ Health check endpoint.
 }
 ```
 
-После JSON-сообщения, если `has_audio: true`, сервер отправляет binary frame с MP3-аудио.
+После JSON, если `has_audio: true`, сервер отправляет binary frame с MP3/PCM аудио.
 
 ### WS /ws/billing/{session_id}
 
-Односторонний канал для уведомлений о биллинге.
+Канал для биллинговых уведомлений. Тоже требует first-message auth.
 
-**Message types:**
+**Типы событий:**
 
-#### BALANCE_UPDATE
-
-Отправляется каждый биллинговый интервал (по умолчанию 60 секунд) после списания.
-
-```json
-{
-  "event_type": "BALANCE_UPDATE",
-  "user_id": "tg_12345",
-  "session_id": "uuid-string",
-  "amount": 10,
-  "balance_after": 80,
-  "timestamp": "2024-01-15T12:00:00"
-}
-```
-
-#### TERMINATE_CALL
-
-Отправляется когда баланс недостаточен для списания. Клиент должен завершить звонок.
+| Event | Описание |
+|---|---|
+| `BALANCE_UPDATE` | Списание за интервал (amount, balance_after) |
+| `LOW_BALANCE_WARNING` | Предупреждение: баланс скоро закончится |
+| `TERMINATE_CALL` | Баланс исчерпан, завершить звонок |
 
 ```json
 {
-  "event_type": "TERMINATE_CALL",
+  "event_type": "LOW_BALANCE_WARNING",
   "user_id": "tg_12345",
   "session_id": "uuid-string",
   "amount": 0,
-  "balance_after": 5,
-  "timestamp": "2024-01-15T12:05:00"
+  "balance_after": 15,
+  "timestamp": "2024-01-15T12:04:00"
 }
 ```
+
+---
+
+## Frontend: Onboarding Flow
+
+1. **OnboardingScreen** -- пользователь вводит дату и время рождения
+2. **Город** -- автокомплит через `/api/geocode`, выбор из подсказок (координаты + timezone)
+3. **Старт сессии** -- POST `/api/session/start`, получение токена
+4. **AstroCall** -- подключение к WS с first-message auth, начало разговора
+5. **PaymentModal** -- если баланс мал, покупка через Telegram Stars
 
 ---
 
@@ -283,28 +316,37 @@ Health check endpoint.
 
 Создайте файл `.env` в директории `backend/`:
 
-| Variable | Description | Default |
+| Переменная | Описание | Default |
 |---|---|---|
-| `REDIS_URL` | Redis connection URL | `redis://localhost:6379/0` |
-| `GROQ_API_KEY` | Groq API key for speech-to-text (Distil-Whisper) | `""` |
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude LLM | `""` |
-| `ELEVENLABS_API_KEY` | ElevenLabs API key for text-to-speech | `""` |
-| `SIMLI_API_KEY` | Simli API key for lip-sync avatar | `""` |
-| `ELEVENLABS_VOICE_ID` | Voice ID for ElevenLabs TTS | `EXAVITQu4vr4xnSDxMaL` |
-| `MINUTE_COST_COINS` | Cost per billing interval in coins | `10` |
-| `BILLING_INTERVAL_SECONDS` | Seconds between balance deductions | `60` |
-| `CORS_ORIGINS` | Allowed CORS origins (JSON list) | `["*"]` |
+| `REDIS_URL` | URL подключения к Redis | `redis://localhost:6379/0` |
+| `DATABASE_URL` | PostgreSQL connection string | `""` (disabled) |
+| `GROQ_API_KEY` | Groq API key (STT) | `""` |
+| `ANTHROPIC_API_KEY` | Anthropic API key (LLM) | `""` |
+| `ELEVENLABS_API_KEY` | ElevenLabs API key (TTS) | `""` |
+| `SIMLI_API_KEY` | Simli API key (avatar) | `""` |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot token для auth и платежей | `""` |
+| `ELEVENLABS_VOICE_ID` | Voice ID для TTS | `EXAVITQu4vr4xnSDxMaL` |
+| `MINUTE_COST_COINS` | Стоимость интервала в монетах | `10` |
+| `BILLING_INTERVAL_SECONDS` | Интервал списания (секунды) | `60` |
+| `GRACE_PERIOD_SECONDS` | За сколько секунд предупреждать о низком балансе | `30` |
+| `CORS_ORIGINS` | Разрешенные CORS origins (JSON list) | `["*"]` |
+| `RATE_LIMIT_REQUESTS` | Лимит запросов в окне | `10` |
+| `RATE_LIMIT_WINDOW` | Окно rate limit (секунды) | `60` |
+| `VAD_ENERGY_THRESHOLD` | Порог энергии для VAD | `0.01` |
+| `VAD_SILENCE_DURATION_MS` | Длительность тишины для end-of-utterance (мс) | `800` |
 
 **Пример `.env` файла:**
 ```env
 REDIS_URL=redis://localhost:6379/0
+DATABASE_URL=postgresql://astrologer:password@localhost:5432/ai_astrologer
 GROQ_API_KEY=gsk_your_key_here
 ANTHROPIC_API_KEY=sk-ant-your_key_here
 ELEVENLABS_API_KEY=your_key_here
 SIMLI_API_KEY=your_key_here
-ELEVENLABS_VOICE_ID=EXAVITQu4vr4xnSDxMaL
+TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
 MINUTE_COST_COINS=10
 BILLING_INTERVAL_SECONDS=60
+GRACE_PERIOD_SECONDS=30
 CORS_ORIGINS=["http://localhost:5173"]
 ```
 
@@ -315,154 +357,104 @@ CORS_ORIGINS=["http://localhost:5173"]
 ### Prerequisites
 
 - Python 3.11+
-- Node.js 18+ (LTS recommended)
-- Redis server (local or Docker)
+- Node.js 18+ (LTS)
+- Redis server
+- PostgreSQL 16+ (опционально, для persistence)
 
 ### Backend
 
 ```bash
 cd 09_ai_astrologer/backend
 
-# Create virtual environment
+# Virtual environment
 python3.11 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Create .env file (see Environment Variables section)
-cp .env.example .env  # or create manually
+# Create .env
+cp .env.example .env  # или создать вручную
 
-# Start Redis (via Docker if not installed locally)
+# Start Redis
 docker run -d --name redis -p 6379:6379 redis:7-alpine
+
+# Start PostgreSQL (опционально)
+docker run -d --name postgres -p 5432:5432 \
+  -e POSTGRES_DB=ai_astrologer \
+  -e POSTGRES_USER=astrologer \
+  -e POSTGRES_PASSWORD=astrologer_secret \
+  postgres:16-alpine
 
 # Run the server
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Backend will be available at `http://localhost:8000`. API docs at `http://localhost:8000/docs`.
+Backend: `http://localhost:8000`. API docs: `http://localhost:8000/docs`.
 
 ### Frontend
 
 ```bash
 cd 09_ai_astrologer/frontend
 
-# Install dependencies
 npm install
-
-# Start dev server
 npm run dev
 ```
 
-Frontend will be available at `http://localhost:5173`.
+Frontend: `http://localhost:3000`.
 
 ### Running Tests
 
 ```bash
-# Backend tests
+# Backend
 cd 09_ai_astrologer/backend
 python -m pytest tests/ -v
 
-# Frontend build check
+# Frontend type check + build
 cd 09_ai_astrologer/frontend
+npx tsc --noEmit
 npm run build
 ```
 
 ---
 
-## Docker Deployment
-
-### Backend
+## Docker Compose (полный стек)
 
 ```bash
-cd 09_ai_astrologer/backend
+cd 09_ai_astrologer
 
-# Build image
-docker build -t ai-astrologer-backend .
+# Создать .env с API-ключами (см. выше)
+# Запустить все сервисы
+docker compose up -d
 
-# Run container
-docker run -d \
-  --name ai-astrologer \
-  -p 8000:8000 \
-  -e REDIS_URL=redis://redis:6379/0 \
-  -e GROQ_API_KEY=your_key \
-  -e ANTHROPIC_API_KEY=your_key \
-  -e ELEVENLABS_API_KEY=your_key \
-  -e BILLING_INTERVAL_SECONDS=60 \
-  -e MINUTE_COST_COINS=10 \
-  ai-astrologer-backend
+# Backend: http://localhost:8000
+# Frontend: http://localhost:3000
+# Redis: localhost:6379
+# PostgreSQL: localhost:5432
 ```
 
-### Docker Compose (full stack)
-
-```yaml
-version: "3.9"
-
-services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - GROQ_API_KEY=${GROQ_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
-      - SIMLI_API_KEY=${SIMLI_API_KEY}
-      - CORS_ORIGINS=["https://your-domain.com"]
-    depends_on:
-      - redis
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:80"
-
-volumes:
-  redis_data:
-```
+Compose поднимает: Redis, PostgreSQL, Backend (FastAPI), Frontend (nginx + static).
+Backend ожидает healthcheck от Redis и Postgres перед стартом.
 
 ---
 
 ## Production Considerations
 
 ### Scaling
-
-- **Multiple Uvicorn workers:** Use `gunicorn` with `uvicorn.workers.UvicornWorker` for multi-process deployment:
-  ```bash
-  gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
-  ```
-- **Redis Cluster:** For high availability, use Redis Sentinel or Redis Cluster. The app uses simple key-value operations compatible with both modes.
-- **WebSocket sticky sessions:** When running behind a load balancer (nginx, HAProxy), enable sticky sessions for WebSocket connections since billing loops are tied to specific server instances.
-- **Horizontal scaling:** Move billing state entirely into Redis (pub/sub for billing events) to allow any backend instance to handle reconnects.
+- **Gunicorn + Uvicorn workers:** `gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker`
+- **Redis Cluster** для high availability
+- **Sticky sessions** для WebSocket за load balancer
+- **Billing pub/sub** позволяет горизонтальное масштабирование -- любой pod может обработать reconnect
 
 ### Security
-
-- **Telegram Init Data validation:** Validate `initData` from `@telegram-apps/sdk-react` on the backend to verify user identity.
-- **CORS:** Restrict `CORS_ORIGINS` to your Telegram Mini App domain in production.
-- **Rate limiting:** Add rate limiting on `/api/session/start` and `/api/balance/topup` to prevent abuse.
-- **API keys:** Store all API keys in environment variables or a secrets manager; never commit them to the repository.
-- **WebSocket authentication:** Add token-based auth to WebSocket upgrade requests to prevent unauthorized access.
-- **Input validation:** Pydantic models enforce strict input validation on all endpoints.
+- Telegram initData HMAC-SHA256 валидация на каждом защищенном эндпоинте
+- First-message auth для WebSocket (не query string)
+- Rate limiting через Redis sliding window
+- CORS ограничение в production
+- Circuit breakers предотвращают cascade failures
 
 ### Monitoring
-
-- **Health endpoint:** `GET /health` for load balancer probes.
-- **Structured logging:** Use Python `logging` module (already configured) with JSON formatter for production.
-- **Metrics:** Add Prometheus metrics for call duration, billing events, API latency, and WebSocket connection count.
-- **Alerts:** Monitor Redis connectivity and external API failures (Groq, Anthropic, ElevenLabs) with circuit breakers.
-- **Billing auditing:** Log all billing events to a persistent store for dispute resolution and financial reconciliation.
-
-### Performance
-
-- **Connection pooling:** Use `httpx.AsyncClient` with connection pooling for external API calls in production (avoid creating new clients per request).
-- **Audio streaming:** Consider chunked audio streaming instead of full request/response for lower latency.
-- **Redis pipeline:** Batch Redis operations where possible to reduce round-trips.
-- **CDN:** Serve the frontend build through a CDN (Cloudflare, etc.) for low-latency global access.
+- `GET /metrics` -- Prometheus endpoint
+- active_calls, call_duration, billing_events, api_latency, api_errors
+- `GET /health` -- для load balancer probes
+- Structured logging с Python logging module
