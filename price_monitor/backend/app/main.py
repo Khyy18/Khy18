@@ -1,14 +1,18 @@
 """FastAPI application entry point."""
 from __future__ import annotations
 
-
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.logging_config import setup_logging
+
+setup_logging()
 from app.db.redis_client import close_redis
 from app.db.session import init_db
 from app.routers import (
@@ -84,3 +88,19 @@ app.include_router(onboarding.router)
 async def health_check():
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/bot/health", tags=["system"])
+async def bot_health_check():
+    """Check if bot process is alive via heartbeat."""
+    heartbeat_file = Path("/tmp/bot_heartbeat")
+    if not heartbeat_file.exists():
+        return {"status": "unknown", "detail": "No heartbeat file"}
+    try:
+        last_beat = float(heartbeat_file.read_text().strip())
+        age = time.time() - last_beat
+        if age < 120:
+            return {"status": "ok", "last_heartbeat_seconds_ago": int(age)}
+        return {"status": "stale", "last_heartbeat_seconds_ago": int(age)}
+    except (ValueError, OSError):
+        return {"status": "error", "detail": "Cannot read heartbeat"}

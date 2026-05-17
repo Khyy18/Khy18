@@ -256,8 +256,22 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
 
+    op.create_table(
+        "badges",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("badge_type", sa.String(), nullable=False),
+        sa.Column("title", sa.String(), nullable=False),
+        sa.Column("description", sa.String(), nullable=True),
+        sa.Column("icon", sa.String(), nullable=True),
+        sa.Column("earned_at", sa.DateTime(), nullable=True),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
+        sa.PrimaryKeyConstraint("id"),
+    )
+
 
 def downgrade() -> None:
+    op.drop_table("badges")
     op.drop_table("content_scripts")
     op.drop_table("seller_copies")
     op.drop_table("niche_analyses")

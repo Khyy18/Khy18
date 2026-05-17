@@ -1,5 +1,6 @@
 """Парсер маркетплейса Ozon через публичные эндпоинты."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -69,6 +70,12 @@ class OzonParser:
                 return self._parse_seo_data(seo, product_id)
 
             return None
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                retry_after = int(e.response.headers.get("Retry-After", "60"))
+                logger.warning("Ozon rate limited (429), waiting %d sec", retry_after)
+                await asyncio.sleep(retry_after)
+            raise
         except Exception as e:
             logger.error("Ошибка при получении товара Ozon %s: %s", product_id, e)
             raise
@@ -97,6 +104,12 @@ class OzonParser:
             widget_states = data.get("widgetStates", {})
             results = self._extract_search_results(widget_states, limit)
             return results
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                retry_after = int(e.response.headers.get("Retry-After", "60"))
+                logger.warning("Ozon rate limited (429), waiting %d sec", retry_after)
+                await asyncio.sleep(retry_after)
+            raise
         except Exception as e:
             logger.error("Ошибка при поиске Ozon '%s': %s", query, e)
             raise

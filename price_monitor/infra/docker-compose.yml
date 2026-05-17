@@ -49,6 +49,24 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - /tmp:/tmp
+
+  bot:
+    build:
+      context: ..
+      dockerfile: bot/Dockerfile
+    container_name: price_monitor_bot
+    restart: unless-stopped
+    env_file:
+      - ../bot/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - /tmp:/tmp
 
   frontend:
     build:

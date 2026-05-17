@@ -3,6 +3,8 @@
 import asyncio
 import logging
 import signal
+import time
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot, Dispatcher
@@ -19,10 +21,14 @@ from bot.handlers.subscription import router as subscription_router
 from bot.handlers.seller import router as seller_router
 from bot.handlers.referral import router as referral_router
 from bot.handlers.admin_api import router as admin_api_router
+from bot.logging_config import setup_logging
 from bot.scheduler.tasks import cleanup_old_data_job, parse_prices_job, publish_digests_job
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+setup_logging()
 logger = logging.getLogger(__name__)
+
+# Heartbeat file path for health monitoring
+HEARTBEAT_FILE = Path("/tmp/bot_heartbeat")
 
 # Shutdown event for graceful termination
 _shutdown_event = asyncio.Event()
@@ -32,6 +38,11 @@ def _signal_handler(sig: int, *args: Any) -> None:
     """Handle SIGTERM/SIGINT for graceful shutdown."""
     logger.info("Received signal %s, initiating graceful shutdown...", signal.Signals(sig).name)
     _shutdown_event.set()
+
+
+async def _heartbeat_job() -> None:
+    """Write heartbeat timestamp for health monitoring."""
+    HEARTBEAT_FILE.write_text(str(time.time()))
 
 
 async def main() -> None:
@@ -82,6 +93,14 @@ async def main() -> None:
         trigger=CronTrigger(day_of_week="sun", hour=3, minute=0),
         id="cleanup_old_data",
         name="Очистка старых данных",
+    )
+
+    # Heartbeat for health monitoring
+    scheduler.add_job(
+        _heartbeat_job,
+        trigger=IntervalTrigger(seconds=60),
+        id="heartbeat",
+        name="Bot heartbeat",
     )
 
     scheduler.start()

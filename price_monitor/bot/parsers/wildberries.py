@@ -1,5 +1,6 @@
 """Парсер маркетплейса Wildberries через публичный API."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -56,6 +57,12 @@ class WildberriesParser:
 
             item = products[0]
             return self._parse_product(item)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                retry_after = int(e.response.headers.get("Retry-After", "60"))
+                logger.warning("WB rate limited (429), waiting %d sec", retry_after)
+                await asyncio.sleep(retry_after)
+            raise
         except Exception as e:
             logger.error("Ошибка при получении товара WB %s: %s", article_id, e)
             raise
@@ -95,6 +102,12 @@ class WildberriesParser:
                 if parsed:
                     result.append(parsed)
             return result
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                retry_after = int(e.response.headers.get("Retry-After", "60"))
+                logger.warning("WB rate limited (429), waiting %d sec", retry_after)
+                await asyncio.sleep(retry_after)
+            raise
         except Exception as e:
             logger.error("Ошибка при поиске WB '%s': %s", query, e)
             raise
