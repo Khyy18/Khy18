@@ -1,21 +1,31 @@
 """
 Модуль обработки платежей.
 
-Содержит стабы для интеграции с:
-- Telegram Stars (внутриигровая валюта Telegram)
+Интеграции:
+- Telegram Stars (внутриигровая валюта Telegram, currency=XTR)
 - YooKassa (платежная система для РФ)
+- Demo topup (для разработки)
 """
 
+import logging
+import uuid
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.auth.dependencies import get_current_user_id
+from app.config import settings
 from app.models.database import async_session_factory, User, Transaction, TransactionType
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/billing", tags=["billing"])
+
+# Курс конвертации Telegram Stars в рубли (примерный)
+STARS_TO_RUB_RATE = Decimal("1.3")
 
 
 class TopUpRequest(BaseModel):
@@ -29,64 +39,242 @@ class TopUpResponse(BaseModel):
     transaction_id: str
 
 
-async def process_stars_payment(user_id: str, stars_amount: int) -> bool:
+class StarsInvoiceRequest(BaseModel):
+    stars_amount: int
+    description: str = "Пополнение баланса AI Психолог"
+
+
+class StarsInvoiceResponse(BaseModel):
+    invoice_link: str
+
+
+class YookassaPaymentRequest(BaseModel):
+    amount: Decimal
+    return_url: str = "https://ai-psychologist.app/payment-success"
+    description: str = "Пополнение баланса AI Психолог"
+
+
+class YookassaPaymentResponse(BaseModel):
+    confirmation_url: str
+    payment_id: str
+
+
+@router.post("/create-stars-invoice", response_model=StarsInvoiceResponse)
+async def create_stars_invoice(
+    request: StarsInvoiceRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     """
-    Обработка платежа через Telegram Stars.
-
-    TODO: Интеграция с Telegram Bot Payments API
-    -----------------------------------------------
-    1. Получаем pre_checkout_query от Telegram
-    2. Подтверждаем через answer_pre_checkout_query
-    3. Получаем successful_payment в сообщении
-    4. Конвертируем Stars в рубли (1 Star ~ 1.3 RUB, курс плавающий)
-    5. Начисляем на баланс пользователя
-
-    Telegram Stars API:
-    - Создаем invoice через createInvoiceLink с currency="XTR"
-    - prices = [LabeledPrice(label="Пополнение баланса", amount=stars_amount)]
-    - После оплаты получаем telegram_payment_charge_id для рефандов
+    Создание invoice для оплаты через Telegram Stars (currency=XTR).
+    Вызывает Telegram Bot API createInvoiceLink.
     """
-    # Стаб: в реальности здесь проверка через Telegram Bot API
-    return True
+    if not settings.BOT_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="BOT_TOKEN not configured. Stars payments unavailable. Use demo topup.",
+        )
 
-
-async def process_yookassa_payment(user_id: str, amount_rub: Decimal) -> dict:
-    """
-    Обработка платежа через YooKassa.
-
-    TODO: Интеграция с YooKassa API (https://yookassa.ru/developers)
-    -----------------------------------------------------------------
-    1. Создаем Payment через yookassa SDK:
-       payment = Payment.create({
-           "amount": {"value": str(amount_rub), "currency": "RUB"},
-           "confirmation": {"type": "redirect", "return_url": "..."},
-           "capture": True,
-           "description": "Пополнение баланса AI Психолог"
-       })
-    2. Редиректим пользователя на confirmation.confirmation_url
-    3. Получаем webhook notification о статусе платежа
-    4. При статусе "succeeded" начисляем на баланс
-
-    Настройки:
-    - YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY в переменных окружения
-    - Webhook URL регистрируется в личном кабинете YooKassa
-    - Тестовый режим: используем тестовые ключи из ЛК
-    """
-    # Стаб: возвращаем mock confirmation URL
-    return {
-        "payment_id": "mock_payment_id",
-        "confirmation_url": "https://yookassa.ru/mock-payment",
-        "status": "pending",
+    url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/createInvoiceLink"
+    payload = {
+        "title": "Пополнение баланса",
+        "description": request.description,
+        "payload": f"topup:{user_id}:{request.stars_amount}",
+        "currency": "XTR",
+        "prices": [
+            {"label": "Пополнение баланса", "amount": request.stars_amount}
+        ],
     }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=payload)
+            data = response.json()
+
+            if not data.get("ok"):
+                logger.error(f"Telegram API error: {data}")
+                raise HTTPException(
+                    status_code=502, detail="Failed to create invoice link"
+                )
+
+            return StarsInvoiceResponse(invoice_link=data["result"])
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error creating Stars invoice: {e}")
+        raise HTTPException(status_code=502, detail="Telegram API unavailable")
+
+
+@router.post("/telegram-webhook")
+async def telegram_payment_webhook(request: Request):
+    """
+    Обработка webhook от Telegram для платежей Stars.
+    Принимает pre_checkout_query (подтверждение) и successful_payment (зачисление).
+    """
+    if not settings.BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="BOT_TOKEN not configured")
+
+    body = await request.json()
+
+    # Обработка pre_checkout_query - подтверждаем оплату
+    if "pre_checkout_query" in body:
+        query = body["pre_checkout_query"]
+        query_id = query["id"]
+
+        # Подтверждаем через Bot API
+        url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/answerPreCheckoutQuery"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(url, json={"pre_checkout_query_id": query_id, "ok": True})
+
+        return {"ok": True}
+
+    # Обработка successful_payment - зачисляем средства
+    if "message" in body and "successful_payment" in body.get("message", {}):
+        message = body["message"]
+        payment = message["successful_payment"]
+        telegram_id = message["from"]["id"]
+        stars_amount = payment["total_amount"]
+        invoice_payload = payment.get("invoice_payload", "")
+
+        # Конвертируем Stars в рубли
+        rub_amount = Decimal(str(stars_amount)) * STARS_TO_RUB_RATE
+
+        # Начисляем на баланс
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if user:
+                user.balance = user.balance + rub_amount
+                tx = Transaction(
+                    user_id=user.id,
+                    amount=rub_amount,
+                    type=TransactionType.deposit,
+                    source=f"stars:{stars_amount}",
+                )
+                session.add(tx)
+                await session.commit()
+                logger.info(
+                    f"Stars payment: user {user.id}, {stars_amount} stars = {rub_amount} rub"
+                )
+            else:
+                logger.warning(f"Stars payment for unknown telegram_id: {telegram_id}")
+
+        return {"ok": True}
+
+    return {"ok": True}
+
+
+@router.post("/create-yokassa-payment", response_model=YookassaPaymentResponse)
+async def create_yokassa_payment(
+    request: YookassaPaymentRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Создание платежа через YooKassa API.
+    Возвращает URL для подтверждения оплаты.
+    """
+    if not settings.YOOKASSA_SHOP_ID or not settings.YOOKASSA_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="YooKassa credentials not configured. Use demo topup.",
+        )
+
+    payment_id = str(uuid.uuid4())
+    url = "https://api.yookassa.ru/v3/payments"
+    headers = {
+        "Idempotence-Key": payment_id,
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "amount": {"value": str(request.amount), "currency": "RUB"},
+        "confirmation": {
+            "type": "redirect",
+            "return_url": request.return_url,
+        },
+        "capture": True,
+        "description": request.description,
+        "metadata": {"user_id": user_id},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers=headers,
+                auth=(settings.YOOKASSA_SHOP_ID, settings.YOOKASSA_SECRET_KEY),
+            )
+            data = response.json()
+
+            if response.status_code not in (200, 201):
+                logger.error(f"YooKassa API error: {data}")
+                raise HTTPException(
+                    status_code=502, detail="Failed to create YooKassa payment"
+                )
+
+            confirmation_url = data.get("confirmation", {}).get("confirmation_url", "")
+            return YookassaPaymentResponse(
+                confirmation_url=confirmation_url,
+                payment_id=data.get("id", payment_id),
+            )
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error creating YooKassa payment: {e}")
+        raise HTTPException(status_code=502, detail="YooKassa API unavailable")
+
+
+@router.post("/yokassa-webhook")
+async def yokassa_webhook(request: Request):
+    """
+    Webhook от YooKassa: обработка уведомлений о статусе платежа.
+    При статусе 'payment.succeeded' зачисляем средства на баланс.
+    """
+    if not settings.YOOKASSA_SHOP_ID:
+        raise HTTPException(status_code=503, detail="YooKassa not configured")
+
+    body = await request.json()
+    event_type = body.get("event")
+
+    if event_type == "payment.succeeded":
+        payment_obj = body.get("object", {})
+        amount_value = payment_obj.get("amount", {}).get("value", "0")
+        metadata = payment_obj.get("metadata", {})
+        user_id = metadata.get("user_id")
+        payment_id = payment_obj.get("id", "unknown")
+
+        if not user_id:
+            logger.warning(f"YooKassa webhook without user_id in metadata: {payment_id}")
+            return {"ok": True}
+
+        rub_amount = Decimal(amount_value)
+
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(User).where(User.id == user_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if user:
+                user.balance = user.balance + rub_amount
+                tx = Transaction(
+                    user_id=user.id,
+                    amount=rub_amount,
+                    type=TransactionType.deposit,
+                    source=f"yookassa:{payment_id}",
+                )
+                session.add(tx)
+                await session.commit()
+                logger.info(f"YooKassa payment: user {user_id}, {rub_amount} rub")
+            else:
+                logger.warning(f"YooKassa payment for unknown user: {user_id}")
+
+    return {"ok": True}
 
 
 @router.post("/topup", response_model=TopUpResponse)
 async def topup(request: TopUpRequest, user_id: str = Depends(get_current_user_id)):
     """
-    Пополнение баланса пользователя.
-    Requires JWT authentication - user_id is extracted from the token.
+    Пополнение баланса пользователя (demo mode).
     В demo-режиме просто начисляет указанную сумму.
-    В production будет вызывать process_stars_payment или process_yookassa_payment.
     """
     async with async_session_factory() as session:
         result = await session.execute(

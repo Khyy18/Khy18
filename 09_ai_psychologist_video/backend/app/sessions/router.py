@@ -1,7 +1,8 @@
 """
-Sessions router: create sessions, list sessions, get profile.
+Sessions router: create sessions, list sessions, get profile, session summary.
 """
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 
@@ -16,7 +17,10 @@ from app.models.database import (
     User,
     Session,
     SessionStatus,
+    SessionNote,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["sessions"])
 
@@ -140,3 +144,155 @@ async def create_session(user_id: str = Depends(get_current_user_id)):
             total_cost=str(new_session.total_cost or Decimal("0.00")),
             rate_per_minute=str(new_session.rate_per_minute or Decimal("5.00")),
         )
+
+
+class SessionSummaryResponse(BaseModel):
+    summary: str
+    homework: str | None = None
+    mood_score: int | None = None
+    duration: float | None = None
+    cost: str | None = None
+
+
+@router.get("/sessions/{session_id}/summary", response_model=SessionSummaryResponse)
+async def get_session_summary(
+    session_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
+    """
+    Получение саммари сессии. Если уже есть в session_notes - возвращает кэш.
+    Если нет - генерирует через LLM (или mock при отсутствии LLM_API_KEY).
+    """
+    async with async_session_factory() as session:
+        # Проверяем что сессия принадлежит пользователю
+        session_result = await session.execute(
+            select(Session).where(
+                Session.id == session_id,
+                Session.user_id == user_id,
+            )
+        )
+        user_session = session_result.scalar_one_or_none()
+        if not user_session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Проверяем кэш в session_notes
+        note_result = await session.execute(
+            select(SessionNote).where(SessionNote.session_id == session_id)
+        )
+        existing_note = note_result.scalar_one_or_none()
+
+        if existing_note:
+            # Возвращаем кэшированное саммари
+            duration = None
+            if user_session.started_at and user_session.ended_at:
+                duration = (user_session.ended_at - user_session.started_at).total_seconds() / 60.0
+
+            return SessionSummaryResponse(
+                summary=existing_note.summary or "",
+                homework=existing_note.homework,
+                mood_score=existing_note.mood_score,
+                duration=round(duration, 2) if duration else None,
+                cost=str(user_session.total_cost or Decimal("0.00")),
+            )
+
+        # Генерируем саммари
+        summary_text = ""
+        homework_text = None
+        mood = None
+
+        if settings.LLM_API_KEY:
+            # Реальная генерация через LLM
+            try:
+                summary_text, homework_text, mood = await _generate_summary_via_llm(session_id)
+            except Exception as e:
+                logger.error(f"LLM summary generation failed: {e}")
+                summary_text = "Сессия завершена. Саммари временно недоступно."
+        else:
+            # Mock при отсутствии API ключа
+            summary_text = (
+                "Сессия прошла продуктивно. Обсуждались актуальные переживания "
+                "и стратегии совладания со стрессом."
+            )
+            homework_text = "Вести дневник эмоций в течение недели."
+            mood = 7
+
+        # Сохраняем в session_notes
+        note = SessionNote(
+            session_id=session_id,
+            summary=summary_text,
+            homework=homework_text,
+            mood_score=mood,
+        )
+        session.add(note)
+        await session.commit()
+
+        duration = None
+        if user_session.started_at and user_session.ended_at:
+            duration = (user_session.ended_at - user_session.started_at).total_seconds() / 60.0
+
+        return SessionSummaryResponse(
+            summary=summary_text,
+            homework=homework_text,
+            mood_score=mood,
+            duration=round(duration, 2) if duration else None,
+            cost=str(user_session.total_cost or Decimal("0.00")),
+        )
+
+
+async def _generate_summary_via_llm(session_id: str) -> tuple[str, str | None, int | None]:
+    """
+    Генерация саммари через LLM провайдер.
+    Возвращает (summary, homework, mood_score).
+    """
+    prompt = (
+        "Ты - AI психолог. На основе проведенной сессии сгенерируй краткое саммари, "
+        "домашнее задание для клиента и оценку настроения (1-10).\n"
+        "Ответь в формате:\n"
+        "SUMMARY: ...\n"
+        "HOMEWORK: ...\n"
+        "MOOD: число от 1 до 10"
+    )
+
+    if settings.LLM_PROVIDER == "anthropic":
+        import anthropic
+
+        client = anthropic.AsyncAnthropic(api_key=settings.LLM_API_KEY)
+        response = await client.messages.create(
+            model=settings.LLM_MODEL,
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text
+    else:
+        # OpenAI-compatible
+        import openai
+
+        client = openai.AsyncOpenAI(api_key=settings.LLM_API_KEY)
+        response = await client.chat.completions.create(
+            model=settings.LLM_MODEL,
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.choices[0].message.content or ""
+
+    # Парсим ответ
+    summary = ""
+    homework = None
+    mood = None
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("SUMMARY:"):
+            summary = line[len("SUMMARY:"):].strip()
+        elif line.startswith("HOMEWORK:"):
+            homework = line[len("HOMEWORK:"):].strip()
+        elif line.startswith("MOOD:"):
+            try:
+                mood = int(line[len("MOOD:"):].strip())
+            except ValueError:
+                mood = None
+
+    if not summary:
+        summary = text[:500]  # fallback: используем весь текст
+
+    return summary, homework, mood

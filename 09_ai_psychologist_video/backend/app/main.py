@@ -20,9 +20,14 @@ from app.models.database import init_db, async_session_factory, async_engine
 from app.billing.instance import billing_worker
 from app.auth.router import router as auth_router
 from app.billing.payment import router as billing_router
+from app.billing.promo import router as promo_router
 from app.sessions.router import router as sessions_router
 from app.call.websocket import websocket_call
 from app.call.livekit import router as livekit_router
+from app.referral.router import router as referral_router
+from app.subscriptions.router import router as subscriptions_router
+from app.admin.router import router as admin_router
+from app.bot.handlers import router as bot_router
 
 
 def _configure_structlog() -> None:
@@ -129,8 +134,13 @@ app.add_middleware(
 # Роутеры
 app.include_router(auth_router)
 app.include_router(billing_router)
+app.include_router(promo_router)
 app.include_router(sessions_router)
 app.include_router(livekit_router)
+app.include_router(referral_router)
+app.include_router(subscriptions_router)
+app.include_router(admin_router)
+app.include_router(bot_router)
 
 # WebSocket маршрут
 app.websocket("/ws/call/{session_id}")(websocket_call)
