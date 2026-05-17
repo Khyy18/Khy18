@@ -262,3 +262,89 @@ async def test_get_current_user_with_valid_token(auth_app):
     assert response.status_code == 200
     data = response.json()
     assert data["email"] == "token@token.com"
+
+
+async def test_refresh_token_returns_new_token(auth_app):
+    """Test refresh returns a new valid JWT."""
+    app, session_factory = auth_app
+
+    user_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+
+    async with session_factory() as session:
+        tenant = Tenant(
+            id=tenant_id, name="Refresh Corp", domain="refresh.com",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(tenant)
+        user = User(
+            id=user_id,
+            tenant_id=tenant_id,
+            email="refresh@refresh.com",
+            password_hash=hash_password("password"),
+            role=UserRole.admin,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(user)
+        await session.commit()
+
+    with patch("dashboard.auth.settings") as mock_settings:
+        mock_settings.jwt_secret_key = "test-secret-key"
+        mock_settings.jwt_algorithm = "HS256"
+
+        token = create_access_token({"sub": str(user_id), "tenant_id": str(tenant_id)})
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/auth/refresh",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+
+
+async def test_get_me_returns_user_info(auth_app):
+    """Test GET /api/auth/me returns current user info."""
+    app, session_factory = auth_app
+
+    user_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+
+    async with session_factory() as session:
+        tenant = Tenant(
+            id=tenant_id, name="Me Corp", domain="me.com",
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(tenant)
+        user = User(
+            id=user_id,
+            tenant_id=tenant_id,
+            email="me@me.com",
+            password_hash=hash_password("password"),
+            role=UserRole.admin,
+            created_at=datetime.now(timezone.utc),
+        )
+        session.add(user)
+        await session.commit()
+
+    with patch("dashboard.auth.settings") as mock_settings:
+        mock_settings.jwt_secret_key = "test-secret-key"
+        mock_settings.jwt_algorithm = "HS256"
+
+        token = create_access_token({"sub": str(user_id), "tenant_id": str(tenant_id)})
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(
+                "/api/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["email"] == "me@me.com"
+    assert data["role"] == "admin"

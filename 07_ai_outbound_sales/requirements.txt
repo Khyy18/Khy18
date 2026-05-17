@@ -41,4 +41,5 @@ pytest-asyncio
 pytest-cov
 factory-boy
 aiosqlite
+ruff
 

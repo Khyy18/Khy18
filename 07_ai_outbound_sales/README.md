@@ -401,3 +401,80 @@ Extracts objections from call transcripts, builds a searchable library of object
 
 **Database:** `objections` table (migration 013) with JSONB responses array tracking text, success_rate, and times_used per response.
 
+
+## Production Deployment
+
+The project includes a production-ready `docker-compose.prod.yml` for deploying the full stack.
+
+### Services
+
+- **nginx** - Reverse proxy and static file server (nginx:alpine)
+- **certbot** - Automatic SSL certificate provisioning and renewal via Let's Encrypt
+- **postgres** - PostgreSQL 16 Alpine with persistent volume
+- **redis** - Redis 7 Alpine with persistent volume
+- **backend** - The FastAPI application (built from Dockerfile)
+
+### Setup
+
+1. Copy and configure the environment file:
+   ```bash
+   cp .env.example .env
+   # Edit .env with production values
+   ```
+
+2. Update `deploy/nginx.conf` and replace `domain` in the SSL certificate paths with your actual domain name.
+
+3. Obtain initial SSL certificates:
+   ```bash
+   docker compose -f docker-compose.prod.yml run --rm certbot certonly \
+     --webroot -w /var/www/certbot -d yourdomain.com
+   ```
+
+4. Build and start all services:
+   ```bash
+   docker compose -f docker-compose.prod.yml up -d --build
+   ```
+
+5. Run database migrations:
+   ```bash
+   docker compose -f docker-compose.prod.yml exec backend alembic upgrade head
+   ```
+
+### SSL Renewal
+
+The certbot service automatically renews certificates every 12 hours. After renewal, reload nginx:
+```bash
+docker compose -f docker-compose.prod.yml exec nginx nginx -s reload
+```
+
+## CI/CD
+
+The project uses GitHub Actions for continuous integration. The pipeline is defined in `.github/workflows/ci.yml` and triggers on pushes and pull requests to the `main` branch.
+
+### Jobs
+
+| Job | Description |
+|-----|-------------|
+| **lint** | Runs `ruff check .` for Python code linting |
+| **test** | Installs dependencies and runs `pytest tests/ --tb=short` |
+| **build-frontend** | Installs npm packages and runs `npm run build` |
+| **docker-build** | Builds the Docker image to verify the Dockerfile is valid |
+
+All jobs use Python 3.11 and Node 20, with pip and npm caching for faster runs.
+
+## CORS Configuration
+
+CORS (Cross-Origin Resource Sharing) is configured via the `CORS_ORIGINS` environment variable. Set it to a comma-separated list of allowed frontend origins.
+
+Default value:
+```
+CORS_ORIGINS=http://localhost:5174,http://localhost:3000
+```
+
+In production, set this to your actual frontend domain(s):
+```
+CORS_ORIGINS=https://app.yourdomain.com,https://yourdomain.com
+```
+
+The middleware allows credentials, all HTTP methods, and all headers for the specified origins.
+

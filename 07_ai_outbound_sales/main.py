@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -496,6 +497,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Add observability middleware
 app.add_middleware(CorrelationIdMiddleware)
 
@@ -651,6 +661,12 @@ async def metrics(request: Request) -> Response:
         if auth_header != expected:
             return Response(content="Unauthorized", status_code=401)
     return metrics_response()
+
+
+# Serve frontend in production mode
+_frontend_dist = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
+if settings.serve_frontend and _os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
 
 
 if __name__ == "__main__":

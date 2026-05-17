@@ -148,6 +148,12 @@ class Settings(BaseSettings):
     adaptive_throttle_bounce_threshold: float = 0.05
     adaptive_throttle_cooldown_minutes: int = 30
 
+    # CORS
+    cors_origins: str = "http://localhost:5174,http://localhost:3000"
+
+    # Production frontend serving
+    serve_frontend: bool = False
+
     # AI Office integration
     ai_office_webhook_url: str = ""
 
