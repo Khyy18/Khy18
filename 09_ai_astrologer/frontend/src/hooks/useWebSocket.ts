@@ -13,6 +13,7 @@ export interface WSMessage {
 
 interface UseWebSocketOptions {
   url: string;
+  authToken?: string;
   autoConnect?: boolean;
   reconnectInterval?: number;
   maxRetries?: number;
@@ -28,6 +29,7 @@ interface UseWebSocketReturn {
 
 export function useWebSocket({
   url,
+  authToken,
   autoConnect = true,
   reconnectInterval = 3000,
   maxRetries = 5,
@@ -58,6 +60,10 @@ export function useWebSocket({
       wsRef.current = ws;
 
       ws.onopen = () => {
+        // First-message auth pattern: send auth token if provided
+        if (authToken) {
+          ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+        }
         setConnected(true);
         retriesRef.current = 0;
       };
@@ -89,7 +95,7 @@ export function useWebSocket({
     } catch {
       // Connection failed, will retry via onclose
     }
-  }, [url, maxRetries, reconnectInterval, cleanup]);
+  }, [url, authToken, maxRetries, reconnectInterval, cleanup]);
 
   const disconnect = useCallback(() => {
     shouldReconnectRef.current = false;
