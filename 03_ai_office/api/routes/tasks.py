@@ -9,13 +9,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_office.api.dependencies import get_current_user_optional, get_tenant_id
+from ai_office.api.rate_limit import check_rate_limit
 from ai_office.api.schemas import PaginatedResponse, TaskCreate, TaskResponse, TaskUpdate
 from ai_office.api.websocket import broadcast_event
 from ai_office.core.billing import check_task_limit
 from ai_office.core.database import get_session
 from ai_office.core.models import Task, User
 
-router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+router = APIRouter(prefix="/api/tasks", tags=["tasks"], dependencies=[Depends(check_rate_limit)])
 
 
 @router.get("", response_model=PaginatedResponse[TaskResponse])

@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_office.api.auth import get_current_user
+from ai_office.core.billing import PLANS, get_tenant_plan
 from ai_office.core.database import get_session
 from ai_office.core.models import Tenant, TenantAgent, User
 
@@ -75,6 +76,16 @@ async def onboarding_setup(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Tenant not found",
+        )
+
+    # Enforce agent limit based on the tenant's current plan
+    plan = get_tenant_plan(tenant)
+    max_agents = plan["max_agents"]
+    if max_agents != -1 and len(valid_agents) > max_agents:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Your plan allows a maximum of {max_agents} agents. "
+                   f"You selected {len(valid_agents)}.",
         )
 
     tenant.name = body.company_name

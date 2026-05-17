@@ -15,8 +15,14 @@ class Settings(BaseSettings):
 
     # JWT Auth
     jwt_secret_key: str = Field(
-        default="dev-secret-key-change-in-production",
+        default="",
         description="Secret key for JWT token signing",
+    )
+
+    # Frontend URL (used for Stripe redirect URLs, etc.)
+    frontend_url: str = Field(
+        default="http://localhost:5173",
+        description="Frontend application URL for redirects",
     )
 
     # Stripe

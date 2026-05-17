@@ -122,8 +122,8 @@ async def create_checkout(
                 "tenant_id": current_user.tenant_id,
                 "plan_name": body.plan_name,
             },
-            success_url="https://app.example.com/billing?success=true",
-            cancel_url="https://app.example.com/billing?canceled=true",
+            success_url=f"{settings.frontend_url}/billing?success=true",
+            cancel_url=f"{settings.frontend_url}/billing?canceled=true",
         )
 
         return CheckoutResponse(checkout_url=checkout_session.url)

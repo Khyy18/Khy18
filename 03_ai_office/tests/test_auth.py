@@ -109,7 +109,7 @@ async def test_refresh_token(test_client: AsyncClient):
         "/api/auth/register",
         json={
             "email": "refresh@company.com",
-            "password": "pass123",
+            "password": "pass1234",
             "company_name": "Refresh Corp",
         },
     )
@@ -134,7 +134,7 @@ async def test_refresh_with_access_token_fails(test_client: AsyncClient):
         "/api/auth/register",
         json={
             "email": "badrefresh@company.com",
-            "password": "pass123",
+            "password": "pass1234",
             "company_name": "Corp",
         },
     )
@@ -156,7 +156,7 @@ async def test_me_endpoint(test_client: AsyncClient):
         "/api/auth/register",
         json={
             "email": "me@company.com",
-            "password": "pass123",
+            "password": "pass1234",
             "company_name": "Me Corp",
         },
     )
@@ -229,7 +229,7 @@ async def test_non_super_admin_cannot_access_admin_endpoints(test_client: AsyncC
         "/api/auth/register",
         json={
             "email": "regular@company.com",
-            "password": "pass123",
+            "password": "pass1234",
             "company_name": "Regular Corp",
         },
     )
@@ -253,7 +253,7 @@ async def test_tenant_isolation_in_token(test_client: AsyncClient):
         "/api/auth/register",
         json={
             "email": "user1@tenant1.com",
-            "password": "pass",
+            "password": "password1",
             "company_name": "Tenant 1",
         },
     )
@@ -261,7 +261,7 @@ async def test_tenant_isolation_in_token(test_client: AsyncClient):
         "/api/auth/register",
         json={
             "email": "user2@tenant2.com",
-            "password": "pass",
+            "password": "password2",
             "company_name": "Tenant 2",
         },
     )

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_office.core.config import settings
 from ai_office.core.database import get_session
-from ai_office.core.models import User
+from ai_office.core.models import Tenant, User
 
 from ai_office.api.auth import ALGORITHM
 
@@ -30,6 +30,7 @@ async def get_current_user_optional(
     - No Authorization header is present
     - The token is invalid or expired
     - The user cannot be found in the database
+    - The tenant is suspended
     """
     if credentials is None:
         return None
@@ -46,6 +47,17 @@ async def get_current_user_optional(
 
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
+    if user is None:
+        return None
+
+    # Check tenant is active (not suspended)
+    tenant_result = await session.execute(
+        select(Tenant).where(Tenant.id == user.tenant_id)
+    )
+    tenant = tenant_result.scalar_one_or_none()
+    if tenant and not tenant.is_active:
+        return None
+
     return user
 
 

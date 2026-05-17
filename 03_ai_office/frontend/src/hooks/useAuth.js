@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 
 const TOKEN_KEY = 'ai_office_token'
+const REFRESH_TOKEN_KEY = 'ai_office_refresh_token'
 
 /**
  * Auth hook for multi-tenant SaaS
@@ -31,6 +32,7 @@ export function useAuth() {
       })
       if (!response.ok) {
         localStorage.removeItem(TOKEN_KEY)
+        localStorage.removeItem(REFRESH_TOKEN_KEY)
         setUser(null)
         setLoading(false)
         return
@@ -39,6 +41,7 @@ export function useAuth() {
       setUser(data)
     } catch (err) {
       localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(REFRESH_TOKEN_KEY)
       setUser(null)
     } finally {
       setLoading(false)
@@ -63,6 +66,7 @@ export function useAuth() {
       }
       const data = await response.json()
       localStorage.setItem(TOKEN_KEY, data.access_token)
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
       await fetchUser()
       return true
     } catch (err) {
@@ -85,6 +89,7 @@ export function useAuth() {
       }
       const data = await response.json()
       localStorage.setItem(TOKEN_KEY, data.access_token)
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
       await fetchUser()
       return true
     } catch (err) {
@@ -95,28 +100,33 @@ export function useAuth() {
 
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
     setUser(null)
     setError(null)
   }, [])
 
   const refreshToken = useCallback(async () => {
-    const token = localStorage.getItem(TOKEN_KEY)
-    if (!token) return false
+    const refresh = localStorage.getItem(REFRESH_TOKEN_KEY)
+    if (!refresh) return false
     try {
       const response = await fetch('/api/auth/refresh', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refresh })
       })
       if (!response.ok) {
         localStorage.removeItem(TOKEN_KEY)
+        localStorage.removeItem(REFRESH_TOKEN_KEY)
         setUser(null)
         return false
       }
       const data = await response.json()
       localStorage.setItem(TOKEN_KEY, data.access_token)
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
       return true
     } catch (err) {
       localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(REFRESH_TOKEN_KEY)
       setUser(null)
       return false
     }

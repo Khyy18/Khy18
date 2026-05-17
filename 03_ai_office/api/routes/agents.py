@@ -10,11 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ai_office.api.dependencies import get_current_user_optional, get_tenant_id
+from ai_office.api.rate_limit import check_rate_limit
 from ai_office.api.schemas import ActivityResponse, AgentResponse, PaginatedResponse, TaskResponse
 from ai_office.core.database import get_session
 from ai_office.core.models import ActivityLog, Agent, Task, TenantAgent, User
 
-router = APIRouter(prefix="/api/agents", tags=["agents"])
+router = APIRouter(prefix="/api/agents", tags=["agents"], dependencies=[Depends(check_rate_limit)])
 
 
 @router.get("", response_model=List[AgentResponse])

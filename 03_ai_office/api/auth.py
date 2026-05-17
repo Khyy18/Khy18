@@ -22,6 +22,20 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
+# Validate JWT secret key at module import time.
+# In dev/test mode (skip_telegram_auth=True), use a fallback dev key.
+# In production (skip_telegram_auth=False), the secret MUST be explicitly set.
+_DEV_SECRET_FALLBACK = "dev-only-fallback-secret-key"
+
+if not settings.jwt_secret_key:
+    if settings.skip_telegram_auth:
+        settings.jwt_secret_key = _DEV_SECRET_FALLBACK
+    else:
+        raise RuntimeError(
+            "JWT_SECRET_KEY must be set in production (skip_telegram_auth=False). "
+            "Refusing to start with an empty secret."
+        )
+
 # Security scheme
 security = HTTPBearer(auto_error=False)
 
@@ -144,6 +158,17 @@ async def get_current_user(
             detail="User not found",
         )
 
+    # Check tenant is active (not suspended)
+    tenant_result = await session.execute(
+        select(Tenant).where(Tenant.id == user.tenant_id)
+    )
+    tenant = tenant_result.scalar_one_or_none()
+    if tenant and not tenant.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant is suspended",
+        )
+
     return user
 
 
@@ -170,6 +195,13 @@ async def register(
     session: AsyncSession = Depends(get_session),
 ) -> TokenResponse:
     """Register a new tenant and admin user."""
+    # Validate password strength
+    if len(request.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long",
+        )
+
     # Check if email already exists
     result = await session.execute(select(User).where(User.email == request.email))
     if result.scalar_one_or_none() is not None:
@@ -241,7 +273,12 @@ async def refresh(
     request: RefreshRequest,
     session: AsyncSession = Depends(get_session),
 ) -> TokenResponse:
-    """Refresh access token using a valid refresh token."""
+    """Refresh access token using a valid refresh token.
+
+    NOTE: Token revocation via a database blocklist is a future improvement.
+    Currently, refresh tokens remain valid until natural expiry. For MVP this
+    is acceptable but should be addressed before production scale.
+    """
     try:
         payload = jwt.decode(
             request.refresh_token, settings.jwt_secret_key, algorithms=[ALGORITHM]
