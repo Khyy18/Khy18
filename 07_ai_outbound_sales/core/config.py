@@ -135,5 +135,18 @@ class Settings(BaseSettings):
     voice_amd_enabled: bool = True
     voice_supported_languages: str = "en,ru,es,de"
 
+    # LLM Router
+    llm_router_fast_model: str = "llama3-8b-8192"
+    llm_router_complex_model: str = "claude-3-sonnet-20240229"
+    llm_router_voice_model: str = "gpt-4o-mini"
+
+    # TTS/STT Fallback
+    openai_tts_enabled: bool = True
+
+    # Adaptive Throttle
+    adaptive_throttle_enabled: bool = True
+    adaptive_throttle_bounce_threshold: float = 0.05
+    adaptive_throttle_cooldown_minutes: int = 30
+
 
 settings = Settings()  # type: ignore[call-arg]
