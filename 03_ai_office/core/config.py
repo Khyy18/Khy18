@@ -1,5 +1,7 @@
 """Конфигурация приложения через Pydantic Settings."""
 
+from __future__ import annotations
+
 from pydantic_settings import BaseSettings
 from pydantic import Field
 
@@ -10,6 +12,25 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = Field(default="", description="API ключ OpenAI")
     openai_model: str = Field(default="gpt-4o-mini", description="Модель OpenAI")
+
+    # JWT Auth
+    jwt_secret_key: str = Field(
+        default="dev-secret-key-change-in-production",
+        description="Secret key for JWT token signing",
+    )
+
+    # Stripe
+    stripe_secret_key: str = Field(default="", description="Stripe Secret Key")
+    stripe_webhook_secret: str = Field(default="", description="Stripe Webhook Secret")
+    stripe_price_starter: str = Field(default="", description="Stripe Price ID for Starter plan")
+    stripe_price_pro: str = Field(default="", description="Stripe Price ID for Pro plan")
+    stripe_price_agency: str = Field(default="", description="Stripe Price ID for Agency plan")
+
+    # Super Admin
+    super_admin_email: str = Field(default="", description="Super admin email address")
+
+    # Trial
+    trial_days: int = Field(default=7, description="Number of trial days for new tenants")
 
     # Telegram
     telegram_api_id: int = Field(default=0, description="Telegram API ID")

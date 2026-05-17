@@ -1,5 +1,7 @@
 """Фикстуры для тестов AI Office."""
 
+from __future__ import annotations
+
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
@@ -10,8 +12,18 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from ai_office.core.database import Base, get_session
-from ai_office.core.models import Agent, Task, ActivityLog
+from ai_office.core.models import (
+    Agent,
+    Task,
+    ActivityLog,
+    Plan,
+    PlanStep,
+    Tenant,
+    User,
+    TenantAgent,
+)
 from ai_office.api.main import app
+from ai_office.api.auth import hash_password, create_access_token
 
 
 @pytest_asyncio.fixture
@@ -53,6 +65,44 @@ async def test_client(async_session: AsyncSession):
         yield client
 
     app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def create_tenant(async_session: AsyncSession) -> Tenant:
+    """Create a test tenant."""
+    tenant = Tenant(
+        name="Test Company",
+        email="admin@testcompany.com",
+        plan_name="trial",
+    )
+    async_session.add(tenant)
+    await async_session.commit()
+    await async_session.refresh(tenant)
+    return tenant
+
+
+@pytest_asyncio.fixture
+async def create_user(async_session: AsyncSession, create_tenant: Tenant) -> User:
+    """Create a test user for the test tenant."""
+    user = User(
+        tenant_id=create_tenant.id,
+        email="user@testcompany.com",
+        password_hash=hash_password("testpassword123"),
+        role="admin",
+        is_super_admin=False,
+    )
+    async_session.add(user)
+    await async_session.commit()
+    await async_session.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def auth_headers(create_user: User, create_tenant: Tenant) -> dict:
+    """Return Authorization headers with a valid JWT token."""
+    token_data = {"sub": create_user.id, "tenant_id": create_tenant.id}
+    token = create_access_token(token_data)
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest_asyncio.fixture
