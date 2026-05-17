@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ai_office.api.dependencies import get_current_user_optional, get_tenant_id
 from ai_office.api.schemas import PaginatedResponse, TaskCreate, TaskResponse, TaskUpdate
 from ai_office.api.websocket import broadcast_event
+from ai_office.core.billing import check_task_limit
 from ai_office.core.database import get_session
 from ai_office.core.models import Task, User
 
@@ -64,6 +65,15 @@ async def create_task(
 ):
     """Создать новую задачу."""
     tenant_id = get_tenant_id(current_user)
+
+    # Enforce task limit for authenticated users
+    if tenant_id is not None:
+        under_limit = await check_task_limit(tenant_id, session)
+        if not under_limit:
+            raise HTTPException(
+                status_code=402,
+                detail="Task limit reached for your plan. Please upgrade.",
+            )
 
     task = Task(
         description=task_data.description,

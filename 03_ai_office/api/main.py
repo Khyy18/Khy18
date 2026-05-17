@@ -13,6 +13,7 @@ from ai_office.api.routes.plans import router as plans_router
 from ai_office.api.routes.delegations import router as delegations_router
 from ai_office.api.routes.services import router as services_router
 from ai_office.api.routes.services_extended import router as services_extended_router
+from ai_office.api.routes.billing import router as billing_router
 from ai_office.api.middleware import TelegramAuthMiddleware
 from ai_office.api.auth import auth_router
 from ai_office.api.websocket import websocket_endpoint
@@ -55,6 +56,7 @@ app.include_router(plans_router)
 app.include_router(delegations_router)
 app.include_router(services_router)
 app.include_router(services_extended_router)
+app.include_router(billing_router)
 
 
 @app.get("/api/health")
