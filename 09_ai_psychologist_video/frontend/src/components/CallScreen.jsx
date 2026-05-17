@@ -32,7 +32,7 @@ export default function CallScreen() {
   // VAD: определение активности речи
   const handleSpeechEnd = useCallback(() => {
     // Можно отправить контрольный сигнал серверу о конце фразы
-    sendControl({ type: 'speech_end' });
+    sendControl({ action: 'speech_end' });
   }, [sendControl]);
 
   const { isSpeaking } = useVAD(localStream, {
@@ -130,7 +130,7 @@ export default function CallScreen() {
         audioTracks[0].enabled = !newMuted;
       }
     }
-    sendControl({ type: newMuted ? 'mute' : 'unmute' });
+    sendControl({ action: newMuted ? 'mute' : 'unmute' });
   }
 
   function handleEndCall() {
@@ -139,7 +139,7 @@ export default function CallScreen() {
       localStream.getTracks().forEach((t) => t.stop());
     }
     stopRecording();
-    sendControl({ type: 'end_call' });
+    sendControl({ action: 'end_call' });
     navigate('/');
   }
 
