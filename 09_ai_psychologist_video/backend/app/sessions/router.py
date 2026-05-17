@@ -126,6 +126,12 @@ async def create_session(user_id: str = Depends(get_current_user_id)):
         await session.commit()
         await session.refresh(new_session)
 
+        # Запускаем per-session billing task
+        from app.main import billing_worker
+        await billing_worker.start_session_billing(
+            new_session.id, user_id, settings.RATE_PER_MINUTE
+        )
+
         return SessionResponse(
             id=new_session.id,
             status=new_session.status.value,

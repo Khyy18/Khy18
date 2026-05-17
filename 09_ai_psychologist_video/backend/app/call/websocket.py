@@ -35,7 +35,7 @@ class CallState(str, enum.Enum):
 
 
 async def _get_redis():
-    """Получаем Redis для подписки на force_end от биллинга (shared instance for dev)."""
+    """Получаем Redis для подписки на force_end от биллинга (shared singleton)."""
     from app.redis_client import get_redis
     return await get_redis()
 
@@ -58,6 +58,27 @@ async def websocket_call(websocket: WebSocket, session_id: str, token: str = Que
 
     # Принимаем WebSocket соединение
     await websocket.accept()
+
+    # Проверяем ownership сессии
+    try:
+        async with async_session_factory() as db_session:
+            from sqlalchemy import select as sa_select
+            result = await db_session.execute(
+                sa_select(Session).where(Session.id == session_id)
+            )
+            session_row = result.scalar_one_or_none()
+            if not session_row or session_row.user_id != user_id:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Session does not belong to user",
+                })
+                await websocket.close(code=4003, reason="Session does not belong to user")
+                return
+    except Exception as e:
+        logger.error(f"Session ownership check failed: {e}")
+        await websocket.close(code=4003, reason="Session does not belong to user")
+        return
+
     state = CallState.connecting
 
     # Инициализируем AI pipeline
@@ -70,8 +91,8 @@ async def websocket_call(websocket: WebSocket, session_id: str, token: str = Que
 
     async def listen_billing():
         """
-        Слушаем канал Redis для сигнала force_end от BillingWorker.
-        Если баланс исчерпан, принудительно завершаем звонок.
+        Слушаем канал Redis для сигналов от BillingWorker.
+        Обрабатывает force_end и JSON-сообщения (balance_warning).
         """
         try:
             async for message in pubsub.listen():
@@ -87,6 +108,13 @@ async def websocket_call(websocket: WebSocket, session_id: str, token: str = Que
                             "message": "Баланс исчерпан. Сессия завершается.",
                         })
                         return True
+                    elif data.startswith("{"):
+                        # JSON-сообщение (например balance_warning)
+                        try:
+                            parsed = json.loads(data)
+                            await websocket.send_json(parsed)
+                        except (json.JSONDecodeError, Exception) as e:
+                            logger.error(f"Failed to parse billing message: {e}")
         except Exception as e:
             logger.error(f"Redis listener error: {e}")
         return False
@@ -163,11 +191,17 @@ async def websocket_call(websocket: WebSocket, session_id: str, token: str = Que
         logger.error(f"WebSocket error: {e}")
         state = CallState.closed
     finally:
-        # Завершаем сессию в БД
+        # Завершаем сессию
         state = CallState.closed
         billing_task.cancel()
         await pubsub.unsubscribe(f"call:{session_id}")
-        await redis.close()
+
+        # Останавливаем per-session billing task
+        try:
+            from app.main import billing_worker
+            await billing_worker.stop_session_billing(session_id)
+        except Exception as e:
+            logger.error(f"Failed to stop session billing for {session_id}: {e}")
 
         # Update session status to finished in the database
         try:
