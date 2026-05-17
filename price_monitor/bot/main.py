@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 # Heartbeat file path for health monitoring
 HEARTBEAT_FILE = Path("/tmp/bot_heartbeat")
 
+# Module-level Redis client reused across heartbeat ticks
+_redis_client: redis.Redis | None = None
+
 # Shutdown event for graceful termination
 _shutdown_event = asyncio.Event()
 
@@ -43,13 +46,14 @@ def _signal_handler(sig: int, *args: Any) -> None:
 
 async def _heartbeat_job() -> None:
     """Write heartbeat timestamp for health monitoring."""
+    global _redis_client
     ts = str(time.time())
     try:
-        r = redis.from_url(settings.redis_url, decode_responses=True)
-        await r.set("bot:heartbeat", ts, ex=120)
-        await r.aclose()
-    except (ConnectionError, TimeoutError, OSError):
-        # Fallback to file
+        if _redis_client is None:
+            _redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+        await _redis_client.set("bot:heartbeat", ts, ex=120)
+    except (ConnectionError, TimeoutError, OSError, Exception):
+        _redis_client = None
         HEARTBEAT_FILE.write_text(ts)
 
 

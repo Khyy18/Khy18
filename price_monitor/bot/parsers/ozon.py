@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -130,7 +131,7 @@ class OzonParser:
             if result:
                 return result
         except Exception:
-            logger.warning("Primary Ozon API failed for %s, trying fallback", product_id)
+            logger.info("Primary Ozon API failed for %s, falling through to fallback", product_id)
 
         # Try fallback URL
         try:
@@ -138,7 +139,7 @@ class OzonParser:
             if result:
                 return result
         except Exception:
-            logger.warning("Fallback Ozon API failed for %s, trying DB cache", product_id)
+            logger.info("Fallback Ozon API failed for %s, trying DB cache", product_id)
 
         # Try database fallback - get last known price
         try:
@@ -149,6 +150,7 @@ class OzonParser:
                 history = await get_price_history(product["id"], limit=1)
                 if history:
                     latest = history[0]
+                    cached_age = time.time() - latest.get("timestamp", time.time())
                     return {
                         "product_id": str(product_id),
                         "name": product.get("name", ""),
@@ -160,9 +162,10 @@ class OzonParser:
                         "feedbacks": 0,
                         "marketplace": "ozon",
                         "cached": True,
+                        "cached_age_seconds": round(cached_age),
                     }
         except Exception as e:
-            logger.error("DB fallback failed for Ozon %s: %s", product_id, e)
+            logger.error("All tiers failed for Ozon %s: %s", product_id, e)
 
         return None
 

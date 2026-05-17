@@ -247,12 +247,10 @@ class TestWebSocket:
         from starlette.websockets import WebSocketDisconnect
 
         with TestClient(fastapi_app) as sync_client:
-            try:
+            with pytest.raises((WebSocketDisconnect, Exception)) as exc_info:
                 with sync_client.websocket_connect("/ws/prices?token=invalid_token") as ws:
-                    # If we get here, the connection was accepted (unexpected)
                     ws.send_text("ping")
-                    pytest.fail("Expected WebSocket to be closed")
-            except Exception as e:
-                # WebSocket should be closed with 4001
-                # Different starlette versions raise different exceptions
-                pass
+                    ws.receive_text()
+            # Verify the disconnect happened (not some unrelated error)
+            if isinstance(exc_info.value, WebSocketDisconnect):
+                assert exc_info.value.code == 4001

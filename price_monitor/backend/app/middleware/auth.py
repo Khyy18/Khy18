@@ -88,14 +88,16 @@ def verify_telegram_init_data(init_data: str) -> dict | None:
 
         # Check auth_date expiry
         auth_date_str = parsed.get("auth_date", [None])[0]
-        if auth_date_str:
-            try:
-                auth_date = int(auth_date_str)
-                if time.time() - auth_date > _AUTH_DATE_MAX_AGE:
-                    logger.warning("Telegram initData expired: auth_date=%s", auth_date_str)
-                    return None
-            except (ValueError, TypeError):
-                pass
+        # If bot token is set (production mode), auth_date is required
+        if not auth_date_str:
+            return None
+        try:
+            auth_date = int(auth_date_str)
+            if time.time() - auth_date > _AUTH_DATE_MAX_AGE:
+                logger.warning("Telegram initData expired: auth_date=%s", auth_date_str)
+                return None
+        except (ValueError, TypeError):
+            return None
 
         user_str = parsed.get("user", [None])[0]
         if user_str:
