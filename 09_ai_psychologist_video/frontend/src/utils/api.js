@@ -87,3 +87,78 @@ export async function topUp(amount, source) {
     body: JSON.stringify({ amount, source }),
   });
 }
+
+/**
+ * Получить итоги сессии
+ */
+export async function getSessionSummary(sessionId) {
+  return request(`/api/sessions/${sessionId}/summary`);
+}
+
+/**
+ * Получить список планов подписки
+ */
+export async function getSubscriptionPlans() {
+  return request('/api/subscriptions/plans');
+}
+
+/**
+ * Оформить подписку
+ */
+export async function subscribe(plan) {
+  return request('/api/subscriptions/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({ plan }),
+  });
+}
+
+/**
+ * Применить промокод
+ */
+export async function applyPromo(code) {
+  return request('/api/billing/apply-promo', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
+}
+
+/**
+ * Получить статистику рефералов
+ */
+export async function getReferralStats() {
+  return request('/api/referral/stats');
+}
+
+/**
+ * Получить реферальную ссылку
+ */
+export async function getReferralLink() {
+  return request('/api/referral/link');
+}
+
+/**
+ * Админ: получить статистику
+ */
+export async function getAdminStats(adminKey) {
+  return request('/api/admin/stats', {
+    headers: { 'X-Admin-Key': adminKey },
+  });
+}
+
+/**
+ * Админ: получить список сессий
+ */
+export async function getAdminSessions(adminKey, page = 1) {
+  return request(`/api/admin/sessions?page=${page}`, {
+    headers: { 'X-Admin-Key': adminKey },
+  });
+}
+
+/**
+ * Админ: получить список пользователей
+ */
+export async function getAdminUsers(adminKey, page = 1) {
+  return request(`/api/admin/users?page=${page}`, {
+    headers: { 'X-Admin-Key': adminKey },
+  });
+}

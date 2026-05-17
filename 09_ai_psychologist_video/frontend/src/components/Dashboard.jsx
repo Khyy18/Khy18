@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTelegramAuth } from '../hooks/useTelegramAuth';
-import { getProfile, getSessions, createSession } from '../utils/api';
+import { getProfile, getSessions, createSession, getReferralLink } from '../utils/api';
 
 /**
  * Главный экран приложения.
@@ -15,6 +15,7 @@ export default function Dashboard() {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [referralLink, setReferralLink] = useState('');
 
   const RATE_PER_MINUTE = profile?.rate_per_minute ? Number(profile.rate_per_minute) : 5;
 
@@ -29,6 +30,10 @@ export default function Dashboard() {
         ]);
         if (profileData) setProfile(profileData);
         if (Array.isArray(sessionsData)) setSessions(sessionsData);
+        // Load referral link
+        getReferralLink()
+          .then((data) => setReferralLink(data.link || ''))
+          .catch(() => {});
       } catch {
         // В dev-режиме API может быть недоступен
       } finally {
@@ -83,7 +88,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--tg-theme-bg-color)] text-[var(--tg-theme-text-color)] p-4">
+    <div className="min-h-screen bg-[var(--tg-theme-bg-color)] text-[var(--tg-theme-text-color)] p-4 pb-20">
       {/* Заголовок */}
       <header className="text-center mb-6">
         <h1 className="text-2xl font-bold">AI Психолог</h1>
@@ -101,6 +106,11 @@ export default function Dashboard() {
         <p className="text-[var(--tg-theme-hint-color)] text-xs mt-2">
           {RATE_PER_MINUTE} &#8381; / мин
         </p>
+        {profile?.subscription_plan && profile.subscription_plan !== 'free' && (
+          <span className="inline-block mt-2 text-xs bg-[var(--tg-theme-button-color)] text-white px-3 py-1 rounded-full">
+            {profile.subscription_plan}
+          </span>
+        )}
       </div>
 
       {/* Кнопка начала сессии */}
@@ -130,6 +140,19 @@ export default function Dashboard() {
       >
         Пополнить баланс
       </button>
+
+      {/* Реферальная секция */}
+      {referralLink && (
+        <div className="bg-[var(--tg-theme-secondary-bg-color)] rounded-xl p-4 mb-6">
+          <p className="font-semibold mb-2">Пригласить друга</p>
+          <p className="text-[var(--tg-theme-hint-color)] text-xs mb-2">
+            Поделитесь ссылкой и получите бонус
+          </p>
+          <div className="bg-[var(--tg-theme-bg-color)] rounded-lg p-2 text-xs break-all text-[var(--tg-theme-hint-color)]">
+            {referralLink}
+          </div>
+        </div>
+      )}
 
       {/* История сессий */}
       {sessions.length > 0 && (

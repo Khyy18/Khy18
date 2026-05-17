@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { topUp } from '../utils/api';
+import { topUp, applyPromo } from '../utils/api';
 
 /**
  * Экран пополнения баланса.
@@ -13,6 +13,9 @@ export default function TopUp() {
   const [method, setMethod] = useState(null); // 'stars' | 'card'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [promoCode, setPromoCode] = useState('');
+  const [promoMessage, setPromoMessage] = useState(null);
+  const [promoLoading, setPromoLoading] = useState(false);
 
   const presets = [100, 300, 500, 1000];
 
@@ -47,6 +50,22 @@ export default function TopUp() {
       setError('Ошибка оплаты. Попробуйте позже.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleApplyPromo() {
+    if (!promoCode.trim()) return;
+    setPromoLoading(true);
+    setPromoMessage(null);
+    try {
+      const result = await applyPromo(promoCode.trim());
+      setPromoMessage({ success: true, text: result.message || 'Промокод применен!' });
+      setPromoCode('');
+    } catch (err) {
+      const msg = err.data?.detail || 'Недействительный промокод';
+      setPromoMessage({ success: false, text: msg });
+    } finally {
+      setPromoLoading(false);
     }
   }
 
@@ -145,6 +164,32 @@ export default function TopUp() {
       {error && (
         <p className="text-red-500 text-sm text-center mb-4">{error}</p>
       )}
+
+      {/* Промокод */}
+      <div className="mb-6">
+        <p className="text-[var(--tg-theme-hint-color)] text-sm mb-3">Промокод</p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Введите промокод"
+            value={promoCode}
+            onChange={(e) => setPromoCode(e.target.value)}
+            className="flex-1 py-3 px-4 rounded-xl bg-[var(--tg-theme-secondary-bg-color)] text-[var(--tg-theme-text-color)] placeholder-[var(--tg-theme-hint-color)] outline-none focus:ring-2 focus:ring-[var(--tg-theme-button-color)]"
+          />
+          <button
+            onClick={handleApplyPromo}
+            disabled={promoLoading || !promoCode.trim()}
+            className="px-4 py-3 rounded-xl bg-[var(--tg-theme-button-color)] text-white font-medium hover:opacity-90 disabled:opacity-50 transition-all"
+          >
+            {promoLoading ? '...' : 'Применить'}
+          </button>
+        </div>
+        {promoMessage && (
+          <p className={`text-sm mt-2 ${promoMessage.success ? 'text-green-500' : 'text-red-500'}`}>
+            {promoMessage.text}
+          </p>
+        )}
+      </div>
 
       {/* Кнопка подтверждения */}
       <button

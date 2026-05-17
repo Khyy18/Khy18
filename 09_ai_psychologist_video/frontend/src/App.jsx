@@ -1,8 +1,15 @@
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import CallScreen from './components/CallScreen';
 import TopUp from './components/TopUp';
+import Onboarding from './components/Onboarding';
+import Settings from './components/Settings';
+import SessionSummary from './components/SessionSummary';
+import Subscriptions from './components/Subscriptions';
+import Admin from './components/Admin';
+import BottomNav from './components/ui/BottomNav';
+import { ToastProvider } from './components/ui/Toast';
 
 /**
  * Обертка приложения.
@@ -42,14 +49,38 @@ function TelegramWrapper({ children }) {
   return <>{children}</>;
 }
 
+/**
+ * Редирект на онбординг при первом запуске.
+ */
+function OnboardingGuard({ children }) {
+  const location = useLocation();
+  const onboardingComplete = localStorage.getItem('onboarding_complete');
+
+  if (!onboardingComplete && location.pathname === '/') {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  return children;
+}
+
 export default function App() {
   return (
     <TelegramWrapper>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/call/:sessionId" element={<CallScreen />} />
-        <Route path="/topup" element={<TopUp />} />
-      </Routes>
+      <ToastProvider>
+        <OnboardingGuard>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/call/:sessionId" element={<CallScreen />} />
+            <Route path="/topup" element={<TopUp />} />
+            <Route path="/onboarding" element={<Onboarding />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/summary/:sessionId" element={<SessionSummary />} />
+            <Route path="/subscriptions" element={<Subscriptions />} />
+            <Route path="/admin" element={<Admin />} />
+          </Routes>
+          <BottomNav />
+        </OnboardingGuard>
+      </ToastProvider>
     </TelegramWrapper>
   );
 }
