@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class BirthData(BaseModel):
@@ -11,6 +11,42 @@ class BirthData(BaseModel):
     lat: float = Field(..., description="Latitude of birth place")
     lon: float = Field(..., description="Longitude of birth place")
     city: str = Field(..., description="City name of birth place")
+    tz_offset: float = Field(
+        default=0.0,
+        description="Timezone offset from UTC in hours (e.g. 3.0 for Moscow)",
+    )
+
+    @field_validator("date")
+    @classmethod
+    def validate_date_format(cls, v: str) -> str:
+        """Validate date is in YYYY-MM-DD format."""
+        import re
+
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("Date must be in YYYY-MM-DD format")
+        from datetime import datetime as dt
+
+        try:
+            dt.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("Invalid date value")
+        return v
+
+    @field_validator("time")
+    @classmethod
+    def validate_time_format(cls, v: str) -> str:
+        """Validate time is in HH:MM format."""
+        import re
+
+        if not re.match(r"^\d{2}:\d{2}$", v):
+            raise ValueError("Time must be in HH:MM format")
+        parts = v.split(":")
+        hour, minute = int(parts[0]), int(parts[1])
+        if hour < 0 or hour > 23:
+            raise ValueError("Hour must be between 00 and 23")
+        if minute < 0 or minute > 59:
+            raise ValueError("Minute must be between 00 and 59")
+        return v
 
 
 class NatalChart(BaseModel):
@@ -65,6 +101,7 @@ class SessionStartResponse(BaseModel):
     session_id: str
     natal_chart: NatalChart
     balance: int
+    token: str = Field(default="", description="Session token for WebSocket authentication")
 
 
 class BalanceTopupRequest(BaseModel):

@@ -44,19 +44,38 @@ class BillingManager:
             return
         await self._redis.set(f"balance:{user_id}", str(amount))
 
+    # Lua script for atomic check-and-deduct
+    _DEDUCT_SCRIPT = """
+    local key = KEYS[1]
+    local cost = tonumber(ARGV[1])
+    local current = tonumber(redis.call('GET', key) or '0')
+    if current < cost then
+        return {0, current}
+    end
+    local new_balance = current - cost
+    redis.call('SET', key, tostring(new_balance))
+    return {1, new_balance}
+    """
+
     async def deduct_minute(self, user_id: str, cost: int) -> tuple[bool, int]:
-        """Deduct per-minute cost from user balance.
+        """Deduct per-minute cost from user balance atomically.
+
+        Uses a Lua script to prevent race conditions between
+        concurrent deductions or top-ups.
 
         Returns (success, remaining_balance).
         If balance is insufficient, returns (False, current_balance).
         """
-        current = await self.get_balance(user_id)
-        if current < cost:
-            return False, current
+        if self._redis is None:
+            return False, 0
 
-        new_balance = current - cost
-        await self.set_balance(user_id, new_balance)
-        return True, new_balance
+        key = f"balance:{user_id}"
+        result = await self._redis.eval(
+            self._DEDUCT_SCRIPT, 1, key, str(cost)
+        )
+        success = bool(result[0])
+        remaining = int(result[1])
+        return success, remaining
 
     async def topup_balance(self, user_id: str, amount: int) -> int:
         """Add coins to user balance. Returns new balance."""

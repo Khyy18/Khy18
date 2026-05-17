@@ -3,8 +3,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export type MessageType = 'BALANCE_UPDATE' | 'TERMINATE_CALL';
 
 export interface WSMessage {
-  type: MessageType;
-  payload: Record<string, unknown>;
+  event_type: MessageType;
+  balance_after: number;
+  amount: number;
+  user_id: string;
+  session_id: string;
+  timestamp: string;
 }
 
 interface UseWebSocketOptions {

@@ -83,10 +83,16 @@ def _calculate_aspect(
     return None
 
 
-def _datetime_to_jd(date_str: str, time_str: str) -> float:
-    """Convert date and time strings to Julian Day Number."""
+def _datetime_to_jd(date_str: str, time_str: str, tz_offset: float = 0.0) -> float:
+    """Convert date and time strings to Julian Day Number.
+
+    Subtracts the timezone offset to convert local time to UTC
+    before computing the Julian Day.
+    """
     dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-    jd = swe.julday(dt.year, dt.month, dt.day, dt.hour + dt.minute / 60.0)
+    # Convert local time to UTC by subtracting timezone offset
+    hour_ut = dt.hour + dt.minute / 60.0 - tz_offset
+    jd = swe.julday(dt.year, dt.month, dt.day, hour_ut)
     return jd
 
 
@@ -98,7 +104,7 @@ def calculate_natal_chart(birth_data: BirthData) -> NatalChart:
     """
     swe.set_ephe_path(None)
 
-    jd = _datetime_to_jd(birth_data.date, birth_data.time)
+    jd = _datetime_to_jd(birth_data.date, birth_data.time, birth_data.tz_offset)
 
     cusps, ascmc = swe.houses(jd, birth_data.lat, birth_data.lon, b"P")
     cusps_list = list(cusps)

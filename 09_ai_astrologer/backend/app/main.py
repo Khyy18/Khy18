@@ -2,11 +2,12 @@
 
 import asyncio
 import logging
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.astro import calculate_natal_chart
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 sessions: dict[str, UserSession] = {}
 pipelines: dict[str, AIPipeline] = {}
+session_tokens: dict[str, str] = {}
 
 
 @asynccontextmanager
@@ -90,10 +92,15 @@ async def start_session(request: SessionStartRequest):
     session_prompt = build_session_prompt(natal_chart)
     pipelines[session_id] = AIPipeline(system_prompt=session_prompt)
 
+    # Generate a session-specific token for WebSocket authentication
+    token = secrets.token_urlsafe(32)
+    session_tokens[session_id] = token
+
     return SessionStartResponse(
         session_id=session_id,
         natal_chart=natal_chart,
         balance=request.balance,
+        token=token,
     )
 
 
@@ -129,11 +136,17 @@ async def topup_balance(request: BalanceTopupRequest):
 
 
 @app.websocket("/ws/call/{session_id}")
-async def websocket_call(websocket: WebSocket, session_id: str):
+async def websocket_call(websocket: WebSocket, session_id: str, token: str = Query(default="")):
     """WebSocket endpoint for real-time audio/video communication."""
     session = sessions.get(session_id)
     if not session:
         await websocket.close(code=4004, reason="Session not found")
+        return
+
+    # Verify token
+    expected_token = session_tokens.get(session_id)
+    if not expected_token or token != expected_token:
+        await websocket.close(code=4001, reason="Invalid token")
         return
 
     await websocket.accept()
@@ -168,14 +181,24 @@ async def websocket_call(websocket: WebSocket, session_id: str):
     finally:
         session.status = CallStatus.ENDED
         await billing_manager.stop_billing_loop(session_id)
+        # Cleanup session and pipeline to prevent memory leak
+        sessions.pop(session_id, None)
+        pipelines.pop(session_id, None)
+        session_tokens.pop(session_id, None)
 
 
 @app.websocket("/ws/billing/{session_id}")
-async def websocket_billing(websocket: WebSocket, session_id: str):
+async def websocket_billing(websocket: WebSocket, session_id: str, token: str = Query(default="")):
     """WebSocket endpoint for billing updates."""
     session = sessions.get(session_id)
     if not session:
         await websocket.close(code=4004, reason="Session not found")
+        return
+
+    # Verify token
+    expected_token = session_tokens.get(session_id)
+    if not expected_token or token != expected_token:
+        await websocket.close(code=4001, reason="Invalid token")
         return
 
     await websocket.accept()

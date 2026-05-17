@@ -31,15 +31,21 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
         return result.get("text", "")
 
 
-async def generate_response(transcript: str, system_prompt: str) -> str:
+async def generate_response(
+    transcript: str,
+    system_prompt: str,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> str:
     """Generate a text response using Claude 3.5 Sonnet via Anthropic API.
 
-    Takes the user's transcribed speech and the session system prompt
-    to produce the astrologer's response.
+    Takes the user's transcribed speech, the session system prompt,
+    and optional conversation history to produce the astrologer's response.
     """
     if not settings.anthropic_api_key:
         logger.warning("Anthropic API key not configured, returning placeholder")
         return "Ой, у меня сейчас связь барахлит, подожди секунду!"
+
+    messages = conversation_history if conversation_history else [{"role": "user", "content": transcript}]
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
@@ -53,7 +59,7 @@ async def generate_response(transcript: str, system_prompt: str) -> str:
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": 200,
                 "system": system_prompt,
-                "messages": [{"role": "user", "content": transcript}],
+                "messages": messages,
             },
         )
         response.raise_for_status()
@@ -125,7 +131,9 @@ class AIPipeline:
 
         self.conversation_history.append({"role": "user", "content": transcript})
 
-        response_text = await generate_response(transcript, self.system_prompt)
+        response_text = await generate_response(
+            transcript, self.system_prompt, self.conversation_history
+        )
 
         self.conversation_history.append(
             {"role": "assistant", "content": response_text}

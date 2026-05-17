@@ -220,8 +220,20 @@ class TestBilling:
         async def mock_set(key, value):
             redis._store[key] = value
 
+        async def mock_eval(script, numkeys, *args):
+            """Simulate Lua script for atomic deduct."""
+            key = args[0]
+            cost = int(args[1])
+            current = int(redis._store.get(key) or "0")
+            if current < cost:
+                return [0, current]
+            new_balance = current - cost
+            redis._store[key] = str(new_balance)
+            return [1, new_balance]
+
         redis.get = AsyncMock(side_effect=mock_get)
         redis.set = AsyncMock(side_effect=mock_set)
+        redis.eval = AsyncMock(side_effect=mock_eval)
         return redis
 
     @pytest.fixture

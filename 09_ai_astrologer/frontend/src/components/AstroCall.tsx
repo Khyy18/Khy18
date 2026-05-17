@@ -33,9 +33,9 @@ export function AstroCall({ sessionId, wsBaseUrl = 'ws://localhost:8000' }: Astr
     if (!lastMessage) return;
 
     const msg: WSMessage = lastMessage;
-    if (msg.type === 'BALANCE_UPDATE') {
-      setBalance(msg.payload.balance as number);
-    } else if (msg.type === 'TERMINATE_CALL') {
+    if (msg.event_type === 'BALANCE_UPDATE') {
+      setBalance(msg.balance_after);
+    } else if (msg.event_type === 'TERMINATE_CALL') {
       setTerminated(true);
     }
   }, [lastMessage]);
