@@ -21,6 +21,25 @@ class Settings(BaseSettings):
     LIVEKIT_API_KEY: str = ""
     LIVEKIT_API_SECRET: str = ""
 
+    # --- Провайдеры AI ---
+    LLM_PROVIDER: str = "anthropic"
+    LLM_MODEL: str = "claude-sonnet-4-20250514"
+    TTS_PROVIDER: str = "elevenlabs"
+    TTS_VOICE_ID: str = ""
+    ELEVENLABS_VOICE_ID: str = ""
+
+    # --- Оплата ---
+    YOOKASSA_SHOP_ID: str = ""
+    YOOKASSA_SECRET_KEY: str = ""
+
+    # --- Мониторинг и безопасность ---
+    SENTRY_DSN: str = ""
+    ADMIN_API_KEY: str = ""
+
+    # --- Логирование ---
+    LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "json"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
