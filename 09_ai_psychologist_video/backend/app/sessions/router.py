@@ -104,6 +104,19 @@ async def create_session(user_id: str = Depends(get_current_user_id)):
                 detail="Insufficient balance to start a session",
             )
 
+        # Проверяем, нет ли уже активной сессии у пользователя
+        active_check = await session.execute(
+            select(Session).where(
+                Session.user_id == user_id,
+                Session.status == SessionStatus.active,
+            )
+        )
+        if active_check.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409,
+                detail="User already has an active session",
+            )
+
         new_session = Session(
             user_id=user_id,
             status=SessionStatus.active,

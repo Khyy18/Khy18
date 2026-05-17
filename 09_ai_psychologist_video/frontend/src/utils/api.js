@@ -81,9 +81,9 @@ export async function createSession() {
 /**
  * Пополнить баланс
  */
-export async function topUp(amount, method) {
+export async function topUp(amount, source) {
   return request('/api/billing/topup', {
     method: 'POST',
-    body: JSON.stringify({ amount, method }),
+    body: JSON.stringify({ amount, source }),
   });
 }
