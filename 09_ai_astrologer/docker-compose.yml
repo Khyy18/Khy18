@@ -33,6 +33,7 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+    restart: unless-stopped
     environment:
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=postgresql://astrologer:astrologer_secret@postgres:5432/ai_astrologer
@@ -60,8 +61,14 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:80"
+    restart: unless-stopped
     depends_on:
       - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:80/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 volumes:
   redis_data:
