@@ -1,18 +1,20 @@
 """FastAPI application with REST and WebSocket endpoints for AI Astrologer."""
 
 import asyncio
+import json
 import logging
 import secrets
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.astro import calculate_natal_chart
 from app.billing import billing_manager
 from app.config import settings
+from app.http_client import create_http_client, set_http_client, close_http_client, get_http_client
 from app.models import (
     BalanceTopupRequest,
     BalanceTopupResponse,
@@ -24,17 +26,21 @@ from app.models import (
 )
 from app.ai_pipeline import AIPipeline
 from app.prompts import build_session_prompt
+from app.session_store import RedisSessionStore
+from app.telegram_auth import get_telegram_user
 
 logger = logging.getLogger(__name__)
-
-sessions: dict[str, UserSession] = {}
-pipelines: dict[str, AIPipeline] = {}
-session_tokens: dict[str, str] = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: connect/disconnect Redis."""
+    """Application lifespan: connect/disconnect Redis, create shared HTTP client."""
+    # Create shared httpx client
+    http_client = create_http_client()
+    set_http_client(http_client)
+    app.state.http_client = http_client
+
+    # Connect to Redis
     try:
         import redis.asyncio as aioredis
 
@@ -42,13 +48,17 @@ async def lifespan(app: FastAPI):
             settings.redis_url, decode_responses=True
         )
         billing_manager.redis = redis_client
+        app.state.session_store = RedisSessionStore(redis_client)
         logger.info("Redis connected")
     except Exception as e:
-        logger.warning(f"Redis not available: {e}. Billing will be limited.")
+        logger.warning(f"Redis not available: {e}. Sessions/billing will be limited.")
         billing_manager.redis = None
+        app.state.session_store = RedisSessionStore(None)
 
     yield
 
+    # Cleanup
+    await close_http_client()
     if billing_manager.redis:
         await billing_manager.redis.close()
         logger.info("Redis disconnected")
@@ -71,7 +81,10 @@ app.add_middleware(
 
 
 @app.post("/api/session/start", response_model=SessionStartResponse)
-async def start_session(request: SessionStartRequest):
+async def start_session(
+    request: SessionStartRequest,
+    telegram_user: str = Depends(get_telegram_user),
+):
     """Start a new astrology session: calculate natal chart, create session."""
     natal_chart = calculate_natal_chart(request.birth_data)
 
@@ -84,17 +97,20 @@ async def start_session(request: SessionStartRequest):
         status=CallStatus.CONNECTING,
         natal_chart=natal_chart,
     )
-    sessions[session_id] = session
+
+    # Save session to Redis
+    store: RedisSessionStore = app.state.session_store
+    await store.save_session(session)
 
     if billing_manager.redis:
         await billing_manager.set_balance(request.user_id, request.balance)
 
     session_prompt = build_session_prompt(natal_chart)
-    pipelines[session_id] = AIPipeline(system_prompt=session_prompt)
+    await store.save_pipeline_context(session_id, session_prompt)
 
-    # Generate a session-specific token for WebSocket authentication
+    # Generate a session-specific token and store in Redis
     token = secrets.token_urlsafe(32)
-    session_tokens[session_id] = token
+    await store.save_token(session_id, token)
 
     return SessionStartResponse(
         session_id=session_id,
@@ -107,7 +123,8 @@ async def start_session(request: SessionStartRequest):
 @app.get("/api/session/{session_id}/status")
 async def get_session_status(session_id: str):
     """Get current session status."""
-    session = sessions.get(session_id)
+    store: RedisSessionStore = app.state.session_store
+    session = await store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return {
@@ -128,40 +145,81 @@ async def topup_balance(request: BalanceTopupRequest):
     else:
         new_balance = request.amount
 
-    for session in sessions.values():
-        if session.user_id == request.user_id:
-            session.balance = new_balance
-
     return BalanceTopupResponse(user_id=request.user_id, new_balance=new_balance)
 
 
+async def _authenticate_websocket(websocket: WebSocket, session_id: str) -> bool:
+    """Authenticate WebSocket via first-message auth protocol.
+
+    Expects the first message to be JSON: {"type": "auth", "token": "..."}
+    Validates token against Redis. Returns True if auth succeeds.
+    """
+    try:
+        # Wait for auth message with a timeout
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        msg = json.loads(raw)
+
+        if msg.get("type") != "auth" or "token" not in msg:
+            await websocket.close(code=4001, reason="Invalid auth message")
+            return False
+
+        store: RedisSessionStore = app.state.session_store
+        expected_token = await store.get_token(session_id)
+
+        if not expected_token or msg["token"] != expected_token:
+            await websocket.close(code=4001, reason="Invalid token")
+            return False
+
+        return True
+    except asyncio.TimeoutError:
+        await websocket.close(code=4001, reason="Auth timeout")
+        return False
+    except (json.JSONDecodeError, KeyError):
+        await websocket.close(code=4001, reason="Invalid auth message format")
+        return False
+
+
 @app.websocket("/ws/call/{session_id}")
-async def websocket_call(websocket: WebSocket, session_id: str, token: str = Query(default="")):
+async def websocket_call(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for real-time audio/video communication."""
-    session = sessions.get(session_id)
+    store: RedisSessionStore = app.state.session_store
+    session = await store.get_session(session_id)
     if not session:
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    # Verify token
-    expected_token = session_tokens.get(session_id)
-    if not expected_token or token != expected_token:
-        await websocket.close(code=4001, reason="Invalid token")
+    await websocket.accept()
+
+    # First-message authentication
+    if not await _authenticate_websocket(websocket, session_id):
         return
 
-    await websocket.accept()
+    # Update session status
     session.status = CallStatus.ACTIVE
+    await store.save_session(session)
 
-    pipeline = pipelines.get(session_id)
-    if not pipeline:
+    # Load pipeline context from Redis
+    system_prompt = await store.get_pipeline_context(session_id)
+    if not system_prompt:
         await websocket.close(code=4005, reason="Pipeline not initialized")
         return
+
+    http_client = get_http_client()
+    pipeline = AIPipeline(system_prompt=system_prompt, http_client=http_client)
+
+    # Load any existing conversation history
+    history = await store.get_history(session_id)
+    if history:
+        pipeline.conversation_history = history
 
     try:
         while True:
             data = await websocket.receive_bytes()
 
             result = await pipeline.process_audio(data)
+
+            # Persist updated conversation history
+            await store.save_history(session_id, pipeline.conversation_history)
 
             await websocket.send_json({
                 "type": "response",
@@ -180,28 +238,26 @@ async def websocket_call(websocket: WebSocket, session_id: str, token: str = Que
         logger.error(f"Call WebSocket error for session {session_id}: {e}")
     finally:
         session.status = CallStatus.ENDED
+        await store.save_session(session)
         await billing_manager.stop_billing_loop(session_id)
-        # Cleanup session and pipeline to prevent memory leak
-        sessions.pop(session_id, None)
-        pipelines.pop(session_id, None)
-        session_tokens.pop(session_id, None)
+        # Cleanup token
+        await store.delete_token(session_id)
 
 
 @app.websocket("/ws/billing/{session_id}")
-async def websocket_billing(websocket: WebSocket, session_id: str, token: str = Query(default="")):
+async def websocket_billing(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for billing updates."""
-    session = sessions.get(session_id)
+    store: RedisSessionStore = app.state.session_store
+    session = await store.get_session(session_id)
     if not session:
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    # Verify token
-    expected_token = session_tokens.get(session_id)
-    if not expected_token or token != expected_token:
-        await websocket.close(code=4001, reason="Invalid token")
-        return
-
     await websocket.accept()
+
+    # First-message authentication
+    if not await _authenticate_websocket(websocket, session_id):
+        return
 
     await billing_manager.start_billing_loop(
         session_id, session.user_id, websocket
