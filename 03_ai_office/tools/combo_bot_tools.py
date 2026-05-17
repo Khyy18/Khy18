@@ -52,6 +52,7 @@ async def get_bot_status() -> str:
         pass
 
     result = (
+        "[CACHED/STALE DATA - service unreachable]\n"
         "Статус Combo Bot (кэш):\n"
         "  Состояние: online\n"
         "  Uptime: 99.8%\n"
@@ -91,6 +92,7 @@ async def get_active_users(period: str = "day") -> str:
         pass
 
     result = (
+        f"[CACHED/STALE DATA - service unreachable]\n"
         f"Пользователи ({period}, кэш):\n"
         f"  Активных: 342\n"
         f"  Новых: 28\n"
@@ -131,6 +133,7 @@ async def get_command_stats(period: str = "day") -> str:
         pass
 
     result = (
+        f"[CACHED/STALE DATA - service unreachable]\n"
         f"Команды ({period}, кэш):\n"
         f"  /start: 85 вызовов\n"
         f"  /help: 42 вызова\n"

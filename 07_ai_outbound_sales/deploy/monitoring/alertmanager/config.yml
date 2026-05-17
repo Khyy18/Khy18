@@ -11,12 +11,11 @@ route:
 receivers:
   - name: telegram
     webhook_configs:
-      - url: "http://telegram-bot:8080/alert"
+      # Send alerts directly to the Telegram Bot API.
+      # Replace <YOUR_BOT_TOKEN> with the actual bot token and <CHAT_ID> with
+      # the target chat/group ID before deploying.
+      - url: "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/sendMessage"
         send_resolved: true
-        http_config:
-          basic_auth:
-            username: "alertmanager"
-            password: "${ALERTMANAGER_WEBHOOK_PASSWORD}"
 
 inhibit_rules:
   - source_match:

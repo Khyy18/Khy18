@@ -7,6 +7,11 @@ from ai_office.core.config import settings
 
 router = APIRouter(prefix="/api/services", tags=["services"])
 
+# Module-level httpx client with connection pooling. This client lives for the
+# process lifetime and is never explicitly closed, matching the pattern in
+# services.py. In a long-running FastAPI process this is intentional: it avoids
+# per-request TCP+TLS handshake overhead and the client is cleaned up when the
+# process exits.
 _http_client = httpx.AsyncClient(timeout=5.0)
 
 

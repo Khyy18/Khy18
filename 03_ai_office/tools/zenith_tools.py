@@ -55,6 +55,7 @@ async def get_trading_stats(period: str = "day") -> str:
         pass
 
     result = (
+        f"[CACHED/STALE DATA - service unreachable]\n"
         f"Торговая статистика ({period}):\n"
         f"  Сервис недоступен - данные из кэша\n"
         f"  Всего сделок: 47\n"
@@ -95,6 +96,7 @@ async def get_open_positions() -> str:
         pass
 
     result = (
+        "[CACHED/STALE DATA - service unreachable]\n"
         "Открытые позиции (кэш):\n"
         "  BTC/USDT: LONG x5 | PnL: +120 USDT\n"
         "  ETH/USDT: SHORT x3 | PnL: -45 USDT\n"
@@ -133,6 +135,7 @@ async def get_pnl_summary(period: str = "day") -> str:
         pass
 
     result = (
+        f"[CACHED/STALE DATA - service unreachable]\n"
         f"PnL сводка ({period}, кэш):\n"
         f"  Реализованный PnL: +890 USDT\n"
         f"  Нереализованный PnL: +105 USDT\n"

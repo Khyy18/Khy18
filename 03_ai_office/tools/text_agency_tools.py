@@ -55,6 +55,7 @@ async def get_content_stats(period: str = "week") -> str:
         pass
 
     result = (
+        f"[CACHED/STALE DATA - service unreachable]\n"
         f"Контент-статистика ({period}, кэш):\n"
         f"  Опубликовано: 12\n"
         f"  В очереди: 5\n"
@@ -97,6 +98,7 @@ async def get_recent_articles(limit: int = 5) -> str:
         pass
 
     result = (
+        "[CACHED/STALE DATA - service unreachable]\n"
         "Недавние публикации (кэш):\n"
         "  - Как выбрать CRM для стартапа (1,200 просмотров)\n"
         "  - 10 трендов маркетинга 2024 (890 просмотров)\n"
@@ -135,6 +137,7 @@ async def get_content_queue() -> str:
         pass
 
     result = (
+        "[CACHED/STALE DATA - service unreachable]\n"
         "Очередь публикаций (кэш):\n"
         "  - SEO-оптимизация для B2B (дата: 2024-01-15)\n"
         "  - Email-маркетинг: лучшие практики (дата: 2024-01-17)\n"

@@ -38,7 +38,7 @@ from core.models import (
     Message,
     MessageStatus,
 )
-from telegram_admin.config import DATABASE_URL, TELEGRAM_BOT_TOKEN
+from telegram_admin.config import ADMIN_CHAT_IDS, DATABASE_URL, TELEGRAM_BOT_TOKEN
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -63,9 +63,22 @@ OUTCOME_EMOJI = {
 }
 
 
+async def _check_access(message: types.Message) -> bool:
+    """Check if the user is in the ADMIN_CHAT_IDS allowlist.
+
+    Returns True if access is denied (caller should return early).
+    """
+    if ADMIN_CHAT_IDS and message.from_user.id not in ADMIN_CHAT_IDS:
+        await message.answer("Access denied")
+        return True
+    return False
+
+
 @router.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
     """Handle /start command - display welcome and available commands."""
+    if await _check_access(message):
+        return
     text = (
         "🤖 *AI Outbound Agency Admin Bot*\n\n"
         "Available commands:\n"
@@ -82,6 +95,8 @@ async def cmd_start(message: types.Message) -> None:
 @router.message(Command("stats"))
 async def cmd_stats(message: types.Message) -> None:
     """Handle /stats command - show today's metrics."""
+    if await _check_access(message):
+        return
     today_start = datetime.now(timezone.utc).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
@@ -130,6 +145,8 @@ async def cmd_stats(message: types.Message) -> None:
 @router.message(Command("campaigns"))
 async def cmd_campaigns(message: types.Message) -> None:
     """Handle /campaigns command - list active campaigns."""
+    if await _check_access(message):
+        return
     async with session_factory() as session:
         result = await session.execute(
             select(Campaign).where(
@@ -153,6 +170,8 @@ async def cmd_campaigns(message: types.Message) -> None:
 @router.message(Command("calls"))
 async def cmd_calls(message: types.Message) -> None:
     """Handle /calls command - show 5 most recent calls."""
+    if await _check_access(message):
+        return
     async with session_factory() as session:
         result = await session.execute(
             select(Call).order_by(Call.started_at.desc()).limit(5)
@@ -176,6 +195,8 @@ async def cmd_calls(message: types.Message) -> None:
 @router.message(Command("alerts"))
 async def cmd_alerts(message: types.Message) -> None:
     """Handle /alerts command - check system health."""
+    if await _check_access(message):
+        return
     # Simple health checks
     issues = []
 
@@ -195,6 +216,8 @@ async def cmd_alerts(message: types.Message) -> None:
 @router.message(Command("pause"))
 async def cmd_pause(message: types.Message) -> None:
     """Handle /pause command - pause all active campaigns."""
+    if await _check_access(message):
+        return
     async with session_factory() as session:
         result = await session.execute(
             select(Campaign).where(Campaign.status == CampaignStatus.active)
@@ -214,6 +237,8 @@ async def cmd_pause(message: types.Message) -> None:
 @router.message(Command("resume"))
 async def cmd_resume(message: types.Message) -> None:
     """Handle /resume command - resume all paused campaigns."""
+    if await _check_access(message):
+        return
     async with session_factory() as session:
         result = await session.execute(
             select(Campaign).where(Campaign.status == CampaignStatus.paused)
