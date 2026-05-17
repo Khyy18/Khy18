@@ -4,14 +4,20 @@ AI Pipeline: цепочка обработки аудио в реальном в
 Архитектура pipeline:
     Аудио от клиента -> STT -> LLM -> TTS -> Avatar -> Видео клиенту
 
-Каждый шаг реализован как стаб с подробными комментариями
-о реальной интеграции с API провайдеров.
+STT реализован через Groq Whisper API с VAD (Voice Activity Detection)
+для определения пауз в речи. LLM/TTS/Avatar - стабы для будущей интеграции.
 """
 
 import asyncio
+import logging
 from typing import AsyncGenerator
 
+import httpx
+
+from app.config import settings
 from app.prompts.psychologist import SYSTEM_PROMPT
+
+logger = logging.getLogger(__name__)
 
 
 class AIPipeline:
@@ -30,6 +36,11 @@ class AIPipeline:
         ]
         self._last_transcription: str = ""
 
+        # VAD state
+        self._silence_counter: int = 0
+        self._is_speaking: bool = False
+        self._vad_threshold: float = 500.0  # Порог энергии для webm аудио
+
     def _trim_history(self) -> None:
         """Trim conversation history to MAX_HISTORY_LENGTH, keeping system prompt."""
         if len(self._conversation_history) > self.MAX_HISTORY_LENGTH:
@@ -38,36 +49,85 @@ class AIPipeline:
             trimmed = self._conversation_history[-(self.MAX_HISTORY_LENGTH - 1):]
             self._conversation_history = [system_msg] + trimmed
 
+    def _calculate_audio_energy(self, chunk: bytes) -> float:
+        """
+        Вычисление энергии аудио-чанка.
+
+        Для webm-encoded аудио используем дисперсию байтовых значений
+        как прокси для наличия речевого контента vs тишины.
+        """
+        if not chunk:
+            return 0.0
+        byte_values = list(chunk)
+        if len(byte_values) == 0:
+            return 0.0
+        mean = sum(byte_values) / len(byte_values)
+        variance = sum((b - mean) ** 2 for b in byte_values) / len(byte_values)
+        return variance
+
     async def process_audio_chunk(self, chunk: bytes) -> None:
         """
-        Обработка аудио-чанка от клиента.
+        Обработка аудио-чанка от клиента с VAD логикой.
 
-        Реальная интеграция: Groq Whisper (STT)
-        -----------------------------------------
-        1. Накапливаем аудио-чанки в буфере (VAD - Voice Activity Detection)
-        2. При обнаружении паузы в речи (>500ms тишины) отправляем на STT
-        3. API вызов:
-           ```python
-           import httpx
-           async with httpx.AsyncClient() as client:
-               response = await client.post(
-                   "https://api.groq.com/openai/v1/audio/transcriptions",
-                   headers={"Authorization": f"Bearer {settings.STT_API_KEY}"},
-                   files={"file": ("audio.webm", audio_data, "audio/webm")},
-                   data={"model": "whisper-large-v3", "language": "ru"}
-               )
-               transcription = response.json()["text"]
-           ```
-        4. Groq дает ~10x ускорение по сравнению с OpenAI Whisper API
-        5. Поддерживаемые форматы: webm, mp3, wav, ogg (opus)
+        Накапливаем аудио-чанки в буфере. Определяем паузы в речи
+        через energy-based VAD. При обнаружении паузы (2 тихих чанка
+        подряд при интервале 250мс = 500мс тишины) запускаем STT.
         """
-        # Стаб: накапливаем аудио в буфере
         self._audio_buffer.append(chunk)
 
-        # В dev-режиме имитируем распознавание после N чанков
-        if len(self._audio_buffer) >= 10:
-            self._last_transcription = "Я чувствую тревогу и не могу расслабиться."
+        energy = self._calculate_audio_energy(chunk)
+
+        if energy >= self._vad_threshold:
+            # Есть речевая активность
+            self._silence_counter = 0
+            self._is_speaking = True
+        else:
+            # Тихий чанк
+            self._silence_counter += 1
+
+        # Если говорили и обнаружили паузу (>= 2 тихих чанка = 500мс тишины)
+        if self._is_speaking and self._silence_counter >= 2:
+            audio_data = b"".join(self._audio_buffer)
             self._audio_buffer.clear()
+            self._silence_counter = 0
+            self._is_speaking = False
+
+            # Транскрибируем накопленный аудио
+            transcription = await self._transcribe_audio(audio_data)
+            if transcription.strip():
+                self._last_transcription = transcription
+                logger.info(
+                    "Transcription for session %s: %s",
+                    self.session_id,
+                    transcription[:100],
+                )
+
+    async def _transcribe_audio(self, audio_data: bytes) -> str:
+        """
+        Транскрипция аудио через Groq Whisper API.
+
+        Если STT_API_KEY не задан, возвращает mock текст для dev-режима.
+        """
+        if not settings.STT_API_KEY:
+            return "[mock] Я чувствую тревогу."
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {settings.STT_API_KEY}"},
+                    files={"file": ("audio.webm", audio_data, "audio/webm")},
+                    data={"model": "whisper-large-v3", "language": "ru"},
+                )
+                response.raise_for_status()
+                result = response.json()
+                return result.get("text", "")
+        except httpx.HTTPStatusError as e:
+            logger.error("Groq STT API error: %s", e.response.status_code)
+            return ""
+        except httpx.RequestError as e:
+            logger.error("Groq STT request failed: %s", e)
+            return ""
 
     async def get_response_stream(self) -> AsyncGenerator[dict, None]:
         """

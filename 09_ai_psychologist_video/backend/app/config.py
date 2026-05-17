@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     TTS_API_KEY: str = ""
     AVATAR_API_KEY: str = ""
 
+    # LiveKit (для будущей интеграции видео-стриминга)
+    LIVEKIT_API_KEY: str = ""
+    LIVEKIT_API_SECRET: str = ""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
