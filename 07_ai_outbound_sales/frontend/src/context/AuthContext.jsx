@@ -2,11 +2,38 @@ import { createContext, useContext, useState, useCallback, useEffect } from 'rea
 
 const AuthContext = createContext(null)
 
+function isTokenExpired(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    if (!payload.exp) return false
+    return Date.now() >= payload.exp * 1000
+  } catch {
+    return true
+  }
+}
+
+function parseStoredUser(raw) {
+  try {
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    localStorage.removeItem('auth_user')
+    return null
+  }
+}
+
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => localStorage.getItem('auth_token'))
+  const [token, setToken] = useState(() => {
+    const stored = localStorage.getItem('auth_token')
+    if (stored && isTokenExpired(stored)) {
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('auth_user')
+      return null
+    }
+    return stored
+  })
   const [user, setUser] = useState(() => {
-    const stored = localStorage.getItem('auth_user')
-    return stored ? JSON.parse(stored) : null
+    if (!token) return null
+    return parseStoredUser(localStorage.getItem('auth_user'))
   })
 
   useEffect(() => {

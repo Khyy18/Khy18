@@ -72,7 +72,7 @@ export default function SalesPanel() {
 
       {/* Link to full Outbound Sales UI */}
       <a
-        href={`${window.location.protocol}//${window.location.hostname}:5174`}
+        href={data?.dashboard_url || import.meta.env.VITE_OUTBOUND_SALES_URL || `${window.location.protocol}//${window.location.hostname}:5174`}
         target="_blank"
         rel="noopener noreferrer"
         className="flex items-center justify-center gap-2 w-full py-3 bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl text-white/60 hover:text-white hover:bg-white/10 transition-all text-sm"
