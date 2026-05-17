@@ -12,6 +12,7 @@ from app.models.database import init_db
 from app.billing.worker import BillingWorker
 from app.auth.router import router as auth_router
 from app.billing.payment import router as billing_router
+from app.sessions.router import router as sessions_router
 from app.call.websocket import websocket_call
 
 billing_worker = BillingWorker()
@@ -47,6 +48,7 @@ app.add_middleware(
 # Роутеры
 app.include_router(auth_router)
 app.include_router(billing_router)
+app.include_router(sessions_router)
 
 # WebSocket маршрут
 app.websocket("/ws/call/{session_id}")(websocket_call)

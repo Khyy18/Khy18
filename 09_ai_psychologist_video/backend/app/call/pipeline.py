@@ -20,6 +20,8 @@ class AIPipeline:
     и генерации аудио/видео ответа психолога.
     """
 
+    MAX_HISTORY_LENGTH = 50  # Maximum number of messages to keep in history
+
     def __init__(self, session_id: str):
         self.session_id = session_id
         self._audio_buffer: list[bytes] = []
@@ -27,6 +29,14 @@ class AIPipeline:
             {"role": "system", "content": SYSTEM_PROMPT}
         ]
         self._last_transcription: str = ""
+
+    def _trim_history(self) -> None:
+        """Trim conversation history to MAX_HISTORY_LENGTH, keeping system prompt."""
+        if len(self._conversation_history) > self.MAX_HISTORY_LENGTH:
+            # Always keep the system prompt (first message), trim oldest after it
+            system_msg = self._conversation_history[0]
+            trimmed = self._conversation_history[-(self.MAX_HISTORY_LENGTH - 1):]
+            self._conversation_history = [system_msg] + trimmed
 
     async def process_audio_chunk(self, chunk: bytes) -> None:
         """
@@ -143,6 +153,9 @@ class AIPipeline:
             "role": "assistant",
             "content": mock_response
         })
+
+        # Trim history to prevent unbounded growth
+        self._trim_history()
 
         # Эмулируем потоковую отдачу текста
         words = mock_response.split()

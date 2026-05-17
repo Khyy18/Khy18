@@ -32,22 +32,12 @@ class BillingWorker:
         self._redis = None
 
     async def _get_redis(self):
-        """Получаем Redis-клиент. Если реальный Redis недоступен, используем fakeredis."""
+        """Получаем Redis-клиент. Использует shared module для корректной работы pubsub."""
         if self._redis is not None:
             return self._redis
 
-        try:
-            import redis.asyncio as aioredis
-            r = aioredis.from_url(settings.REDIS_URL)
-            await r.ping()
-            self._redis = r
-            logger.info("Connected to real Redis")
-        except Exception:
-            # Фоллбек на fakeredis для dev-режима
-            import fakeredis.aioredis
-            self._redis = fakeredis.aioredis.FakeRedis()
-            logger.info("Using fakeredis (dev mode)")
-
+        from app.redis_client import get_redis
+        self._redis = await get_redis()
         return self._redis
 
     async def start(self):

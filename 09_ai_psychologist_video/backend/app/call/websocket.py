@@ -21,7 +21,6 @@ import enum
 from fastapi import WebSocket, WebSocketDisconnect, Query
 
 from app.auth.jwt import verify_token
-from app.config import settings
 from app.call.pipeline import AIPipeline
 from app.models.database import async_session_factory, Session, SessionStatus
 
@@ -36,15 +35,9 @@ class CallState(str, enum.Enum):
 
 
 async def _get_redis():
-    """Получаем Redis для подписки на force_end от биллинга."""
-    try:
-        import redis.asyncio as aioredis
-        r = aioredis.from_url(settings.REDIS_URL)
-        await r.ping()
-        return r
-    except Exception:
-        import fakeredis.aioredis
-        return fakeredis.aioredis.FakeRedis()
+    """Получаем Redis для подписки на force_end от биллинга (shared instance for dev)."""
+    from app.redis_client import get_redis
+    return await get_redis()
 
 
 async def websocket_call(websocket: WebSocket, session_id: str, token: str = Query(...)):
@@ -175,6 +168,22 @@ async def websocket_call(websocket: WebSocket, session_id: str, token: str = Que
         billing_task.cancel()
         await pubsub.unsubscribe(f"call:{session_id}")
         await redis.close()
+
+        # Update session status to finished in the database
+        try:
+            async with async_session_factory() as db_session:
+                from sqlalchemy import select as sa_select
+                result = await db_session.execute(
+                    sa_select(Session).where(Session.id == session_id)
+                )
+                session_row = result.scalar_one_or_none()
+                if session_row and session_row.status == SessionStatus.active:
+                    from datetime import datetime
+                    session_row.status = SessionStatus.finished
+                    session_row.ended_at = datetime.utcnow()
+                    await db_session.commit()
+        except Exception as e:
+            logger.error(f"Failed to finalize session {session_id}: {e}")
 
         # Отправляем финальный статус если соединение еще открыто
         try:

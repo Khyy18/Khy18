@@ -16,7 +16,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
 
-  const RATE_PER_MINUTE = 15; // Стоимость за минуту (можно получать с сервера)
+  const RATE_PER_MINUTE = profile?.rate_per_minute ? Number(profile.rate_per_minute) : 5;
 
   useEffect(() => {
     if (authLoading) return;

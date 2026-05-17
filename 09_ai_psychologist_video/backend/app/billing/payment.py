@@ -8,17 +8,17 @@
 
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.auth.dependencies import get_current_user_id
 from app.models.database import async_session_factory, User, Transaction, TransactionType
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
 
 class TopUpRequest(BaseModel):
-    user_id: str
     amount: Decimal
     source: str = "demo"  # "stars" | "yookassa" | "demo"
 
@@ -81,15 +81,16 @@ async def process_yookassa_payment(user_id: str, amount_rub: Decimal) -> dict:
 
 
 @router.post("/topup", response_model=TopUpResponse)
-async def topup(request: TopUpRequest):
+async def topup(request: TopUpRequest, user_id: str = Depends(get_current_user_id)):
     """
     Пополнение баланса пользователя.
+    Requires JWT authentication - user_id is extracted from the token.
     В demo-режиме просто начисляет указанную сумму.
     В production будет вызывать process_stars_payment или process_yookassa_payment.
     """
     async with async_session_factory() as session:
         result = await session.execute(
-            select(User).where(User.id == request.user_id)
+            select(User).where(User.id == user_id)
         )
         user = result.scalar_one_or_none()
 
