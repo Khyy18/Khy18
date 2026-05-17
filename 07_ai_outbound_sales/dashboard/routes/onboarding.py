@@ -1,4 +1,5 @@
 """Self-serve onboarding - guided campaign setup without human intervention."""
+from __future__ import annotations
 
 import json
 import logging

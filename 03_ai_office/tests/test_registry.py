@@ -4,11 +4,11 @@ import pytest
 
 
 def test_all_agents_registered():
-    """Тест: все 8 агентов зарегистрированы."""
+    """Тест: все 12 агентов зарегистрированы."""
     from ai_office.agents import registry
 
     names = registry.get_names()
-    assert len(names) == 8
+    assert len(names) == 12
     assert "alice" in names
     assert "sam" in names
     assert "max" in names
@@ -17,6 +17,10 @@ def test_all_agents_registered():
     assert "nova" in names
     assert "iris" in names
     assert "oscar" in names
+    assert "outbound_sales" in names
+    assert "zenith_trading" in names
+    assert "text_agency" in names
+    assert "combo_bot" in names
 
 
 def test_registry_get_case_insensitive():
@@ -48,7 +52,7 @@ def test_registry_get_all():
     from ai_office.agents import registry
 
     all_configs = registry.get_all()
-    assert len(all_configs) == 8
+    assert len(all_configs) == 12
     names = [c.name for c in all_configs]
     assert "alice" in names
     assert "sam" in names
@@ -58,6 +62,10 @@ def test_registry_get_all():
     assert "nova" in names
     assert "iris" in names
     assert "oscar" in names
+    assert "outbound_sales" in names
+    assert "zenith_trading" in names
+    assert "text_agency" in names
+    assert "combo_bot" in names
 
 
 def test_each_agent_has_tools_and_prompt():

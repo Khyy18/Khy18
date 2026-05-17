@@ -155,6 +155,50 @@ def merge_into_state(state: dict[str, Any], saved: dict[str, Any]) -> None:
             g[key] = value
 
 
+def _get_state_path() -> str:
+    """Путь к JSON-файлу состояния (рядом с trades.db)."""
+    import os
+    db = _db_path()
+    return os.path.join(os.path.dirname(db) or ".", "state.json")
+
+
+def save_state(state: dict[str, Any]) -> None:
+    """Атомарно сохранить полный state в JSON-файл."""
+    import os
+    import tempfile
+    path = _get_state_path()
+    try:
+        payload = json.dumps(state, ensure_ascii=False, default=_json_serializer)
+    except (TypeError, ValueError) as exc:
+        print(f"[STATE] Ошибка сериализации save_state: {exc}")
+        raise
+    dir_name = os.path.dirname(path) or "."
+    try:
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        try:
+            os.write(fd, payload.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        print(f"[STATE] Ошибка save_state: {exc}")
+        raise
+
+
+def load_state() -> Optional[dict[str, Any]]:
+    """Загрузить state из JSON-файла. None если файл не существует."""
+    import os
+    path = _get_state_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.loads(f.read())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[STATE] Ошибка load_state: {exc}")
+        return None
+
+
 def setup_graceful_shutdown(state: dict[str, Any]) -> None:
     """Зарегистрировать SIGTERM/SIGINT handler → persist + exit."""
 

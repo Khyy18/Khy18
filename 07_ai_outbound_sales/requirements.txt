@@ -30,6 +30,11 @@ sentry-sdk[fastapi]
 dnspython
 scikit-learn
 joblib
+twilio
+deepgram-sdk
+elevenlabs
+websockets
+aiogram
 
 # Test dependencies
 pytest
@@ -37,4 +42,6 @@ pytest-asyncio
 pytest-cov
 factory-boy
 aiosqlite
+ruff
+locust
 

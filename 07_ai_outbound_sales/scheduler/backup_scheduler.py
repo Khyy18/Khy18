@@ -1,4 +1,5 @@
 """Backup scheduler - runs periodic database and Redis backups."""
+from __future__ import annotations
 
 import logging
 from typing import Any

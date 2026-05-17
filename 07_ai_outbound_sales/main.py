@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import json
 import logging
@@ -5,6 +6,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -37,11 +39,16 @@ from dashboard.routes.preview import router as preview_router
 from dashboard.routes.referral import router as referral_router
 from dashboard.routes.webhook_status import router as webhook_status_router
 from dashboard.routes.crm_webhooks import router as crm_webhooks_router
+from dashboard.routes.webhook_events import router as webhook_events_router
 from dashboard.routes.costs import router as costs_router
 from dashboard.routes.reports import router as reports_router
 from dashboard.views import router as views_router
 from agents.approval_queue import router as approvals_router, set_email_sender
 from channels.email.deliverability_routes import router as deliverability_router
+from dashboard.routes.voice import router as voice_router
+from dashboard.routes.voice_webhooks import router as voice_webhooks_router
+from dashboard.routes.voice_billing import router as voice_billing_router
+from dashboard.routes.calendar import router as calendar_router
 
 # Initialize structured logging
 setup_logging()
@@ -364,6 +371,73 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.error("Failed to start InboxListener: %s", exc)
 
+    # Initialize Voice Channel services if Twilio is configured
+    _voice_scheduler_task: asyncio.Task | None = None
+    if settings.twilio_account_sid:
+        try:
+            from channels.voice import TwilioClient, DeepgramSTT, ElevenLabsTTS, CallManager
+            from scheduler.voice_scheduler import VoiceScheduler
+            from agents.voice_conversation import VoiceConversationAgent
+
+            twilio_client = TwilioClient(
+                account_sid=settings.twilio_account_sid,
+                auth_token=settings.twilio_auth_token,
+                from_number=settings.twilio_phone_number,
+            )
+            deepgram_stt = DeepgramSTT(api_key=settings.deepgram_api_key)
+            elevenlabs_tts = ElevenLabsTTS(
+                api_key=settings.elevenlabs_api_key,
+                voice_id=settings.elevenlabs_voice_id,
+            )
+
+            # Use the webhook LLM client already created above
+            voice_llm = getattr(app.state, "llm_client", None)
+
+            # Create VoiceConversationAgent for FSM-driven conversations
+            voice_agent = VoiceConversationAgent(
+                llm_client=voice_llm,
+                settings=settings,
+                session_factory=async_session_factory,
+            )
+
+            call_manager = CallManager(
+                twilio_client=twilio_client,
+                stt=deepgram_stt,
+                tts=elevenlabs_tts,
+                llm_client=voice_llm,
+                session_factory=async_session_factory,
+                settings=settings,
+                redis_url=settings.redis_url,
+                voice_agent=voice_agent,
+            )
+            app.state.call_manager = call_manager
+
+            voice_scheduler = VoiceScheduler(
+                session_factory=async_session_factory,
+                call_manager=call_manager,
+                settings=settings,
+                redis_url=settings.redis_url,
+            )
+            app.state.voice_scheduler = voice_scheduler
+
+            async def _voice_scheduler_loop() -> None:
+                interval = 60  # Check every 60 seconds
+                while True:
+                    try:
+                        await voice_scheduler.run_voice_tick()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        logger.error("Voice scheduler error: %s", exc)
+                    await asyncio.sleep(interval)
+
+            _voice_scheduler_task = asyncio.create_task(
+                _voice_scheduler_loop(), name="voice_scheduler"
+            )
+            logger.info("Voice channel services initialized")
+        except Exception as exc:
+            logger.error("Failed to initialize voice services: %s", exc)
+
     yield
 
     # Shutdown
@@ -399,6 +473,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             pass
         logger.info("InboxListener stopped")
 
+    if _voice_scheduler_task is not None:
+        _voice_scheduler_task.cancel()
+        try:
+            await _voice_scheduler_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Voice scheduler stopped")
+
     if _scheduler is not None:
         await _scheduler.stop()
         logger.info("Scheduler stopped")
@@ -414,6 +496,15 @@ app = FastAPI(
     description="Autonomous AI-powered outbound sales agent system",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Add observability middleware
@@ -443,10 +534,15 @@ app.include_router(preview_router)
 app.include_router(referral_router)
 app.include_router(webhook_status_router)
 app.include_router(crm_webhooks_router)
+app.include_router(webhook_events_router)
 app.include_router(costs_router)
 app.include_router(reports_router)
 app.include_router(approvals_router)
 app.include_router(deliverability_router)
+app.include_router(voice_router)
+app.include_router(voice_webhooks_router)
+app.include_router(voice_billing_router)
+app.include_router(calendar_router)
 app.include_router(views_router)
 
 # Mount static files
@@ -566,6 +662,12 @@ async def metrics(request: Request) -> Response:
         if auth_header != expected:
             return Response(content="Unauthorized", status_code=401)
     return metrics_response()
+
+
+# Serve frontend in production mode
+_frontend_dist = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
+if settings.serve_frontend and _os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
 
 
 if __name__ == "__main__":

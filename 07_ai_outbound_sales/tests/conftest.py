@@ -1,5 +1,7 @@
 """Shared test fixtures for the AI Outbound Agency test suite."""
 
+from __future__ import annotations
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator
@@ -27,6 +29,7 @@ from core.models import (
     Message,
     MessageDirection,
     MessageStatus,
+    Objection,
     Plan,
     PlanName,
     Sequence,
@@ -38,6 +41,15 @@ from core.models import (
     ABTest,
     ABTestAssignment,
     ABTestStatus,
+    Call,
+    CallScript,
+    CallStatus,
+    CallOutcome,
+    VoiceAddon,
+    VoiceAddonPlan,
+    LeadInteraction,
+    Webhook,
+    WebhookDelivery,
 )
 
 
@@ -342,6 +354,7 @@ def make_plan(**kwargs) -> Plan:
         "linkedin_limit": 100,
         "campaigns_limit": 5,
         "domains_limit": 1,
+        "voice_calls_limit": 0,
         "price_cents": 2900,
         "created_at": datetime.now(timezone.utc),
     }
@@ -366,3 +379,103 @@ def make_subscription(
     }
     defaults.update(kwargs)
     return Subscription(**defaults)
+
+
+def make_call(
+    tenant_id: uuid.UUID | None = None,
+    lead_id: uuid.UUID | None = None,
+    **kwargs,
+) -> Call:
+    """Create a Call instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "lead_id": lead_id or uuid.uuid4(),
+        "twilio_sid": f"CA{uuid.uuid4().hex[:32]}",
+        "status": CallStatus.initiated,
+        "started_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return Call(**defaults)
+
+
+def make_call_script(
+    tenant_id: uuid.UUID | None = None,
+    **kwargs,
+) -> CallScript:
+    """Create a CallScript instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "name": "Test Script",
+        "script_json": {"greeting_template": "Hello!", "topics": ["product demo"]},
+        "voice_id": "default",
+        "language": "en",
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return CallScript(**defaults)
+
+
+def make_voice_addon(
+    tenant_id: uuid.UUID | None = None,
+    **kwargs,
+) -> VoiceAddon:
+    """Create a VoiceAddon instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "plan_name": VoiceAddonPlan.voice_starter,
+        "stripe_subscription_id": "sub_voice_test_123",
+        "calls_limit": 50,
+        "calls_used_this_period": 0,
+        "overage_rate_cents": 50,
+        "period_start": datetime.now(timezone.utc),
+        "period_end": None,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return VoiceAddon(**defaults)
+
+
+def make_lead_interaction(
+    lead_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
+    **kwargs,
+) -> LeadInteraction:
+    """Create a LeadInteraction instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "lead_id": lead_id or uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "interaction_type": "call",
+        "channel": "voice",
+        "summary": "Test interaction summary",
+        "context_json": {},
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return LeadInteraction(**defaults)
+
+
+def make_objection(
+    tenant_id: uuid.UUID | None = None,
+    **kwargs,
+) -> Objection:
+    """Create an Objection instance with defaults."""
+    defaults = {
+        "id": uuid.uuid4(),
+        "tenant_id": tenant_id or uuid.uuid4(),
+        "objection_text": "It's too expensive for our budget",
+        "category": "pricing",
+        "responses": [
+            {"text": "I understand budget concerns. Let me show the ROI.", "success_rate": 0.7, "times_used": 5}
+        ],
+        "times_encountered": 3,
+        "context": "Raised during pricing discussion",
+        "created_at": datetime.now(timezone.utc),
+    }
+    defaults.update(kwargs)
+    return Objection(**defaults)

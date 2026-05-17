@@ -1,4 +1,5 @@
 """CRM webhook management endpoints with user-auth based access."""
+from __future__ import annotations
 
 import hashlib
 import hmac

@@ -6,6 +6,8 @@ transitions, message counts, event creation, and score updates across the
 complete pipeline from tenant creation to meeting booking.
 """
 
+from __future__ import annotations
+
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch

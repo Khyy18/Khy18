@@ -1,4 +1,5 @@
 """Tests for the LLMBudgetManager per-tenant spending control."""
+from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -9,8 +9,9 @@ from ai_office.core.database import init_db
 from ai_office.api.routes.agents import router as agents_router
 from ai_office.api.routes.tasks import router as tasks_router
 from ai_office.api.routes.activity import router as activity_router
-from ai_office.api.routes.plans import router as plans_router
 from ai_office.api.routes.delegations import router as delegations_router
+from ai_office.api.routes.services import router as services_router
+from ai_office.api.routes.services_extended import router as services_extended_router
 from ai_office.api.middleware import TelegramAuthMiddleware
 from ai_office.api.websocket import websocket_endpoint
 
@@ -47,8 +48,9 @@ app.websocket("/api/ws")(websocket_endpoint)
 app.include_router(agents_router)
 app.include_router(tasks_router)
 app.include_router(activity_router)
-app.include_router(plans_router)
 app.include_router(delegations_router)
+app.include_router(services_router)
+app.include_router(services_extended_router)
 
 
 @app.get("/api/health")

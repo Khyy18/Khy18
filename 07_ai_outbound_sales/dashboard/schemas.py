@@ -1,3 +1,4 @@
+from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Optional
 from uuid import UUID
@@ -338,3 +339,57 @@ class OnboardingStatusResponse(BaseModel):
     current_step: str
     steps_completed: list[str]
     tenant_id: str
+
+
+# ---------- Voice Billing Schemas ----------
+
+
+class VoicePlanResponse(BaseModel):
+    plan_name: str
+    display_name: str
+    price_cents: int
+    calls_included: int
+    overage_rate_cents: int
+    stripe_price_id: Optional[str] = None
+
+
+class VoiceAddonCheckoutRequest(BaseModel):
+    plan_name: str
+    success_url: str
+    cancel_url: str
+
+
+class VoiceAddonCheckoutResponse(BaseModel):
+    checkout_url: str
+
+
+class VoiceUsageResponse(BaseModel):
+    plan_name: Optional[str] = None
+    is_active: bool
+    calls_used: int
+    calls_limit: int
+    calls_remaining: int
+    overage_calls: int
+    overage_cost_cents: int
+    overage_rate_cents: int
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+
+
+class VoiceAddonResponse(BaseModel):
+    id: UUID
+    plan_name: str
+    is_active: bool
+    calls_limit: int
+    calls_used_this_period: int
+    overage_rate_cents: int
+    period_start: Optional[datetime] = None
+    period_end: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VoiceAddonCancelResponse(BaseModel):
+    status: str
+    message: str

@@ -1,4 +1,5 @@
 """Tests for the FeedbackCollector agent and feedback summary."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
