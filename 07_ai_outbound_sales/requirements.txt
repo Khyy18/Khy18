@@ -34,6 +34,7 @@ twilio
 deepgram-sdk
 elevenlabs
 websockets
+aiogram
 
 # Test dependencies
 pytest
