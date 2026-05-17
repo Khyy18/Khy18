@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     vip_delay_seconds: int = 0
     free_delay_seconds: int = 1800  # 30 минут
 
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
     # API
     api_base_url: str = "http://localhost:8000"
 

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import redis.asyncio as redis
 from aiogram import Bot, Dispatcher
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -42,7 +43,14 @@ def _signal_handler(sig: int, *args: Any) -> None:
 
 async def _heartbeat_job() -> None:
     """Write heartbeat timestamp for health monitoring."""
-    HEARTBEAT_FILE.write_text(str(time.time()))
+    ts = str(time.time())
+    try:
+        r = redis.from_url(settings.redis_url, decode_responses=True)
+        await r.set("bot:heartbeat", ts, ex=120)
+        await r.aclose()
+    except (ConnectionError, TimeoutError, OSError):
+        # Fallback to file
+        HEARTBEAT_FILE.write_text(ts)
 
 
 async def main() -> None:

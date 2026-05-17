@@ -93,6 +93,23 @@ async def health_check():
 @app.get("/bot/health", tags=["system"])
 async def bot_health_check():
     """Check if bot process is alive via heartbeat."""
+    from app.db.redis_client import get_redis
+
+    # Try Redis first
+    try:
+        r = await get_redis()
+        if r is not None:
+            val = await r.get("bot:heartbeat")
+            if val:
+                last_beat = float(val)
+                age = time.time() - last_beat
+                if age < 120:
+                    return {"status": "ok", "source": "redis", "last_heartbeat_seconds_ago": int(age)}
+                return {"status": "stale", "source": "redis", "last_heartbeat_seconds_ago": int(age)}
+    except Exception:
+        pass
+
+    # Fallback to file
     heartbeat_file = Path("/tmp/bot_heartbeat")
     if not heartbeat_file.exists():
         return {"status": "unknown", "detail": "No heartbeat file"}
@@ -100,7 +117,7 @@ async def bot_health_check():
         last_beat = float(heartbeat_file.read_text().strip())
         age = time.time() - last_beat
         if age < 120:
-            return {"status": "ok", "last_heartbeat_seconds_ago": int(age)}
-        return {"status": "stale", "last_heartbeat_seconds_ago": int(age)}
+            return {"status": "ok", "source": "file", "last_heartbeat_seconds_ago": int(age)}
+        return {"status": "stale", "source": "file", "last_heartbeat_seconds_ago": int(age)}
     except (ValueError, OSError):
         return {"status": "error", "detail": "Cannot read heartbeat"}

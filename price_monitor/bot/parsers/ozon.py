@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 # Публичный API Ozon для получения данных о товарах
 _OZON_PUBLIC_BASE = "https://api.ozon.ru/composer-api.bx/page/json/v2"
 
+# Fallback API endpoint
+_OZON_FALLBACK_URL = "https://api.ozon.ru/composer-api.bx/_action/productPage"
+
 
 class OzonParser:
     """Парсер товаров Ozon через публичные эндпоинты каталога."""
@@ -44,8 +47,8 @@ class OzonParser:
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True,
     )
-    async def fetch_product(self, product_id: str) -> dict[str, Any] | None:
-        """Получить информацию о товаре по ID через публичный каталог.
+    async def _fetch_from_primary(self, product_id: str) -> dict[str, Any] | None:
+        """Получить информацию о товаре по ID через основной публичный каталог.
 
         Возвращает dict с полями: name, brand, price, old_price,
         discount, rating, feedbacks, product_id. Или None при ошибке.
@@ -82,6 +85,85 @@ class OzonParser:
             except Exception as e:
                 logger.error("Ошибка при получении товара Ozon %s: %s", product_id, e)
                 raise
+        return None
+
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=1, max=5),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    async def _fetch_from_fallback(self, product_id: str) -> dict[str, Any] | None:
+        """Попытка получить товар через fallback API endpoint."""
+        try:
+            resp = await self._client.get(
+                _OZON_FALLBACK_URL,
+                params={"url": f"/product/{product_id}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            widget_states = data.get("widgetStates", {})
+            product_info = self._extract_product_from_widgets(widget_states, product_id)
+            if product_info:
+                return product_info
+
+            seo = data.get("seo", {})
+            if seo:
+                return self._parse_seo_data(seo, product_id)
+
+            return None
+        except Exception as e:
+            logger.error("Ozon fallback API error for %s: %s", product_id, e)
+            raise
+
+    async def fetch_product(self, product_id: str) -> dict[str, Any] | None:
+        """Получить информацию о товаре с каскадным fallback.
+
+        1. Основной API (_OZON_PUBLIC_BASE)
+        2. Fallback API (_OZON_FALLBACK_URL)
+        3. Последняя известная цена из БД
+        """
+        # Try primary URL
+        try:
+            result = await self._fetch_from_primary(product_id)
+            if result:
+                return result
+        except Exception:
+            logger.warning("Primary Ozon API failed for %s, trying fallback", product_id)
+
+        # Try fallback URL
+        try:
+            result = await self._fetch_from_fallback(product_id)
+            if result:
+                return result
+        except Exception:
+            logger.warning("Fallback Ozon API failed for %s, trying DB cache", product_id)
+
+        # Try database fallback - get last known price
+        try:
+            from bot.db.queries import get_price_history, get_product_by_external_id
+
+            product = await get_product_by_external_id("ozon", product_id)
+            if product:
+                history = await get_price_history(product["id"], limit=1)
+                if history:
+                    latest = history[0]
+                    return {
+                        "product_id": str(product_id),
+                        "name": product.get("name", ""),
+                        "brand": product.get("brand", ""),
+                        "price": latest["price"],
+                        "old_price": latest.get("old_price", 0) or 0,
+                        "discount": latest.get("discount_percent", 0) or 0,
+                        "rating": 0,
+                        "feedbacks": 0,
+                        "marketplace": "ozon",
+                        "cached": True,
+                    }
+        except Exception as e:
+            logger.error("DB fallback failed for Ozon %s: %s", product_id, e)
+
         return None
 
     @retry(

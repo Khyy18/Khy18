@@ -8,3 +8,4 @@ openai>=1.10
 sqlalchemy[asyncio]>=2.0
 asyncpg>=0.29
 tenacity>=8.2
+redis[hiredis]>=5.0
