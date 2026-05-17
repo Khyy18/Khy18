@@ -86,9 +86,9 @@ async def start_trial(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(_get_session),
 ) -> dict:
-    """Create a 14-day free trial for the current user's tenant.
+    """Create a 7-day free trial for the current user's tenant.
 
-    Limits: 50 leads, 100 emails. No credit card required.
+    Limits: 50 leads, 100 emails, 5 voice calls. No credit card required.
     """
     # Check if trial already exists
     result = await session.execute(
@@ -135,8 +135,8 @@ async def get_trial_status(
 ) -> dict:
     """Get trial status with days remaining, usage, and conversion prompts.
 
-    Auto-freezes trial if 14 days have elapsed. Shows conversion prompts
-    at day 7 and day 12.
+    Auto-freezes trial if 7 days have elapsed. Shows conversion prompts
+    at day 5 and day 3.
     """
     result = await session.execute(
         select(Trial).where(Trial.tenant_id == current_user.tenant_id)
@@ -158,12 +158,12 @@ async def get_trial_status(
     days_elapsed = (now - trial.started_at).days
     days_remaining = max(0, (trial.ends_at - now).days)
 
-    # Conversion prompts at day 7 and day 12
+    # Conversion prompts at day 5 and day 3
     conversion_prompt: str | None = None
     if trial.status == TrialStatus.active:
-        if days_elapsed >= 12:
+        if days_elapsed >= 5:
             conversion_prompt = "Your trial ends in 2 days! Upgrade now to keep your data and continue growing."
-        elif days_elapsed >= 7:
+        elif days_elapsed >= 3:
             conversion_prompt = "You're halfway through your trial. Upgrade to unlock unlimited leads and emails."
 
     return {

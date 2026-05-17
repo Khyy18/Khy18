@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
-from core.models import User
+from core.models import Tenant, User
 from dashboard.auth import get_current_user
-from integrations.calendar import CalendarManager
+from integrations.calendar import CalendarManager, GoogleCalendarClient
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,79 @@ async def connect_calendar(
     )
 
 
+@router.get("/callback")
+async def calendar_oauth_callback(
+    code: str = Query(..., description="OAuth authorization code from Google"),
+    state: str = Query("", description="State parameter containing tenant_id"),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Handle Google OAuth2 callback by exchanging code for tokens and storing them.
+
+    Google redirects here after user authorizes. We exchange the code for
+    access/refresh tokens and persist them in the tenant's calendar_config
+    JSONB field.
+    """
+    if not code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing authorization code",
+        )
+
+    # Validate tenant_id from state
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing state parameter",
+        )
+
+    try:
+        tenant_id = uuid.UUID(state)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid state parameter",
+        )
+
+    # Exchange authorization code for tokens
+    google_client = GoogleCalendarClient(
+        client_id=settings.google_calendar_client_id,
+        client_secret=settings.google_calendar_client_secret,
+    )
+    token_data = await google_client.exchange_code(code)
+
+    if "error" in token_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"OAuth token exchange failed: {token_data['error']}",
+        )
+
+    # Persist tokens in the tenant's calendar_config JSONB field
+    result = await session.execute(
+        select(Tenant).where(Tenant.id == tenant_id)
+    )
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+
+    calendar_config = getattr(tenant, "calendar_config", None) or {}
+    calendar_config["provider"] = "google"
+    calendar_config["access_token"] = token_data.get("access_token", "")
+    calendar_config["refresh_token"] = token_data.get("refresh_token", "")
+    calendar_config["token_type"] = token_data.get("token_type", "Bearer")
+    calendar_config["expires_in"] = token_data.get("expires_in", 3600)
+    tenant.calendar_config = calendar_config
+    await session.flush()
+
+    return {
+        "status": "connected",
+        "provider": "google",
+        "tenant_id": str(tenant_id),
+    }
+
+
 @router.get("/availability")
 async def get_availability(
     start_date: str = Query(..., description="ISO format start date"),
@@ -104,6 +179,20 @@ async def get_availability(
     Returns available slots between start_date and end_date.
     """
     manager = _get_calendar_manager()
+
+    # Load tokens from DB if using Google provider
+    if manager.provider == "google":
+        result = await session.execute(
+            select(Tenant).where(Tenant.id == current_user.tenant_id)
+        )
+        tenant = result.scalar_one_or_none()
+        if tenant:
+            cal_config = getattr(tenant, "calendar_config", None) or {}
+            if cal_config.get("access_token"):
+                manager.set_google_tokens(
+                    access_token=cal_config["access_token"],
+                    refresh_token=cal_config.get("refresh_token"),
+                )
 
     if not manager.validate_api_key():
         raise HTTPException(

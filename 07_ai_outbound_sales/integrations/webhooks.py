@@ -203,12 +203,17 @@ class OutgoingWebhookDispatcher:
             if not w.events or event_type in w.events
         ]
 
-        results = []
-        for webhook in matching:
-            delivery = await self._deliver(webhook, event_type, payload, tenant_id)
-            results.append(delivery)
+        # Dispatch deliveries concurrently to avoid blocking on failing webhooks
+        if not matching:
+            return []
 
-        return results
+        tasks = [
+            self._deliver(webhook, event_type, payload, tenant_id)
+            for webhook in matching
+        ]
+        results = await asyncio.gather(*tasks)
+
+        return list(results)
 
     async def _deliver(
         self,

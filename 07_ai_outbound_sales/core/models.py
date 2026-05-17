@@ -155,6 +155,7 @@ class Tenant(Base):
     domain = Column(String, nullable=False)
     settings = Column(JSONB, default=dict)
     brand_settings = Column(JSONB, default=dict)
+    calendar_config = Column(JSONB, nullable=True)
     onboarding_step = Column(
         Enum(OnboardingStep), default=OnboardingStep.tenant_created, nullable=True
     )

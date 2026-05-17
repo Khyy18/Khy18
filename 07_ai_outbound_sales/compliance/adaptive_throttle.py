@@ -221,14 +221,28 @@ class AdaptiveThrottle:
     # Status
     # -------------------------------------------------------------------------
 
-    async def get_throttle_status(self, tenant_id: str) -> dict[str, Any]:
-        """Return current throttle state for all channels."""
+    async def get_throttle_status(
+        self, tenant_id: str, hour: int | None = None
+    ) -> dict[str, Any]:
+        """Return current throttle state for all channels.
+
+        Args:
+            tenant_id: Tenant identifier.
+            hour: Hour (0-23) for voice throttle status. Defaults to current hour.
+        """
+        import datetime as _dt
+
+        if hour is None:
+            hour = _dt.datetime.now(_dt.timezone.utc).hour
+
         email = await self.check_email_throttle(tenant_id)
         linkedin = await self.check_linkedin_throttle(tenant_id)
+        voice = await self.check_voice_throttle(tenant_id, hour)
 
         return {
             "email": email.model_dump(),
             "linkedin": linkedin.model_dump(),
+            "voice": voice.model_dump(),
             "tenant_id": tenant_id,
         }
 

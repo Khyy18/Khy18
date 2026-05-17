@@ -25,7 +25,7 @@ def _make_tenant_and_user(tenant_id=None):
 
 
 async def test_start_trial_creates_14_day_trial(async_session: AsyncSession):
-    """Starting a trial creates a 14-day active trial with correct limits."""
+    """Starting a trial creates a 7-day active trial with correct limits."""
     tenant, user = _make_tenant_and_user()
     async_session.add(tenant)
     async_session.add(user)
@@ -36,7 +36,7 @@ async def test_start_trial_creates_14_day_trial(async_session: AsyncSession):
         tenant_id=tenant.id,
         status=TrialStatus.active,
         started_at=now,
-        ends_at=now + timedelta(days=14),
+        ends_at=now + timedelta(days=7),
         leads_used=0,
         emails_used=0,
     )
@@ -51,9 +51,9 @@ async def test_start_trial_creates_14_day_trial(async_session: AsyncSession):
     assert saved_trial.status == TrialStatus.active
     assert saved_trial.leads_used == 0
     assert saved_trial.emails_used == 0
-    # Trial should end 14 days after start
+    # Trial should end 7 days after start
     delta = saved_trial.ends_at - saved_trial.started_at
-    assert delta.days == 14
+    assert delta.days == 7
 
 
 async def test_trial_status_shows_days_remaining(async_session: AsyncSession):
@@ -83,7 +83,7 @@ async def test_trial_status_shows_days_remaining(async_session: AsyncSession):
 
 
 async def test_trial_status_shows_conversion_prompt_at_day_7(async_session: AsyncSession):
-    """Conversion prompt should appear at day 7 of the trial."""
+    """Conversion prompt should appear at day 3 of the trial (halfway)."""
     tenant, user = _make_tenant_and_user()
     async_session.add(tenant)
     async_session.add(user)
@@ -93,8 +93,8 @@ async def test_trial_status_shows_conversion_prompt_at_day_7(async_session: Asyn
     trial = Trial(
         tenant_id=tenant.id,
         status=TrialStatus.active,
-        started_at=now - timedelta(days=8),
-        ends_at=now + timedelta(days=6),
+        started_at=now - timedelta(days=4),
+        ends_at=now + timedelta(days=3),
         leads_used=0,
         emails_used=0,
     )
@@ -102,14 +102,14 @@ async def test_trial_status_shows_conversion_prompt_at_day_7(async_session: Asyn
     await async_session.flush()
 
     days_elapsed = (now - trial.started_at).days
-    assert days_elapsed >= 7
+    assert days_elapsed >= 3
 
     # Conversion prompt logic from the route
     conversion_prompt = None
     if trial.status == TrialStatus.active:
-        if days_elapsed >= 12:
+        if days_elapsed >= 5:
             conversion_prompt = "Your trial ends in 2 days! Upgrade now to keep your data and continue growing."
-        elif days_elapsed >= 7:
+        elif days_elapsed >= 3:
             conversion_prompt = "You're halfway through your trial. Upgrade to unlock unlimited leads and emails."
 
     assert conversion_prompt is not None
@@ -182,7 +182,7 @@ async def test_trial_limits_enforced(async_session: AsyncSession):
 
 
 async def test_trial_conversion_prompt_at_day_12(async_session: AsyncSession):
-    """Conversion prompt at day 12 warns trial ends in 2 days."""
+    """Conversion prompt at day 5 warns trial ends in 2 days."""
     tenant, user = _make_tenant_and_user()
     async_session.add(tenant)
     async_session.add(user)
@@ -192,7 +192,7 @@ async def test_trial_conversion_prompt_at_day_12(async_session: AsyncSession):
     trial = Trial(
         tenant_id=tenant.id,
         status=TrialStatus.active,
-        started_at=now - timedelta(days=13),
+        started_at=now - timedelta(days=6),
         ends_at=now + timedelta(days=1),
         leads_used=0,
         emails_used=0,
@@ -201,14 +201,14 @@ async def test_trial_conversion_prompt_at_day_12(async_session: AsyncSession):
     await async_session.flush()
 
     days_elapsed = (now - trial.started_at).days
-    assert days_elapsed >= 12
+    assert days_elapsed >= 5
 
     # Conversion prompt logic from the route
     conversion_prompt = None
     if trial.status == TrialStatus.active:
-        if days_elapsed >= 12:
+        if days_elapsed >= 5:
             conversion_prompt = "Your trial ends in 2 days! Upgrade now to keep your data and continue growing."
-        elif days_elapsed >= 7:
+        elif days_elapsed >= 3:
             conversion_prompt = "You're halfway through your trial. Upgrade to unlock unlimited leads and emails."
 
     assert conversion_prompt is not None

@@ -207,6 +207,8 @@ class TestThrottleStatus:
 
         assert "email" in status
         assert "linkedin" in status
+        assert "voice" in status
         assert status["tenant_id"] == "tenant-1"
         assert status["email"]["action"] == "allow"
         assert status["linkedin"]["action"] == "allow"
+        assert status["voice"]["action"] == "allow"

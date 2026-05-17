@@ -120,9 +120,13 @@ class LLMRouter:
             try:
                 result = await client.generate(messages, max_tokens=max_tokens)
                 # Track cost
+                # Token estimation: len(utf-8 bytes) // 4 is a rough approximation.
+                # This undercounts for non-Latin scripts (Cyrillic, CJK) where tokens
+                # are fewer per byte, and overcounts for short English text. For accurate
+                # billing, use tiktoken or the provider's usage response field.
                 input_text = " ".join(m.get("content", "") for m in messages)
-                input_tokens = max(1, len(input_text) // 4)
-                output_tokens = max(1, len(result) // 4)
+                input_tokens = max(1, len(input_text.encode("utf-8")) // 4)
+                output_tokens = max(1, len(result.encode("utf-8")) // 4)
                 model_name = self._model_config[task_type]["model"]
                 await self.track_cost(tenant_id, model_name, input_tokens, output_tokens)
                 return result
@@ -143,8 +147,8 @@ class LLMRouter:
             try:
                 result = await fallback_client.generate(messages, max_tokens=max_tokens)
                 input_text = " ".join(m.get("content", "") for m in messages)
-                input_tokens = max(1, len(input_text) // 4)
-                output_tokens = max(1, len(result) // 4)
+                input_tokens = max(1, len(input_text.encode("utf-8")) // 4)
+                output_tokens = max(1, len(result.encode("utf-8")) // 4)
                 model_name = self._model_config[fallback_type]["model"]
                 await self.track_cost(tenant_id, model_name, input_tokens, output_tokens)
                 return result

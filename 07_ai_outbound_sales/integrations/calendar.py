@@ -410,6 +410,18 @@ class CalendarManager:
     def provider(self) -> str:
         return self._provider
 
+    def set_google_tokens(
+        self, access_token: str, refresh_token: str | None = None
+    ) -> None:
+        """Set OAuth tokens on the underlying Google Calendar client.
+
+        Args:
+            access_token: The OAuth2 access token.
+            refresh_token: The OAuth2 refresh token (optional).
+        """
+        if self._google:
+            self._google.set_tokens(access_token, refresh_token)
+
     def get_oauth_url(self, state: str = "") -> str | None:
         """Get OAuth URL for Google Calendar. Returns None for other providers."""
         if self._provider == "google" and self._google:
