@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -31,6 +32,12 @@ def setup_logging(level: str = "INFO") -> None:
     # Remove existing handlers
     root.handlers.clear()
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JSONFormatter())
+    if os.environ.get("TESTING"):
+        # In test mode, use simple plain-text logging
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    else:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(JSONFormatter())
+
     root.addHandler(handler)

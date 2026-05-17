@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
@@ -21,6 +22,9 @@ from app.db.session import get_db
 
 logger = logging.getLogger(__name__)
 security = HTTPBearer()
+
+# Maximum age of auth_date before it's considered expired (24 hours)
+_AUTH_DATE_MAX_AGE = 86400
 
 def create_access_token(data: dict) -> str:
     """Create a JWT access token."""
@@ -81,6 +85,17 @@ def verify_telegram_init_data(init_data: str) -> dict | None:
 
         if computed_hash != received_hash:
             return None
+
+        # Check auth_date expiry
+        auth_date_str = parsed.get("auth_date", [None])[0]
+        if auth_date_str:
+            try:
+                auth_date = int(auth_date_str)
+                if time.time() - auth_date > _AUTH_DATE_MAX_AGE:
+                    logger.warning("Telegram initData expired: auth_date=%s", auth_date_str)
+                    return None
+            except (ValueError, TypeError):
+                pass
 
         user_str = parsed.get("user", [None])[0]
         if user_str:

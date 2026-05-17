@@ -1,6 +1,10 @@
 """Test fixtures for backend tests."""
 from __future__ import annotations
 
+import os
+
+os.environ["TESTING"] = "1"
+
 import asyncio
 from typing import AsyncGenerator
 
