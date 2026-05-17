@@ -1,0 +1,92 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: 07_ai_outbound_sales
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/outbound-sales
+            PREV_COMMIT=$(git rev-parse HEAD)
+            echo "Previous commit: $PREV_COMMIT"
+            git pull origin main
+            docker-compose pull
+            docker-compose up -d --remove-orphans
+            echo "Waiting for app to start..."
+            sleep 10
+            echo "$PREV_COMMIT" > /tmp/prev_deploy_commit
+
+      - name: Post-deploy smoke test
+        uses: appleboy/ssh-action@v1
+        id: smoke_test
+        continue-on-error: true
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+            if [ "$HTTP_STATUS" != "200" ]; then
+              echo "Smoke test failed: /health returned $HTTP_STATUS"
+              exit 1
+            fi
+            echo "Smoke test passed: /health returned 200"
+
+      - name: Rollback on failure
+        if: steps.smoke_test.outcome == 'failure'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/outbound-sales
+            PREV_COMMIT=$(cat /tmp/prev_deploy_commit)
+            echo "Rolling back to $PREV_COMMIT"
+            git checkout "$PREV_COMMIT"
+            docker-compose up -d --remove-orphans
+            echo "Rollback complete"
+
+      - name: Notify Telegram - Success
+        if: steps.smoke_test.outcome == 'success'
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d '{"chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}", "text": "[DEPLOY OK] Outbound Sales deployed successfully (commit: ${{ github.sha }})", "parse_mode": "HTML"}'
+
+      - name: Notify Telegram - Failure
+        if: steps.smoke_test.outcome == 'failure'
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d '{"chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}", "text": "[DEPLOY FAILED] Rollback triggered for Outbound Sales (commit: ${{ github.sha }})", "parse_mode": "HTML"}'
+
+  # Reference CI jobs as dependencies
+  lint:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  test:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
