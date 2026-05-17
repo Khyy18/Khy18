@@ -1,30 +1,41 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { getAdminStats, getAdminSessions, getAdminUsers } from '../utils/api';
 
 /**
  * Админ-панель.
- * Защищена параметром ?key= в URL.
+ * Ключ доступа вводится через поле ввода и сохраняется в sessionStorage.
  */
 export default function Admin() {
-  const [searchParams] = useSearchParams();
-  const adminKey = searchParams.get('key') || '';
-
+  const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem('admin_key') || '');
+  const [keyInput, setKeyInput] = useState('');
   const [stats, setStats] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('stats'); // stats | sessions | users
 
   useEffect(() => {
-    if (!adminKey) {
-      setError('Требуется ключ доступа (?key=...)');
-      setLoading(false);
-      return;
+    if (adminKey) {
+      loadData();
     }
-    loadData();
   }, [adminKey]);
+
+  function handleKeySubmit(e) {
+    e.preventDefault();
+    if (!keyInput.trim()) return;
+    sessionStorage.setItem('admin_key', keyInput.trim());
+    setAdminKey(keyInput.trim());
+  }
+
+  function handleLogout() {
+    sessionStorage.removeItem('admin_key');
+    setAdminKey('');
+    setKeyInput('');
+    setStats(null);
+    setSessions([]);
+    setUsers([]);
+  }
 
   async function loadData() {
     setLoading(true);
@@ -40,9 +51,40 @@ export default function Admin() {
       setUsers(usersData.items || usersData || []);
     } catch (err) {
       setError('Ошибка загрузки данных. Проверьте ключ доступа.');
+      sessionStorage.removeItem('admin_key');
+      setAdminKey('');
     } finally {
       setLoading(false);
     }
+  }
+
+  // Форма ввода ключа, если ключ не задан
+  if (!adminKey) {
+    return (
+      <div className="min-h-screen bg-[var(--tg-theme-bg-color)] text-[var(--tg-theme-text-color)] flex items-center justify-center p-4">
+        <form onSubmit={handleKeySubmit} className="w-full max-w-sm space-y-4">
+          <h1 className="text-xl font-bold text-center">Админ-панель</h1>
+          <p className="text-[var(--tg-theme-hint-color)] text-sm text-center">
+            Введите ключ доступа для входа
+          </p>
+          <input
+            type="password"
+            value={keyInput}
+            onChange={(e) => setKeyInput(e.target.value)}
+            placeholder="Ключ доступа"
+            className="w-full px-4 py-3 rounded-xl bg-[var(--tg-theme-secondary-bg-color)] text-[var(--tg-theme-text-color)] border-none outline-none"
+            autoFocus
+          />
+          {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+          <button
+            type="submit"
+            className="w-full py-3 rounded-xl bg-[var(--tg-theme-button-color)] text-white font-medium"
+          >
+            Войти
+          </button>
+        </form>
+      </div>
+    );
   }
 
   if (loading) {
@@ -63,7 +105,15 @@ export default function Admin() {
 
   return (
     <div className="min-h-screen bg-[var(--tg-theme-bg-color)] text-[var(--tg-theme-text-color)] p-4">
-      <h1 className="text-2xl font-bold mb-6">Админ-панель</h1>
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold">Админ-панель</h1>
+        <button
+          onClick={handleLogout}
+          className="text-sm text-[var(--tg-theme-hint-color)] underline"
+        >
+          Выйти
+        </button>
+      </div>
 
       {/* Карточки статистики */}
       {stats && (

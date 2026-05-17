@@ -81,6 +81,27 @@ class TestPromoCode:
         )
         assert response.status_code == 404
 
+    async def test_promo_double_redemption_fails(self, client: AsyncClient, test_user, test_promo):
+        """Повторное использование того же промокода одним пользователем отклоняется."""
+        _, token = test_user
+
+        # Первое применение - успех
+        response = await client.post(
+            "/billing/apply-promo",
+            json={"code": "TEST100"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 200
+
+        # Второе применение - отклонение
+        response = await client.post(
+            "/billing/apply-promo",
+            json={"code": "TEST100"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 400
+        assert "уже использовали" in response.json()["detail"]
+
 
 @pytest.mark.asyncio
 class TestSessionCreation:

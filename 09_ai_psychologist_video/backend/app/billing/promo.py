@@ -69,6 +69,18 @@ async def apply_promo(
         if not user:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
 
+        # Проверяем, не использовал ли пользователь уже этот промокод
+        existing_tx = await session.execute(
+            select(Transaction).where(
+                Transaction.user_id == user_id,
+                Transaction.source == f"promo:{promo.code}",
+            )
+        )
+        if existing_tx.scalar_one_or_none():
+            raise HTTPException(
+                status_code=400, detail="Вы уже использовали этот промокод"
+            )
+
         # Начисляем бонус
         user.balance = user.balance + promo.amount
         promo.current_uses = promo.current_uses + 1

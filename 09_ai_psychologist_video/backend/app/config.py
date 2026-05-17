@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # --- Оплата ---
     YOOKASSA_SHOP_ID: str = ""
     YOOKASSA_SECRET_KEY: str = ""
+    YOOKASSA_WEBHOOK_IPS: str = ""  # Через запятую, IP-адреса YooKassa для проверки вебхуков
+
+    # --- Webhook безопасность ---
+    TELEGRAM_WEBHOOK_SECRET: str = ""  # secret_token для верификации Telegram webhook
+
+    # --- CORS ---
+    CORS_ORIGINS: str = "http://localhost:5173,https://localhost:5173"
 
     # --- Мониторинг и безопасность ---
     SENTRY_DSN: str = ""

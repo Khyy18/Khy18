@@ -7,6 +7,8 @@
 - Demo topup (для разработки)
 """
 
+import hashlib
+import hmac
 import logging
 import uuid
 from decimal import Decimal
@@ -107,9 +109,21 @@ async def telegram_payment_webhook(request: Request):
     """
     Обработка webhook от Telegram для платежей Stars.
     Принимает pre_checkout_query (подтверждение) и successful_payment (зачисление).
+    Верифицирует X-Telegram-Bot-Api-Secret-Token заголовок.
     """
     if not settings.BOT_TOKEN:
         raise HTTPException(status_code=503, detail="BOT_TOKEN not configured")
+
+    # Верификация секретного токена Telegram webhook
+    expected_secret = settings.TELEGRAM_WEBHOOK_SECRET
+    if not expected_secret:
+        # Фоллбек: используем SHA256 хеш BOT_TOKEN как секрет
+        expected_secret = hashlib.sha256(settings.BOT_TOKEN.encode()).hexdigest()
+
+    received_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not hmac.compare_digest(received_secret, expected_secret):
+        logger.warning("Telegram webhook: invalid secret token")
+        raise HTTPException(status_code=403, detail="Invalid secret token")
 
     body = await request.json()
 
@@ -227,9 +241,23 @@ async def yokassa_webhook(request: Request):
     """
     Webhook от YooKassa: обработка уведомлений о статусе платежа.
     При статусе 'payment.succeeded' зачисляем средства на баланс.
+
+    Безопасность: проверяем IP-адрес отправителя, если YOOKASSA_WEBHOOK_IPS задан.
+    В production рекомендуется настроить IP allowlist на уровне nginx/firewall.
     """
     if not settings.YOOKASSA_SHOP_ID:
         raise HTTPException(status_code=503, detail="YooKassa not configured")
+
+    # Проверка IP-адреса отправителя (если настроено)
+    if settings.YOOKASSA_WEBHOOK_IPS:
+        allowed_ips = [ip.strip() for ip in settings.YOOKASSA_WEBHOOK_IPS.split(",") if ip.strip()]
+        client_ip = request.client.host if request.client else ""
+        # Учитываем X-Forwarded-For при работе за прокси
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        real_ip = forwarded_for.split(",")[0].strip() if forwarded_for else client_ip
+        if allowed_ips and real_ip not in allowed_ips:
+            logger.warning(f"YooKassa webhook: rejected IP {real_ip}")
+            raise HTTPException(status_code=403, detail="IP not allowed")
 
     body = await request.json()
     event_type = body.get("event")
