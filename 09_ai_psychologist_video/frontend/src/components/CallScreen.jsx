@@ -1,6 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useMediaStream } from '../hooks/useMediaStream';
+import { useLiveKit } from '../hooks/useLiveKit';
+import { useVAD } from '../hooks/useVAD';
 
 /**
  * Экран видеозвонка с AI-психологом.
@@ -16,10 +19,60 @@ export default function CallScreen() {
   const [elapsed, setElapsed] = useState(0);
   const [balance, setBalance] = useState(0);
   const [aiStatus, setAiStatus] = useState('listening'); // listening | thinking | speaking
+  const [livekitToken, setLivekitToken] = useState(null);
+  const [livekitUrl, setLivekitUrl] = useState(null);
 
   const avatarVideoRef = useRef(null);
   const localVideoRef = useRef(null);
   const timerRef = useRef(null);
+
+  // Локальный медиапоток: камера + микрофон + стриминг аудио
+  const { localStream, startRecording, stopRecording } = useMediaStream({ sendAudio });
+
+  // VAD: определение активности речи
+  const handleSpeechEnd = useCallback(() => {
+    // Можно отправить контрольный сигнал серверу о конце фразы
+    sendControl({ type: 'speech_end' });
+  }, [sendControl]);
+
+  const { isSpeaking } = useVAD(localStream, {
+    threshold: 0.01,
+    silenceTimeout: 600,
+    onSpeechEnd: handleSpeechEnd,
+  });
+
+  // LiveKit: удаленное видео аватара
+  const { remoteVideoTrack, isConnected: livekitConnected } = useLiveKit({
+    token: livekitToken,
+    serverUrl: livekitUrl,
+  });
+
+  // Привязка локального стрима к PiP-видео
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  // Привязка удаленного LiveKit видео к аватар-элементу
+  useEffect(() => {
+    if (avatarVideoRef.current && remoteVideoTrack) {
+      remoteVideoTrack.attach(avatarVideoRef.current);
+      return () => {
+        remoteVideoTrack.detach(avatarVideoRef.current);
+      };
+    }
+  }, [remoteVideoTrack]);
+
+  // Начать запись аудио когда WebSocket подключен
+  useEffect(() => {
+    if (isConnected && localStream) {
+      startRecording();
+    }
+    return () => {
+      stopRecording();
+    };
+  }, [isConnected, localStream, startRecording, stopRecording]);
 
   // Таймер сессии - считает с 00:00 вверх
   useEffect(() => {
@@ -43,6 +96,10 @@ export default function CallScreen() {
       setBalance(lastMessage.balance);
     } else if (lastMessage.type === 'session_ended') {
       navigate('/');
+    } else if (lastMessage.type === 'livekit_token') {
+      // Сервер может прислать LiveKit токен через WebSocket
+      setLivekitToken(lastMessage.token);
+      setLivekitUrl(lastMessage.url);
     }
   }, [lastMessage, navigate]);
 
@@ -55,6 +112,7 @@ export default function CallScreen() {
 
   // Текст статуса AI на русском
   function getStatusText() {
+    if (isSpeaking) return 'Психолог слушает...';
     switch (aiStatus) {
       case 'thinking': return 'Психолог думает...';
       case 'speaking': return 'Психолог говорит...';
@@ -65,10 +123,22 @@ export default function CallScreen() {
   function handleMuteToggle() {
     const newMuted = !isMuted;
     setIsMuted(newMuted);
+    // Отключение/включение аудио-трека
+    if (localStream) {
+      const audioTracks = localStream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        audioTracks[0].enabled = !newMuted;
+      }
+    }
     sendControl({ type: newMuted ? 'mute' : 'unmute' });
   }
 
   function handleEndCall() {
+    // Остановка всех треков медиапотока
+    if (localStream) {
+      localStream.getTracks().forEach((t) => t.stop());
+    }
+    stopRecording();
     sendControl({ type: 'end_call' });
     navigate('/');
   }

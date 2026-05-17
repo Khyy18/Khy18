@@ -14,6 +14,7 @@ from app.auth.router import router as auth_router
 from app.billing.payment import router as billing_router
 from app.sessions.router import router as sessions_router
 from app.call.websocket import websocket_call
+from app.call.livekit import router as livekit_router
 
 billing_worker = BillingWorker()
 
@@ -49,6 +50,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(billing_router)
 app.include_router(sessions_router)
+app.include_router(livekit_router)
 
 # WebSocket маршрут
 app.websocket("/ws/call/{session_id}")(websocket_call)
