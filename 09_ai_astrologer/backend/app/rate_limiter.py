@@ -89,13 +89,27 @@ def rate_limit(endpoint_name: str, max_requests: int, window_seconds: int):
     """
 
     async def _rate_limit_dependency(request: Request):
-        # Extract user_id from request body or query params
-        # For simplicity, use client IP as fallback identifier
-        user_id = request.client.host if request.client else "unknown"
+        # Prefer authenticated user_id from X-Telegram-Init-Data header
+        # Falls back to client IP only if no auth header is present
+        user_id = None
 
-        # Try to get user_id from request state or headers
-        if hasattr(request.state, "user_id"):
-            user_id = request.state.user_id
+        # Try to extract user_id from Telegram init data header
+        init_data = request.headers.get("x-telegram-init-data", "")
+        if init_data:
+            try:
+                from urllib.parse import parse_qs, unquote
+                import json as _json
+
+                parsed = parse_qs(init_data)
+                user_data = parsed.get("user", [None])[0]
+                if user_data:
+                    user_obj = _json.loads(unquote(user_data))
+                    user_id = str(user_obj.get("id", ""))
+            except Exception:
+                pass
+
+        if not user_id:
+            user_id = request.client.host if request.client else "unknown"
 
         allowed = await rate_limiter.check_rate_limit(
             endpoint_name, user_id, max_requests, window_seconds

@@ -296,7 +296,12 @@ class BillingManager:
                 pass
 
     async def _scheduler_loop(self) -> None:
-        """Background loop that checks for due billing ticks."""
+        """Background loop that checks for due billing ticks and recovers orphaned sessions.
+
+        If a billing worker dies (pod crash, unhandled exception), the session remains
+        in billing_active but no worker is processing it. This scheduler detects such
+        orphaned sessions (overdue by more than 2 intervals) and restarts their workers.
+        """
         try:
             while True:
                 await asyncio.sleep(5)  # Check every 5 seconds
@@ -304,16 +309,58 @@ class BillingManager:
                     continue
 
                 now = time.time()
-                # Get sessions with next_tick <= now
+                # Get sessions with next_tick <= now (overdue)
                 due_sessions = await self._redis.zrangebyscore(
                     "billing_active", 0, now
                 )
-                # These are handled by their respective billing workers
-                # The scheduler is mainly for monitoring and recovery
-                if due_sessions:
-                    logger.debug(
-                        f"Billing scheduler: {len(due_sessions)} sessions have due ticks"
-                    )
+
+                if not due_sessions:
+                    continue
+
+                # Check which overdue sessions are orphaned (not running locally)
+                for session_id in due_sessions:
+                    if session_id in self._active_sessions:
+                        # Worker exists locally, skip
+                        continue
+
+                    # Check how overdue this session is
+                    score = await self._redis.zscore("billing_active", session_id)
+                    if score is None:
+                        continue
+
+                    overdue_seconds = now - score
+                    # Only recover if overdue by more than 2 billing intervals
+                    if overdue_seconds < settings.billing_interval_seconds * 2:
+                        continue
+
+                    # Try to recover: look up session data from Redis
+                    session_data = await self._redis.get(f"session:{session_id}")
+                    if not session_data:
+                        # No session data, remove orphaned entry
+                        await self._redis.zrem("billing_active", session_id)
+                        logger.warning(
+                            f"Removed orphaned billing entry with no session data: {session_id}"
+                        )
+                        continue
+
+                    try:
+                        session_info = json.loads(session_data)
+                        user_id = session_info.get("user_id", "")
+                        if user_id:
+                            logger.info(
+                                f"Recovering orphaned billing session: {session_id} "
+                                f"(overdue {overdue_seconds:.0f}s)"
+                            )
+                            task = asyncio.create_task(
+                                self._billing_worker(session_id, user_id, None)
+                            )
+                            self._active_sessions[session_id] = task
+                        else:
+                            await self._redis.zrem("billing_active", session_id)
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.error(f"Failed to recover session {session_id}: {e}")
+                        await self._redis.zrem("billing_active", session_id)
+
         except asyncio.CancelledError:
             pass
         except Exception as e:

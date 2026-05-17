@@ -61,7 +61,7 @@ export function useCallWebSocket({
 
         try {
           const msg = JSON.parse(event.data as string) as CallWSMessage;
-          if (msg.type === 'state' && msg.state) {
+          if (msg.type === 'pipeline_state' && msg.state) {
             setPipelineState(msg.state);
           }
           setLastResponse(msg);

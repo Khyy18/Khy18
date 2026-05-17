@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     billing_interval_seconds: int = 60
     cors_origins: list[str] = ["*"]
     telegram_bot_token: str = ""
+    telegram_webhook_secret: str = ""
     grace_period_seconds: int = 30
     database_url: str = ""
     rate_limit_requests: int = 10

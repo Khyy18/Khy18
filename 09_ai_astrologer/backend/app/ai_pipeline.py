@@ -143,8 +143,20 @@ class AIPipeline:
 
         Returns a dict with transcript, response_text, audio_bytes, and video_bytes.
         """
+        from app.circuit_breaker import stt_circuit
+
         transcript = await transcribe_audio(audio_bytes, self.client)
         if not transcript:
+            # If STT circuit is open, provide user feedback instead of silence
+            if stt_circuit.is_open() or stt_circuit.state == "open":
+                degradation_text = "Извините, у меня временные проблемы с распознаванием речи. Попробуйте снова через минуту."
+                audio_response = await synthesize_speech(degradation_text, self.client)
+                return {
+                    "transcript": "",
+                    "response_text": degradation_text,
+                    "audio_bytes": audio_response,
+                    "video_bytes": None,
+                }
             return {
                 "transcript": "",
                 "response_text": "",
@@ -162,7 +174,22 @@ class AIPipeline:
             {"role": "assistant", "content": response_text}
         )
 
-        audio_response = await synthesize_speech(response_text, self.client)
+        # Use streaming TTS to collect audio chunks
+        from app.streaming_tts import stream_tts_chunks
+
+        audio_chunks = []
+        try:
+            async for chunk in stream_tts_chunks(response_text, self.client):
+                audio_chunks.append(chunk)
+        except Exception as e:
+            logger.warning(f"Streaming TTS failed, falling back to non-streaming: {e}")
+            audio_chunks = []
+
+        if audio_chunks:
+            audio_response = b"".join(audio_chunks)
+        else:
+            # Fallback to non-streaming TTS
+            audio_response = await synthesize_speech(response_text, self.client)
 
         video_response = await get_lip_sync_video(audio_response)
 

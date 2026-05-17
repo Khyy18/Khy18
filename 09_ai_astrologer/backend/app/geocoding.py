@@ -3,11 +3,12 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from timezonefinder import TimezoneFinder
 
 from app.http_client import get_http_client
+from app.rate_limiter import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class GeocodeResponse(BaseModel):
 @router.get("/geocode", response_model=GeocodeResponse)
 async def geocode_city(
     city: str = Query(..., min_length=2, description="City name to search for"),
+    _rate_check=Depends(rate_limit("geocode", 10, 60)),
 ):
     """Search for a city and return lat/lon/timezone suggestions.
 

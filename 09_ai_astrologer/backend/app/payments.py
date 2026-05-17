@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.billing import billing_manager
@@ -115,11 +115,31 @@ async def create_invoice(request: CreateInvoiceRequest):
 
 
 @router.post("/webhook", response_model=PaymentWebhookResponse)
-async def payment_webhook(request: PaymentWebhookRequest):
+async def payment_webhook(
+    request: PaymentWebhookRequest,
+    x_telegram_bot_api_secret_token: str = Header(default=""),
+):
     """Handle Telegram payment webhooks.
 
     Processes pre_checkout_query (approve) and successful_payment (credit balance).
+    Verifies the X-Telegram-Bot-Api-Secret-Token header against the configured
+    webhook secret to ensure requests originate from Telegram.
     """
+    # Verify webhook secret token
+    if settings.telegram_bot_token:
+        expected_secret = settings.telegram_webhook_secret
+        if not expected_secret:
+            # If no explicit secret is configured, reject in production
+            raise HTTPException(
+                status_code=403,
+                detail="Webhook secret not configured",
+            )
+        if not x_telegram_bot_api_secret_token or x_telegram_bot_api_secret_token != expected_secret:
+            raise HTTPException(
+                status_code=403,
+                detail="Invalid webhook secret token",
+            )
+    # In dev mode (no bot token), skip verification
     # Handle pre-checkout query (approve the payment)
     if request.pre_checkout_query:
         query = request.pre_checkout_query

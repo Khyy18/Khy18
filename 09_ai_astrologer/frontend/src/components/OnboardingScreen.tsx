@@ -92,9 +92,15 @@ export function OnboardingScreen({ apiBaseUrl, onSessionStart }: OnboardingScree
     };
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const initData = window.Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['X-Telegram-Init-Data'] = initData;
+      }
+
       const res = await fetch(`${apiBaseUrl}/api/session/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(birthData),
       });
 

@@ -225,6 +225,7 @@ async def get_session_status(session_id: str):
 @app.post("/api/balance/topup", response_model=BalanceTopupResponse)
 async def topup_balance(
     request: BalanceTopupRequest,
+    telegram_user: str = Depends(get_telegram_user),
     _rate_check=Depends(rate_limit("topup", 5, 60)),
 ):
     """Add coins to user balance."""
@@ -309,6 +310,8 @@ async def websocket_call(websocket: WebSocket, session_id: str):
         active_calls.dec()
         return
 
+    from app.vad import VADProcessor
+
     http_client = get_http_client()
     pipeline = AIPipeline(system_prompt=system_prompt, http_client=http_client)
 
@@ -317,6 +320,12 @@ async def websocket_call(websocket: WebSocket, session_id: str):
     if history:
         pipeline.conversation_history = history
 
+    # Initialize VAD processor for utterance detection
+    vad = VADProcessor(
+        energy_threshold=settings.vad_energy_threshold,
+        silence_duration_ms=settings.vad_silence_duration_ms,
+    )
+
     try:
         while True:
             # Send LISTENING state
@@ -324,10 +333,16 @@ async def websocket_call(websocket: WebSocket, session_id: str):
 
             data = await websocket.receive_bytes()
 
+            # Feed audio through VAD - only process complete utterances
+            utterance = vad.feed(data)
+            if utterance is None:
+                # VAD is still collecting audio, wait for more
+                continue
+
             # Send THINKING state
             await _send_pipeline_state(websocket, "THINKING")
 
-            result = await pipeline.process_audio(data)
+            result = await pipeline.process_audio(utterance)
 
             # Persist updated conversation history
             await store.save_history(session_id, pipeline.conversation_history)
