@@ -33,8 +33,7 @@ export function PaymentModal({ apiBaseUrl, sessionId, onClose, onSuccess }: Paym
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: sessionId,
-          stars: pkg.stars,
-          minutes: pkg.minutes,
+          stars_amount: pkg.stars,
         }),
       });
 

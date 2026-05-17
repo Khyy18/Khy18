@@ -12,6 +12,8 @@ interface UseCallWebSocketOptions {
   url: string;
   authToken: string;
   autoConnect?: boolean;
+  reconnectInterval?: number;
+  maxRetries?: number;
 }
 
 interface UseCallWebSocketReturn {
@@ -20,12 +22,15 @@ interface UseCallWebSocketReturn {
   sendAudio: (data: ArrayBuffer) => void;
   lastResponse: CallWSMessage | null;
   audioChunks: ArrayBuffer[];
+  disconnect: () => void;
 }
 
 export function useCallWebSocket({
   url,
   authToken,
   autoConnect = true,
+  reconnectInterval = 3000,
+  maxRetries = 5,
 }: UseCallWebSocketOptions): UseCallWebSocketReturn {
   const [connected, setConnected] = useState(false);
   const [pipelineState, setPipelineState] = useState<PipelineState>('IDLE');
@@ -33,8 +38,20 @@ export function useCallWebSocket({
   const [audioChunks, setAudioChunks] = useState<ArrayBuffer[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const authSentRef = useRef(false);
+  const retriesRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldReconnectRef = useRef(true);
+
+  const cleanup = useCallback(() => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
 
   const connect = useCallback(() => {
+    cleanup();
+
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       return;
     }
@@ -50,6 +67,7 @@ export function useCallWebSocket({
         ws.send(JSON.stringify({ type: 'auth', token: authToken }));
         authSentRef.current = true;
         setConnected(true);
+        retriesRef.current = 0;
       };
 
       ws.onmessage = (event: MessageEvent) => {
@@ -74,15 +92,32 @@ export function useCallWebSocket({
         setConnected(false);
         wsRef.current = null;
         authSentRef.current = false;
+
+        if (shouldReconnectRef.current && retriesRef.current < maxRetries) {
+          retriesRef.current += 1;
+          reconnectTimerRef.current = setTimeout(() => {
+            connect();
+          }, reconnectInterval);
+        }
       };
 
       ws.onerror = () => {
         ws.close();
       };
     } catch {
-      // Connection failed
+      // Connection failed, will retry via onclose
     }
-  }, [url, authToken]);
+  }, [url, authToken, maxRetries, reconnectInterval, cleanup]);
+
+  const disconnect = useCallback(() => {
+    shouldReconnectRef.current = false;
+    cleanup();
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    setConnected(false);
+  }, [cleanup]);
 
   const sendAudio = useCallback((data: ArrayBuffer) => {
     if (wsRef.current?.readyState === WebSocket.OPEN && authSentRef.current) {
@@ -92,16 +127,19 @@ export function useCallWebSocket({
 
   useEffect(() => {
     if (autoConnect) {
+      shouldReconnectRef.current = true;
       connect();
     }
 
     return () => {
+      shouldReconnectRef.current = false;
+      cleanup();
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, [autoConnect, connect]);
+  }, [autoConnect, connect, cleanup]);
 
-  return { connected, pipelineState, sendAudio, lastResponse, audioChunks };
+  return { connected, pipelineState, sendAudio, lastResponse, audioChunks, disconnect };
 }

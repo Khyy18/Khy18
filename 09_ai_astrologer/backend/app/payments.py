@@ -3,8 +3,8 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Header, HTTPException, Request
+from pydantic import BaseModel, model_validator
 
 from app.billing import billing_manager
 from app.config import settings
@@ -26,8 +26,15 @@ PAYMENT_PACKAGES = {
 class CreateInvoiceRequest(BaseModel):
     """Request to create a payment invoice."""
 
-    user_id: str
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
     stars_amount: int
+
+    @model_validator(mode="after")
+    def check_at_least_one_id(self) -> "CreateInvoiceRequest":
+        if not self.user_id and not self.session_id:
+            raise ValueError("At least one of user_id or session_id must be provided")
+        return self
 
 
 class CreateInvoiceResponse(BaseModel):
@@ -54,10 +61,11 @@ class PaymentWebhookResponse(BaseModel):
 
 
 @router.post("/create-invoice", response_model=CreateInvoiceResponse)
-async def create_invoice(request: CreateInvoiceRequest):
+async def create_invoice(request: CreateInvoiceRequest, http_request: Request):
     """Create a Telegram Stars invoice for purchasing coins.
 
     Generates an invoice link using the Telegram Bot API.
+    If user_id is not provided, resolves it from session_id via session store.
     """
     if request.stars_amount not in PAYMENT_PACKAGES:
         available = list(PAYMENT_PACKAGES.keys())
@@ -72,6 +80,18 @@ async def create_invoice(request: CreateInvoiceRequest):
             detail="Payment service not configured",
         )
 
+    # Resolve user_id from session_id if not provided directly
+    user_id = request.user_id
+    if not user_id and request.session_id:
+        session_store = http_request.app.state.session_store
+        session = await session_store.get_session(request.session_id)
+        if not session:
+            raise HTTPException(
+                status_code=404,
+                detail="Session not found",
+            )
+        user_id = session.user_id
+
     coins_amount = PAYMENT_PACKAGES[request.stars_amount]
     client = get_http_client()
 
@@ -81,7 +101,7 @@ async def create_invoice(request: CreateInvoiceRequest):
             json={
                 "title": f"{coins_amount} Astro Coins",
                 "description": f"Purchase {coins_amount} coins for astrology sessions",
-                "payload": f"{request.user_id}:{request.stars_amount}:{coins_amount}",
+                "payload": f"{user_id}:{request.stars_amount}:{coins_amount}",
                 "currency": "XTR",
                 "prices": [
                     {
