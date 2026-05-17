@@ -148,5 +148,8 @@ class Settings(BaseSettings):
     adaptive_throttle_bounce_threshold: float = 0.05
     adaptive_throttle_cooldown_minutes: int = 30
 
+    # AI Office integration
+    ai_office_webhook_url: str = ""
+
 
 settings = Settings()  # type: ignore[call-arg]

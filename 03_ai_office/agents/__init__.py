@@ -9,6 +9,7 @@ from ai_office.agents.leo import leo_config
 from ai_office.agents.nova import nova_config
 from ai_office.agents.marketing import iris_config
 from ai_office.agents.finance import oscar_config
+from ai_office.agents.outbound_sales import outbound_sales_config
 
 # Register all agents
 registry.register(alice_config)
@@ -19,3 +20,4 @@ registry.register(leo_config)
 registry.register(nova_config)
 registry.register(iris_config)
 registry.register(oscar_config)
+registry.register(outbound_sales_config)

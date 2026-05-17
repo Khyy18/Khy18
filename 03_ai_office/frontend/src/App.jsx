@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, ListTodo, Activity, GitBranch, Clock } from 'lucide-react'
+import { Users, ListTodo, Activity, GitBranch, Clock, TrendingUp } from 'lucide-react'
 import AgentCard from './components/AgentCard'
 import TaskCard from './components/TaskCard'
 import ActivityLog from './components/ActivityLog'
@@ -7,6 +7,7 @@ import SystemStatus from './components/SystemStatus'
 import AgentGraph from './components/AgentGraph'
 import TaskTimeline from './components/TaskTimeline'
 import AgentDetailView from './components/AgentDetailView'
+import SalesPanel from './components/SalesPanel'
 import { ToastContainer, showToast } from './components/Toast'
 import { useApi } from './hooks/useApi'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -99,6 +100,7 @@ export default function App() {
     { id: 'agents', label: 'Agents', icon: Users },
     { id: 'tasks', label: 'Tasks', icon: ListTodo },
     { id: 'activity', label: 'Activity', icon: Activity },
+    { id: 'sales', label: 'Sales', icon: TrendingUp },
     { id: 'graph', label: 'Graph', icon: GitBranch },
     { id: 'timeline', label: 'Timeline', icon: Clock },
   ]
@@ -159,6 +161,10 @@ export default function App() {
 
             {activeTab === 'activity' && (
               <ActivityLog activities={activity || []} />
+            )}
+
+            {activeTab === 'sales' && (
+              <SalesPanel />
             )}
 
             {activeTab === 'graph' && (

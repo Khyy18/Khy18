@@ -31,6 +31,12 @@ class Settings(BaseSettings):
         description="URL подключения к базе данных",
     )
 
+    # Outbound Sales
+    outbound_sales_api_url: str = Field(
+        default="http://localhost:8001",
+        description="URL сервиса AI Outbound Sales",
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
