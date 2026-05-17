@@ -27,6 +27,11 @@ class SimliAvatarStreamer:
         return get_http_client()
 
     @property
+    def has_session(self) -> bool:
+        """Whether an active Simli session exists."""
+        return self._session_id is not None
+
+    @property
     def is_configured(self) -> bool:
         return bool(settings.simli_api_key)
 
