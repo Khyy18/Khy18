@@ -39,33 +39,37 @@ class WildberriesParser:
         Возвращает dict с полями: name, brand, price, old_price,
         discount, rating, feedbacks, article_id. Или None при ошибке.
         """
-        try:
-            resp = await self._client.get(
-                _DETAIL_URL,
-                params={
-                    "appType": "1",
-                    "curr": "rub",
-                    "nm": article_id,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        max_429_retries = 2
+        for _attempt_429 in range(max_429_retries + 1):
+            try:
+                resp = await self._client.get(
+                    _DETAIL_URL,
+                    params={
+                        "appType": "1",
+                        "curr": "rub",
+                        "nm": article_id,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-            products = data.get("data", {}).get("products", [])
-            if not products:
-                return None
+                products = data.get("data", {}).get("products", [])
+                if not products:
+                    return None
 
-            item = products[0]
-            return self._parse_product(item)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                retry_after = int(e.response.headers.get("Retry-After", "60"))
-                logger.warning("WB rate limited (429), waiting %d sec", retry_after)
-                await asyncio.sleep(retry_after)
-            raise
-        except Exception as e:
-            logger.error("Ошибка при получении товара WB %s: %s", article_id, e)
-            raise
+                item = products[0]
+                return self._parse_product(item)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and _attempt_429 < max_429_retries:
+                    retry_after = int(e.response.headers.get("Retry-After", "60"))
+                    logger.warning("WB rate limited (429), waiting %d sec", retry_after)
+                    await asyncio.sleep(retry_after)
+                    continue
+                raise
+            except Exception as e:
+                logger.error("Ошибка при получении товара WB %s: %s", article_id, e)
+                raise
+        return None
 
     @retry(
         stop=stop_after_attempt(3),
@@ -80,37 +84,41 @@ class WildberriesParser:
 
         Возвращает список dict с информацией о товарах.
         """
-        try:
-            resp = await self._client.get(
-                _SEARCH_URL,
-                params={
-                    "query": query,
-                    "resultset": "catalog",
-                    "limit": limit,
-                    "sort": "popular",
-                    "appType": "1",
-                    "curr": "rub",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        max_429_retries = 2
+        for _attempt_429 in range(max_429_retries + 1):
+            try:
+                resp = await self._client.get(
+                    _SEARCH_URL,
+                    params={
+                        "query": query,
+                        "resultset": "catalog",
+                        "limit": limit,
+                        "sort": "popular",
+                        "appType": "1",
+                        "curr": "rub",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-            products = data.get("data", {}).get("products", [])
-            result = []
-            for item in products[:limit]:
-                parsed = self._parse_product(item)
-                if parsed:
-                    result.append(parsed)
-            return result
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                retry_after = int(e.response.headers.get("Retry-After", "60"))
-                logger.warning("WB rate limited (429), waiting %d sec", retry_after)
-                await asyncio.sleep(retry_after)
-            raise
-        except Exception as e:
-            logger.error("Ошибка при поиске WB '%s': %s", query, e)
-            raise
+                products = data.get("data", {}).get("products", [])
+                result = []
+                for item in products[:limit]:
+                    parsed = self._parse_product(item)
+                    if parsed:
+                        result.append(parsed)
+                return result
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and _attempt_429 < max_429_retries:
+                    retry_after = int(e.response.headers.get("Retry-After", "60"))
+                    logger.warning("WB rate limited (429), waiting %d sec", retry_after)
+                    await asyncio.sleep(retry_after)
+                    continue
+                raise
+            except Exception as e:
+                logger.error("Ошибка при поиске WB '%s': %s", query, e)
+                raise
+        return []
 
     async def fetch_reviews(self, article_id: str) -> list[str]:
         """Получить отзывы на товар.

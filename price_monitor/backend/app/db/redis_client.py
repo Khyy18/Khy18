@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Optional
 
 import redis.asyncio as redis
@@ -13,13 +14,30 @@ logger = logging.getLogger(__name__)
 
 _pool: Optional[redis.Redis] = None
 redis_available: bool = True
+_last_retry_time: float = 0.0
+_RETRY_INTERVAL: float = 30.0  # seconds between reconnection attempts
 
 
 async def get_redis() -> redis.Redis | None:
     """Get or create Redis connection pool. Returns None if Redis is unavailable."""
-    global _pool, redis_available
+    global _pool, redis_available, _last_retry_time
     if not redis_available:
-        return None
+        # Periodically retry connection
+        now = time.time()
+        if now - _last_retry_time < _RETRY_INTERVAL:
+            return None
+        _last_retry_time = now
+        try:
+            _pool = redis.from_url(
+                settings.redis_url,
+                decode_responses=True,
+            )
+            await _pool.ping()
+            redis_available = True
+            logger.info("Redis reconnected successfully")
+        except (redis.ConnectionError, redis.TimeoutError, OSError):
+            _pool = None
+            return None
     if _pool is None:
         try:
             _pool = redis.from_url(
@@ -29,8 +47,9 @@ async def get_redis() -> redis.Redis | None:
             # Test connection
             await _pool.ping()
         except (redis.ConnectionError, redis.TimeoutError, OSError) as e:
-            logger.warning("Redis unavailable on startup: %s. Running without cache.", e)
+            logger.warning("Redis unavailable: %s. Running without cache.", e)
             redis_available = False
+            _last_retry_time = time.time()
             _pool = None
             return None
     return _pool

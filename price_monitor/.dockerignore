@@ -1,0 +1,11 @@
+frontend/
+admin/
+mobile/
+docs/
+infra/
+.git/
+__pycache__/
+*.pyc
+.env
+data/
+node_modules/

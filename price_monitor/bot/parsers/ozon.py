@@ -50,35 +50,39 @@ class OzonParser:
         Возвращает dict с полями: name, brand, price, old_price,
         discount, rating, feedbacks, product_id. Или None при ошибке.
         """
-        try:
-            resp = await self._client.get(
-                _OZON_PUBLIC_BASE,
-                params={"url": f"/product/{product_id}"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        max_429_retries = 2
+        for _attempt_429 in range(max_429_retries + 1):
+            try:
+                resp = await self._client.get(
+                    _OZON_PUBLIC_BASE,
+                    params={"url": f"/product/{product_id}"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-            # Извлекаем данные о товаре из ответа публичного API
-            widget_states = data.get("widgetStates", {})
-            product_info = self._extract_product_from_widgets(widget_states, product_id)
-            if product_info:
-                return product_info
+                # Извлекаем данные о товаре из ответа публичного API
+                widget_states = data.get("widgetStates", {})
+                product_info = self._extract_product_from_widgets(widget_states, product_id)
+                if product_info:
+                    return product_info
 
-            # Fallback: пробуем найти в seo или layout
-            seo = data.get("seo", {})
-            if seo:
-                return self._parse_seo_data(seo, product_id)
+                # Fallback: пробуем найти в seo или layout
+                seo = data.get("seo", {})
+                if seo:
+                    return self._parse_seo_data(seo, product_id)
 
-            return None
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                retry_after = int(e.response.headers.get("Retry-After", "60"))
-                logger.warning("Ozon rate limited (429), waiting %d sec", retry_after)
-                await asyncio.sleep(retry_after)
-            raise
-        except Exception as e:
-            logger.error("Ошибка при получении товара Ozon %s: %s", product_id, e)
-            raise
+                return None
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and _attempt_429 < max_429_retries:
+                    retry_after = int(e.response.headers.get("Retry-After", "60"))
+                    logger.warning("Ozon rate limited (429), waiting %d sec", retry_after)
+                    await asyncio.sleep(retry_after)
+                    continue
+                raise
+            except Exception as e:
+                logger.error("Ошибка при получении товара Ozon %s: %s", product_id, e)
+                raise
+        return None
 
     @retry(
         stop=stop_after_attempt(3),
@@ -93,26 +97,30 @@ class OzonParser:
 
         Возвращает список dict с информацией о товарах.
         """
-        try:
-            resp = await self._client.get(
-                _OZON_PUBLIC_BASE,
-                params={"url": f"/search/?text={query}&from_global=true"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        max_429_retries = 2
+        for _attempt_429 in range(max_429_retries + 1):
+            try:
+                resp = await self._client.get(
+                    _OZON_PUBLIC_BASE,
+                    params={"url": f"/search/?text={query}&from_global=true"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-            widget_states = data.get("widgetStates", {})
-            results = self._extract_search_results(widget_states, limit)
-            return results
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                retry_after = int(e.response.headers.get("Retry-After", "60"))
-                logger.warning("Ozon rate limited (429), waiting %d sec", retry_after)
-                await asyncio.sleep(retry_after)
-            raise
-        except Exception as e:
-            logger.error("Ошибка при поиске Ozon '%s': %s", query, e)
-            raise
+                widget_states = data.get("widgetStates", {})
+                results = self._extract_search_results(widget_states, limit)
+                return results
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and _attempt_429 < max_429_retries:
+                    retry_after = int(e.response.headers.get("Retry-After", "60"))
+                    logger.warning("Ozon rate limited (429), waiting %d sec", retry_after)
+                    await asyncio.sleep(retry_after)
+                    continue
+                raise
+            except Exception as e:
+                logger.error("Ошибка при поиске Ozon '%s': %s", query, e)
+                raise
+        return []
 
     async def fetch_reviews(self, product_id: str) -> list[str]:
         """Получить отзывы на товар через публичный эндпоинт.
