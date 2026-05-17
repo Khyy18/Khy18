@@ -1,15 +1,18 @@
 """Эндпоинты для работы с задачами."""
 
+from __future__ import annotations
+
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ai_office.api.dependencies import get_current_user_optional, get_tenant_id
 from ai_office.api.schemas import PaginatedResponse, TaskCreate, TaskResponse, TaskUpdate
 from ai_office.api.websocket import broadcast_event
 from ai_office.core.database import get_session
-from ai_office.core.models import Task
+from ai_office.core.models import Task, User
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -20,10 +23,17 @@ async def list_tasks(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Получить список задач с фильтрацией и пагинацией."""
+    tenant_id = get_tenant_id(current_user)
+
     query = select(Task)
     count_query = select(func.count(Task.id))
+
+    if tenant_id is not None:
+        query = query.where(Task.tenant_id == tenant_id)
+        count_query = count_query.where(Task.tenant_id == tenant_id)
 
     if status:
         query = query.where(Task.status == status)
@@ -50,8 +60,11 @@ async def list_tasks(
 async def create_task(
     task_data: TaskCreate,
     session: AsyncSession = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Создать новую задачу."""
+    tenant_id = get_tenant_id(current_user)
+
     task = Task(
         description=task_data.description,
         priority=task_data.priority,
@@ -59,6 +72,7 @@ async def create_task(
         creator_type="user",
         creator_id="api",
         status="open",
+        tenant_id=tenant_id,
     )
     session.add(task)
     await session.commit()
@@ -68,7 +82,7 @@ async def create_task(
         "description": task.description,
         "status": task.status,
         "priority": task.priority,
-    })
+    }, tenant_id=tenant_id)
     return task
 
 
@@ -77,9 +91,16 @@ async def update_task(
     task_id: int,
     task_data: TaskUpdate,
     session: AsyncSession = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Обновить статус или исполнителя задачи."""
-    result = await session.execute(select(Task).where(Task.id == task_id))
+    tenant_id = get_tenant_id(current_user)
+
+    query = select(Task).where(Task.id == task_id)
+    if tenant_id is not None:
+        query = query.where(Task.tenant_id == tenant_id)
+
+    result = await session.execute(query)
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена")
@@ -95,5 +116,5 @@ async def update_task(
         "id": task.id,
         "status": task.status,
         "description": task.description,
-    })
+    }, tenant_id=tenant_id)
     return task

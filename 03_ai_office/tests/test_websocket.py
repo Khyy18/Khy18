@@ -52,11 +52,11 @@ def test_websocket_multiple_clients(sync_client):
 
 def test_connection_manager_disconnect():
     """Тест отключения из ConnectionManager."""
-    # Очистка после теста
-    initial_count = len(manager.active_connections)
     # ConnectionManager.disconnect should handle missing connections gracefully
     from unittest.mock import MagicMock
 
+    initial_count = sum(len(v) for v in manager.connections_by_tenant.values())
     fake_ws = MagicMock()
     manager.disconnect(fake_ws)  # should not raise
-    assert len(manager.active_connections) == initial_count
+    final_count = sum(len(v) for v in manager.connections_by_tenant.values())
+    assert final_count == initial_count
