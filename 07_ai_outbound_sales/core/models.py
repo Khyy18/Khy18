@@ -1,3 +1,4 @@
+from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime, timezone
@@ -44,6 +45,7 @@ class ChannelType(str, enum.Enum):
     email = "email"
     linkedin = "linkedin"
     twitter = "twitter"
+    voice = "voice"
 
 
 class UserRole(str, enum.Enum):
@@ -96,8 +98,42 @@ class SubscriptionStatus(str, enum.Enum):
 class PlanName(str, enum.Enum):
     starter = "starter"
     growth = "growth"
-    scale = "scale"
+    agency = "agency"
     enterprise = "enterprise"
+
+
+class OnboardingStep(str, enum.Enum):
+    tenant_created = "tenant_created"
+    smtp_connected = "smtp_connected"
+    icp_uploaded = "icp_uploaded"
+    campaign_activated = "campaign_activated"
+    completed = "completed"
+
+
+class VoiceAddonPlan(str, enum.Enum):
+    voice_starter = "voice_starter"
+    voice_pro = "voice_pro"
+    voice_scale = "voice_scale"
+
+
+class CallStatus(str, enum.Enum):
+    initiated = "initiated"
+    ringing = "ringing"
+    answered = "answered"
+    in_progress = "in_progress"
+    completed = "completed"
+    failed = "failed"
+    no_answer = "no_answer"
+    busy = "busy"
+
+
+class CallOutcome(str, enum.Enum):
+    qualified = "qualified"
+    not_interested = "not_interested"
+    voicemail = "voicemail"
+    no_answer = "no_answer"
+    error = "error"
+    busy = "busy"
 
 
 # ---------- Utility ----------
@@ -120,6 +156,10 @@ class Tenant(Base):
     domain = Column(String, nullable=False)
     settings = Column(JSONB, default=dict)
     brand_settings = Column(JSONB, default=dict)
+    calendar_config = Column(JSONB, nullable=True)
+    onboarding_step = Column(
+        Enum(OnboardingStep), default=OnboardingStep.tenant_created, nullable=True
+    )
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     leads = relationship("Lead", back_populates="tenant")
@@ -132,6 +172,10 @@ class Tenant(Base):
     api_keys = relationship("ApiKey", back_populates="tenant")
     webhooks = relationship("Webhook", back_populates="tenant")
     lead_feedbacks = relationship("LeadFeedback", back_populates="tenant")
+    calls = relationship("Call", back_populates="tenant")
+    call_scripts = relationship("CallScript", back_populates="tenant")
+    voice_addons = relationship("VoiceAddon", back_populates="tenant")
+    objections = relationship("Objection", back_populates="tenant")
 
 
 class User(Base):
@@ -161,11 +205,13 @@ class Lead(Base):
     enrichment_data = Column(JSONB, default=dict)
     status = Column(Enum(LeadStatus), default=LeadStatus.new, nullable=False)
     score = Column(Float, nullable=True)
+    conversation_context = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     tenant = relationship("Tenant", back_populates="leads")
     messages = relationship("Message", back_populates="lead")
     pending_approvals = relationship("PendingApproval", back_populates="lead")
+    interactions = relationship("LeadInteraction", back_populates="lead")
 
 
 class Sequence(Base):
@@ -272,6 +318,8 @@ class Plan(Base):
     emails_limit = Column(Integer, nullable=False)
     linkedin_limit = Column(Integer, nullable=False)
     campaigns_limit = Column(Integer, nullable=False)
+    domains_limit = Column(Integer, nullable=False, default=1)
+    voice_calls_limit = Column(Integer, default=0, nullable=False)
     price_cents = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
@@ -305,6 +353,7 @@ class UsageRecord(Base):
     leads_used = Column(Integer, default=0, nullable=False)
     emails_used = Column(Integer, default=0, nullable=False)
     linkedin_used = Column(Integer, default=0, nullable=False)
+    voice_calls_used = Column(Integer, default=0, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=_utcnow)
 
     tenant = relationship("Tenant", back_populates="usage_records")
@@ -348,6 +397,7 @@ class Webhook(Base):
     url = Column(String, nullable=False)
     events = Column(JSONB, default=list)
     secret = Column(String, nullable=False)
+    template_type = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
     is_active = Column(Boolean, default=True, nullable=False)
 
@@ -398,6 +448,7 @@ class Trial(Base):
     ends_at = Column(DateTime(timezone=True), nullable=False)
     leads_used = Column(Integer, default=0)
     emails_used = Column(Integer, default=0)
+    voice_calls_used = Column(Integer, default=0)
     converted_at = Column(DateTime(timezone=True), nullable=True)
 
     tenant = relationship("Tenant")
@@ -440,3 +491,93 @@ class CostRecord(Base):
     amount_cents = Column(Integer, nullable=False)
     description = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+
+class CallScript(Base):
+    __tablename__ = "call_scripts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    name = Column(String, nullable=False)
+    script_json = Column(JSONB, default=dict)
+    voice_id = Column(String, nullable=True)
+    language = Column(String, default="en")
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="call_scripts")
+
+
+class Call(Base):
+    __tablename__ = "calls"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False)
+    campaign_id = Column(UUID(as_uuid=True), ForeignKey("campaigns.id"), nullable=True)
+    twilio_sid = Column(String, nullable=True)
+    status = Column(Enum(CallStatus), default=CallStatus.initiated, nullable=False)
+    duration_seconds = Column(Integer, nullable=True)
+    started_at = Column(DateTime(timezone=True), default=_utcnow)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    recording_url = Column(String, nullable=True)
+    transcript = Column(Text, nullable=True)
+    outcome = Column(Enum(CallOutcome), nullable=True)
+    cost_cents = Column(Integer, default=0)
+    script_id = Column(UUID(as_uuid=True), ForeignKey("call_scripts.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="calls")
+
+
+class VoiceAddon(Base):
+    """Voice AI add-on subscription for a tenant."""
+
+    __tablename__ = "voice_addons"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    plan_name = Column(Enum(VoiceAddonPlan), nullable=False)
+    stripe_subscription_id = Column(String, nullable=True)
+    calls_limit = Column(Integer, nullable=False)
+    calls_used_this_period = Column(Integer, default=0, nullable=False)
+    overage_rate_cents = Column(Integer, default=50, nullable=False)
+    period_start = Column(DateTime(timezone=True), nullable=True)
+    period_end = Column(DateTime(timezone=True), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="voice_addons")
+
+
+class Objection(Base):
+    """Stores objections extracted from call transcripts with responses."""
+
+    __tablename__ = "objections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    objection_text = Column(Text, nullable=False)
+    category = Column(String, nullable=False)
+    responses = Column(JSONB, default=list)
+    times_encountered = Column(Integer, default=1)
+    context = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="objections")
+
+
+class LeadInteraction(Base):
+    """Tracks individual interactions with leads across all channels."""
+
+    __tablename__ = "lead_interactions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id"), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    interaction_type = Column(String, nullable=False)  # "call", "email", "linkedin"
+    channel = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    context_json = Column(JSONB, default=dict)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+
+    lead = relationship("Lead", back_populates="interactions")

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import json
 import logging
@@ -5,6 +6,7 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -36,10 +38,14 @@ from dashboard.routes.trial import router as trial_router
 from dashboard.routes.preview import router as preview_router
 from dashboard.routes.referral import router as referral_router
 from dashboard.routes.webhook_status import router as webhook_status_router
+from dashboard.routes.crm_webhooks import router as crm_webhooks_router
+from dashboard.routes.webhook_events import router as webhook_events_router
 from dashboard.routes.costs import router as costs_router
+from dashboard.routes.reports import router as reports_router
 from dashboard.views import router as views_router
 from agents.approval_queue import router as approvals_router, set_email_sender
 from channels.email.deliverability_routes import router as deliverability_router
+from dashboard.routes.calendar import router as calendar_router
 
 # Initialize structured logging
 setup_logging()
@@ -414,6 +420,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Add observability middleware
 app.add_middleware(CorrelationIdMiddleware)
 
@@ -440,9 +455,13 @@ app.include_router(trial_router)
 app.include_router(preview_router)
 app.include_router(referral_router)
 app.include_router(webhook_status_router)
+app.include_router(crm_webhooks_router)
+app.include_router(webhook_events_router)
 app.include_router(costs_router)
+app.include_router(reports_router)
 app.include_router(approvals_router)
 app.include_router(deliverability_router)
+app.include_router(calendar_router)
 app.include_router(views_router)
 
 # Mount static files
@@ -562,6 +581,12 @@ async def metrics(request: Request) -> Response:
         if auth_header != expected:
             return Response(content="Unauthorized", status_code=401)
     return metrics_response()
+
+
+# Serve frontend in production mode
+_frontend_dist = _os.path.join(_os.path.dirname(__file__), "frontend", "dist")
+if settings.serve_frontend and _os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
 
 
 if __name__ == "__main__":

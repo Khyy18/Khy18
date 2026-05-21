@@ -1,3 +1,4 @@
+from __future__ import annotations
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,6 +37,10 @@ class Settings(BaseSettings):
     calcom_api_key: str = ""
     calcom_base_url: str = "https://api.cal.com/v1"
     google_calendar_credentials_json: str = ""
+    calendly_api_key: str = ""
+    calendly_event_type: str = ""
+    google_calendar_client_id: str = ""
+    google_calendar_client_secret: str = ""
 
     # JWT Auth
     jwt_secret_key: str = "change-me-in-production"
@@ -53,6 +58,11 @@ class Settings(BaseSettings):
     linkedin_max_profile_views_per_day: int = 50
     linkedin_min_action_cooldown_hours: int = 2
     linkedin_proxy_list: str = "[]"
+
+    # LinkedIn proxy rotation
+    linkedin_proxy_provider: str = "static"
+    linkedin_proxy_api_key: str = ""
+    linkedin_proxy_pool_size: int = 10
 
     # Observability
     sentry_dsn: str = ""
@@ -111,6 +121,42 @@ class Settings(BaseSettings):
 
     # LinkedIn self-healing
     linkedin_self_healing_enabled: bool = True
+
+    # Voice / Twilio settings
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
+    deepgram_api_key: str = ""
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "default"
+    voice_max_call_duration: int = 180
+    voice_concurrent_calls_limit: int = 5
+    voice_calling_hours_start: int = 9
+    voice_calling_hours_end: int = 20
+    voice_amd_enabled: bool = True
+    voice_supported_languages: str = "en,ru,es,de"
+
+    # LLM Router
+    llm_router_fast_model: str = "llama3-8b-8192"
+    llm_router_complex_model: str = "claude-3-sonnet-20240229"
+    llm_router_voice_model: str = "gpt-4o-mini"
+
+    # TTS/STT Fallback
+    openai_tts_enabled: bool = True
+
+    # Adaptive Throttle
+    adaptive_throttle_enabled: bool = True
+    adaptive_throttle_bounce_threshold: float = 0.05
+    adaptive_throttle_cooldown_minutes: int = 30
+
+    # CORS
+    cors_origins: str = "http://localhost:5174,http://localhost:3000"
+
+    # Production frontend serving
+    serve_frontend: bool = False
+
+    # AI Office integration
+    ai_office_webhook_url: str = ""
 
 
 settings = Settings()  # type: ignore[call-arg]

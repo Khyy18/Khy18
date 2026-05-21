@@ -1,4 +1,5 @@
 """Tests for enhanced enrichment: technographic, job boards, intent signals."""
+from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock, MagicMock, patch

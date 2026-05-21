@@ -1,4 +1,5 @@
 """Tests for competitive intelligence agent and scheduler."""
+from __future__ import annotations
 
 import pytest
 from datetime import datetime, timezone

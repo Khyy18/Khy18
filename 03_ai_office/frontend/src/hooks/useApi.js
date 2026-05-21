@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 
+const TOKEN_KEY = 'ai_office_token'
+
 /**
  * Кастомный хук для polling данных с API
  * @param {string} endpoint - путь API (без /api/ префикса)
@@ -18,7 +20,20 @@ export function useApi(endpoint, interval = 3000, paused = false) {
 
     const fetchData = async () => {
       try {
-        const response = await fetch(`/api/${endpoint}`)
+        const token = localStorage.getItem(TOKEN_KEY)
+        const headers = {}
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`
+        }
+        const response = await fetch(`/api/${endpoint}`, { headers })
+        if (response.status === 401) {
+          localStorage.removeItem(TOKEN_KEY)
+          if (isMounted) {
+            setError('Unauthorized')
+            setLoading(false)
+          }
+          return
+        }
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`)
         }

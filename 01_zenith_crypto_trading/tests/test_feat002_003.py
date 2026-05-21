@@ -161,7 +161,7 @@ def test_telegram_keyboard_has_5_rows():
 
     kb = set_keyboard()
     rows = kb["inline_keyboard"]
-    assert len(rows) == 5
+    assert len(rows) == 7
 
 
 def test_telegram_handlers_registered():

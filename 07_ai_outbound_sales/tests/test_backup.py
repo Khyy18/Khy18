@@ -1,4 +1,5 @@
 """Tests for core/backup.py - BackupManager."""
+from __future__ import annotations
 
 import os
 import time

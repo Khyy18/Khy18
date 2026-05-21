@@ -1,4 +1,5 @@
 """Tests for the AlertingEngine - alert condition detection, cooldown, and dispatch."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone

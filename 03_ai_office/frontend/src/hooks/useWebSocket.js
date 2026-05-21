@@ -18,7 +18,9 @@ export function useWebSocket(url, handlers = {}) {
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}${url}`
+    const token = localStorage.getItem('ai_office_token')
+    const tokenParam = token ? `?token=${token}` : ''
+    const wsUrl = `${protocol}//${window.location.host}${url}${tokenParam}`
     
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws

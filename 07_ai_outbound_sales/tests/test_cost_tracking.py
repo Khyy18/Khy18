@@ -1,4 +1,5 @@
 """Tests for cost tracking - recording, P&L calculation, and unprofitable detection."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone

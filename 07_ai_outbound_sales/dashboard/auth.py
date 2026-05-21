@@ -1,3 +1,4 @@
+from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 from uuid import UUID
@@ -182,3 +183,37 @@ async def login(
         )
     token = create_access_token({"sub": str(user.id), "tenant_id": str(user.tenant_id)})
     return {"access_token": token, "token_type": "bearer"}
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Refresh an access token. Accepts a valid token and returns a new one."""
+    payload = verify_token(credentials.credentials)
+    user_id = payload.get("sub")
+    tenant_id = payload.get("tenant_id")
+    if not user_id or not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+        )
+    # Verify user still exists
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+    new_token = create_access_token({"sub": str(user.id), "tenant_id": str(user.tenant_id)})
+    return {"access_token": new_token, "token_type": "bearer"}
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_me(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Get the current authenticated user's information."""
+    return current_user

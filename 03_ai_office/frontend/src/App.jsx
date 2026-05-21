@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, ListTodo, Activity, GitBranch, Clock } from 'lucide-react'
+import { Users, ListTodo, Activity, GitBranch, Clock, TrendingUp, Server, CreditCard, Shield, LogOut } from 'lucide-react'
 import AgentCard from './components/AgentCard'
 import TaskCard from './components/TaskCard'
 import ActivityLog from './components/ActivityLog'
@@ -7,14 +7,23 @@ import SystemStatus from './components/SystemStatus'
 import AgentGraph from './components/AgentGraph'
 import TaskTimeline from './components/TaskTimeline'
 import AgentDetailView from './components/AgentDetailView'
+import SalesPanel from './components/SalesPanel'
+import ZenithPanel from './components/ZenithPanel'
+import TextAgencyPanel from './components/TextAgencyPanel'
+import ComboBotPanel from './components/ComboBotPanel'
+import LoginPage from './components/LoginPage'
+import RegisterPage from './components/RegisterPage'
+import OnboardingWizard from './components/OnboardingWizard'
+import BillingPage from './components/BillingPage'
+import AdminPanel from './components/AdminPanel'
 import { ToastContainer, showToast } from './components/Toast'
 import { useApi } from './hooks/useApi'
 import { useWebSocket } from './hooks/useWebSocket'
+import { useAuth } from './hooks/useAuth'
 
 /**
  * Главный компонент AI Office Mini App
- * Пять табов: Agents, Tasks, Activity, Graph, Timeline
- * Интеграция с Telegram Web App SDK
+ * Multi-tenant SaaS with auth, onboarding, billing, admin
  */
 export default function App() {
   const [activeTab, setActiveTab] = useState('agents')
@@ -22,6 +31,23 @@ export default function App() {
   const [wsTasks, setWsTasks] = useState(null)
   const [wsActivity, setWsActivity] = useState(null)
   const [selectedAgent, setSelectedAgent] = useState(null)
+  const [authPage, setAuthPage] = useState('login')
+  const [onboardingDone, setOnboardingDone] = useState(null)
+
+  const { user, loading: authLoading, isAuthenticated, isSuperAdmin, login, register, logout, error: authError, setError: setAuthError } = useAuth()
+
+  // Check onboarding status after login
+  useEffect(() => {
+    if (user && isAuthenticated) {
+      const token = localStorage.getItem('ai_office_token')
+      fetch('/api/onboarding/status', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(r => r.ok ? r.json() : { completed: true })
+        .then(data => setOnboardingDone(data.completed))
+        .catch(() => setOnboardingDone(true))
+    }
+  }, [user, isAuthenticated])
 
   // Инициализация Telegram Web App
   useEffect(() => {
@@ -94,11 +120,60 @@ export default function App() {
   const tasks = wsTasks || apiTasks
   const activity = wsActivity || apiActivity
 
-  // Конфигурация табов
+  // Show loading while auth is checking
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-white/30 text-sm">Loading...</div>
+      </div>
+    )
+  }
+
+  // Show login/register if not authenticated
+  if (!isAuthenticated || !user) {
+    if (authPage === 'register') {
+      return (
+        <RegisterPage
+          onRegister={register}
+          onSwitchToLogin={() => { setAuthPage('login'); setAuthError(null) }}
+        />
+      )
+    }
+    return (
+      <LoginPage
+        onLogin={login}
+        onSwitchToRegister={() => { setAuthPage('register'); setAuthError(null) }}
+      />
+    )
+  }
+
+  // Show onboarding if not completed
+  if (onboardingDone === false) {
+    return (
+      <OnboardingWizard
+        companyName={user.tenant_name || ''}
+        onComplete={() => setOnboardingDone(true)}
+      />
+    )
+  }
+
+  // Wait for onboarding check
+  if (onboardingDone === null) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-white/30 text-sm">Loading...</div>
+      </div>
+    )
+  }
+
+  // Конфигурация табов - services and admin only for super_admin
   const tabs = [
     { id: 'agents', label: 'Agents', icon: Users },
     { id: 'tasks', label: 'Tasks', icon: ListTodo },
     { id: 'activity', label: 'Activity', icon: Activity },
+    ...(isSuperAdmin ? [{ id: 'services', label: 'Services', icon: Server }] : []),
+    { id: 'billing', label: 'Billing', icon: CreditCard },
+    ...(isSuperAdmin ? [{ id: 'admin', label: 'Admin', icon: Shield }] : []),
     { id: 'graph', label: 'Graph', icon: GitBranch },
     { id: 'timeline', label: 'Timeline', icon: Clock },
   ]
@@ -108,15 +183,30 @@ export default function App() {
       {/* Хедер */}
       <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-xl border-b border-white/5 px-4 py-3">
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold tracking-tight">AI Office</h1>
-          {/* Индикатор статуса системы */}
           <div className="flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${
-              connected ? 'bg-green-500 animate-status-pulse' : wsError ? 'bg-red-500' : 'bg-yellow-500 animate-status-pulse'
-            }`} />
-            <span className="text-white/50 text-xs">
-              {connected ? 'Online' : wsError ? 'Offline' : 'Connecting...'}
-            </span>
+            <h1 className="text-lg font-semibold tracking-tight">AI Office</h1>
+            {user.tenant_name && (
+              <span className="text-white/40 text-sm">| {user.tenant_name}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Индикатор статуса системы */}
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${
+                connected ? 'bg-green-500 animate-status-pulse' : wsError ? 'bg-red-500' : 'bg-yellow-500 animate-status-pulse'
+              }`} />
+              <span className="text-white/50 text-xs">
+                {connected ? 'Online' : wsError ? 'Offline' : 'Connecting...'}
+              </span>
+            </div>
+            {/* Logout button */}
+            <button
+              onClick={logout}
+              className="text-white/40 hover:text-white/70 transition-colors"
+              title="Logout"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </header>
@@ -159,6 +249,23 @@ export default function App() {
 
             {activeTab === 'activity' && (
               <ActivityLog activities={activity || []} />
+            )}
+
+            {activeTab === 'services' && isSuperAdmin && (
+              <div className="space-y-6">
+                <SalesPanel />
+                <ZenithPanel />
+                <TextAgencyPanel />
+                <ComboBotPanel />
+              </div>
+            )}
+
+            {activeTab === 'billing' && (
+              <BillingPage />
+            )}
+
+            {activeTab === 'admin' && isSuperAdmin && (
+              <AdminPanel />
             )}
 
             {activeTab === 'graph' && (

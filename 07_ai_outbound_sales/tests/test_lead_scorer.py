@@ -1,4 +1,5 @@
 """Tests for the LeadScorer module."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone

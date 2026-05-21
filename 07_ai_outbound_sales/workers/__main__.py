@@ -1,4 +1,5 @@
 """Allow running workers via python -m workers.run_worker."""
+from __future__ import annotations
 
 from workers.run_worker import WorkerSettings
 

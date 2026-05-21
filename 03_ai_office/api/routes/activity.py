@@ -1,13 +1,18 @@
 """Эндпоинты для лога активности."""
 
+from __future__ import annotations
+
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from ai_office.api.dependencies import get_current_user_optional, get_tenant_id
 from ai_office.api.schemas import ActivityResponse, PaginatedResponse
 from ai_office.core.database import get_session
-from ai_office.core.models import ActivityLog
+from ai_office.core.models import ActivityLog, User
 
 router = APIRouter(prefix="/api/activity", tags=["activity"])
 
@@ -17,10 +22,15 @@ async def list_activity(
     limit: int = Query(default=20, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Получить лог последних действий с пагинацией."""
+    tenant_id = get_tenant_id(current_user)
+
     # Общее количество
     count_query = select(func.count(ActivityLog.id))
+    if tenant_id is not None:
+        count_query = count_query.where(ActivityLog.tenant_id == tenant_id)
     total_result = await session.execute(count_query)
     total = total_result.scalar() or 0
 
@@ -32,6 +42,9 @@ async def list_activity(
         .offset(offset)
         .limit(limit)
     )
+    if tenant_id is not None:
+        query = query.where(ActivityLog.tenant_id == tenant_id)
+
     result = await session.execute(query)
     logs = result.scalars().all()
 

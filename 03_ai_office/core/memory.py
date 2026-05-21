@@ -1,5 +1,7 @@
 """Персистентная векторная память агентов на базе ChromaDB."""
 
+from __future__ import annotations
+
 import logging
 import uuid
 

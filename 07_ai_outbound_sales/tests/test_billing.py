@@ -1,4 +1,5 @@
 """Tests for the billing webhook handler."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
@@ -111,3 +112,65 @@ async def test_webhook_unhandled_event_type(async_session):
     data_object = {"id": "some_object_id"}
     # Should not raise for unknown event types
     await _handle_webhook_event(async_session, "charge.succeeded", data_object)
+
+
+# ---------- Tests for domains_limit and plan tiers ----------
+
+
+async def test_plan_has_domains_limit(async_session):
+    """Test that Plan model correctly stores domains_limit."""
+    plan = make_plan(domains_limit=3)
+    async_session.add(plan)
+    await async_session.flush()
+
+    result = await async_session.execute(select(Plan).where(Plan.id == plan.id))
+    stored_plan = result.scalar_one()
+    assert stored_plan.domains_limit == 3
+
+
+async def test_plan_domains_limit_default(async_session):
+    """Test that make_plan factory defaults domains_limit to 1."""
+    plan = make_plan()
+    async_session.add(plan)
+    await async_session.flush()
+
+    result = await async_session.execute(select(Plan).where(Plan.id == plan.id))
+    stored_plan = result.scalar_one()
+    assert stored_plan.domains_limit == 1
+
+
+async def test_plan_name_agency_enum(async_session):
+    """Test that PlanName enum includes 'agency' instead of 'scale'."""
+    assert hasattr(PlanName, "agency")
+    assert not hasattr(PlanName, "scale")
+
+    plan = make_plan(name=PlanName.agency, domains_limit=-1)
+    async_session.add(plan)
+    await async_session.flush()
+
+    result = await async_session.execute(select(Plan).where(Plan.id == plan.id))
+    stored_plan = result.scalar_one()
+    assert stored_plan.name == PlanName.agency
+
+
+async def test_plan_response_includes_domains_limit(async_session):
+    """Test that PlanResponse schema includes domains_limit field."""
+    from dashboard.schemas import PlanResponse
+
+    plan = make_plan(domains_limit=5)
+    async_session.add(plan)
+    await async_session.flush()
+
+    response = PlanResponse.model_validate(plan)
+    assert response.domains_limit == 5
+
+
+async def test_checkout_endpoint_exists():
+    """Test that POST /api/billing/checkout endpoint is registered."""
+    from dashboard.routes.billing import router
+
+    checkout_routes = [
+        r for r in router.routes
+        if hasattr(r, "path") and r.path == "/api/billing/checkout" and "POST" in r.methods
+    ]
+    assert len(checkout_routes) == 1

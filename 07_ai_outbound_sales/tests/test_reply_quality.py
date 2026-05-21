@@ -1,4 +1,5 @@
 """Tests for reply quality scoring and integration with conversation/copywriter agents."""
+from __future__ import annotations
 
 import json
 import uuid

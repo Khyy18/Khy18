@@ -42,10 +42,12 @@ class LinkedInBrowser:
         session_dir: str,
         proxy: dict[str, str] | None = None,
         account_id: str = "default",
+        proxy_manager: Any | None = None,
     ) -> None:
         self._session_dir = session_dir
         self._proxy = proxy
         self._account_id = account_id
+        self._proxy_manager = proxy_manager
         self._playwright: Any = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
@@ -87,12 +89,61 @@ class LinkedInBrowser:
             "ignore_https_errors": True,
         }
 
-        if self._proxy:
-            launch_options["proxy"] = self._proxy
+        # Resolve proxy: prefer proxy_manager over static proxy config
+        proxy_config = self._proxy
+        if self._proxy_manager is not None:
+            managed_proxy = self._proxy_manager.get_proxy(session_id=self._account_id)
+            if managed_proxy:
+                proxy_config = {
+                    "server": managed_proxy["url"],
+                }
+                if managed_proxy.get("username"):
+                    proxy_config["username"] = managed_proxy["username"]
+                if managed_proxy.get("password"):
+                    proxy_config["password"] = managed_proxy["password"]
 
-        self._context = await self._playwright.chromium.launch_persistent_context(
-            **launch_options
-        )
+        if proxy_config:
+            launch_options["proxy"] = proxy_config
+
+        try:
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                **launch_options
+            )
+        except Exception as exc:
+            # On connection failure with proxy_manager, report failure and retry
+            if self._proxy_manager is not None and proxy_config:
+                proxy_url = proxy_config.get("server", "")
+                self._proxy_manager.report_failure(proxy_url)
+                logger.warning(
+                    "Proxy %s failed for account %s, rotating: %s",
+                    proxy_url,
+                    self._account_id,
+                    exc,
+                )
+                rotated = self._proxy_manager.rotate_for_session(self._account_id)
+                if rotated:
+                    launch_options["proxy"] = {
+                        "server": rotated["url"],
+                    }
+                    if rotated.get("username"):
+                        launch_options["proxy"]["username"] = rotated["username"]
+                    if rotated.get("password"):
+                        launch_options["proxy"]["password"] = rotated["password"]
+                    self._context = (
+                        await self._playwright.chromium.launch_persistent_context(
+                            **launch_options
+                        )
+                    )
+                else:
+                    raise
+            else:
+                raise
+
+        # Report success if proxy_manager is in use
+        if self._proxy_manager is not None and proxy_config:
+            effective_url = proxy_config.get("server", "")
+            if effective_url:
+                self._proxy_manager.report_success(effective_url)
 
         pages = self._context.pages
         self._page = pages[0] if pages else await self._context.new_page()

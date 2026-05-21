@@ -1,4 +1,5 @@
 """Tests for core/resilience.py - Circuit breaker and graceful degradation."""
+from __future__ import annotations
 
 import asyncio
 import time

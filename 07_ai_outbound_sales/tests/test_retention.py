@@ -1,4 +1,5 @@
 """Tests for scheduler/retention.py - Retention engine checks."""
+from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
