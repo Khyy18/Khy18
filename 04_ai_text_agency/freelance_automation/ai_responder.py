@@ -6,11 +6,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
-import aiohttp
-
-import ai_router
 from freelance_automation.base import Order
 from logging_config import get_logger
 
@@ -29,7 +26,7 @@ class AIResponder:
 
     async def generate_response(
         self,
-        session: aiohttp.ClientSession,
+        session: Any,
         order: Order,
         platform: str,
         portfolio_items: Optional[list[str]] = None,
@@ -57,14 +54,17 @@ class AIResponder:
             f"{description}\n"
             f"Budget: {budget_str}\n"
             f"Platform: {platform}\n"
+            f"Category: {order.category or 'unknown'}\n"
             f"Relevant portfolio: {items}\n"
             f"Generate a unique, professional response in Russian. "
             f"Adapt tone for {platform} "
             f"(kwork=concise/professional, fl.ru=detailed/friendly). "
-            f"Include relevant portfolio mention. Max 500 chars."
+            f"Mention the category and relevant portfolio. Max 500 chars."
         )
 
         try:
+            import ai_router
+
             response = await ai_router.call_llm_text(
                 session,
                 prompt,
@@ -84,3 +84,48 @@ class AIResponder:
         # Fallback
         log.warning("ai_response_fallback", order_id=order.id)
         return _FALLBACK_TEMPLATE.format(title=order.title)
+
+    async def generate_completion(
+        self,
+        session: Any,
+        order: Order,
+        platform: str,
+    ) -> str:
+        """Сгенерировать текст для завершения заказа и передачи результата клиенту."""
+        budget_str = str(int(order.budget)) if order.budget else "согласованный"
+        title = (order.title or "").strip()[:150]
+        description = (order.description or "").strip()[:800]
+
+        prompt = (
+            f"You are an experienced freelance contractor. The client accepted the order '{title}' "
+            f"on {platform}. Provide a concise completion message in Russian with:\n"
+            f"- confirmation of completion,\n"
+            f"- summary of the delivered work,\n"
+            f"- an invitation for feedback or revisions,\n"
+            f"- mention budget {budget_str} if available.\n"
+            "Keep it polite and professional in Russian."
+        )
+
+        try:
+            import ai_router
+
+            response = await ai_router.call_llm_text(
+                session,
+                prompt,
+                max_output_tokens=320,
+                temperature=0.6,
+            )
+            if response and response.strip():
+                log.info(
+                    "ai_completion_generated",
+                    platform=platform,
+                    order_id=order.id,
+                )
+                return response.strip()
+        except Exception as e:
+            log.error("ai_completion_error", error=str(e))
+
+        return (
+            "Здравствуйте! Заказ выполнен. "
+            "Я отправил готовый результат и готов скорректировать всё по вашему фидбэку."
+        )

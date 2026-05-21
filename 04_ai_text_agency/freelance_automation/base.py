@@ -17,6 +17,7 @@ class Order:
     description: str
     budget: Optional[float]
     url: str
+    category: Optional[str] = None
     posted_at: Optional[datetime] = None
 
 
@@ -32,13 +33,27 @@ class FreelancePlatform(ABC):
         ...
 
     @abstractmethod
-    async def fetch_new_orders(self, keywords: list[str] | None = None) -> list[Order]:
-        """Получение новых заказов, опционально фильтруя по ключевым словам."""
+    async def fetch_new_orders(
+        self,
+        keywords: list[str] | None = None,
+        categories: list[str] | None = None,
+    ) -> list[Order]:
+        """Получение новых заказов, опционально фильтруя по ключевым словам или категориям."""
         ...
 
     @abstractmethod
-    async def respond_to_order(self, order: Order, text: str) -> bool:
+    async def respond_to_order(self, order: Order, text: str, use_ai: bool = False) -> bool:
         """Отправка отклика на заказ."""
+        ...
+
+    @abstractmethod
+    async def check_order_status(self, order: Order) -> str:
+        """Проверка статуса заказа: 'pending', 'accepted', 'completed', 'rejected'."""
+        ...
+
+    @abstractmethod
+    async def deliver_order(self, order: Order, completion_text: str) -> bool:
+        """Отправка готового результата клиенту после принятия заказа."""
         ...
 
     @abstractmethod

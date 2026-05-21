@@ -39,6 +39,7 @@ ACTION_SHOW_ERRORS = "show_last_errors"
 ACTION_CLEAR_ERRORS = "clear_error_history"
 ACTION_RESTART_SERVICE = "request_service_restart"
 ACTION_CONFIRM_RESTART = "confirm_restart"
+ACTION_FILE_SENT = "file_sent"
 ACTION_SHOW_SETTINGS = "show_current_settings"
 ACTION_CANCEL = "cancel"
 
@@ -357,6 +358,45 @@ async def send_platform_login_failure_alert(
         )
 
 
+async def send_manual_file_upload_alert(
+    order_id: str,
+    zip_path: str,
+    platform: str,
+) -> None:
+    if not ADMIN_CHAT_ID or not config.TELEGRAM_TOKEN:
+        log.warning("telegram_admin_no_chat_or_token", platform=platform)
+        return
+
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        text_lines = [
+            f"<b>Не удалось автоматически загрузить ZIP для заказа {order_id}</b>",
+            f"Файл сохранён локально: <code>{zip_path}</code>",
+            "Пожалуйста, отправьте этот файл вручную заказчику на платформе.",
+            "Когда файл будет отправлен, нажмите кнопку ниже.",
+        ]
+        text = "\n".join(text_lines)
+
+        markup = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "Файл отправлен",
+                        "callback_data": ADMIN_CALLBACK_PREFIX + ACTION_FILE_SENT,
+                    }
+                ]
+            ]
+        }
+
+        await _send_message(
+            session,
+            ADMIN_CHAT_ID,
+            text,
+            reply_markup=markup,
+        )
+
+
 async def _handle_callback_query(session: aiohttp.ClientSession, callback_query: dict[str, Any]) -> None:
     callback_id = callback_query.get("id", "")
     from_user = callback_query.get("from", {})
@@ -442,6 +482,11 @@ async def _handle_callback_query(session: aiohttp.ClientSession, callback_query:
     if action == ACTION_SHOW_SETTINGS:
         await _answer_callback_query(session, callback_id, "Показываю настройки.")
         await _send_message(session, chat_id, _format_settings_text())
+        return
+
+    if action == ACTION_FILE_SENT:
+        await _answer_callback_query(session, callback_id, "Отмечено как отправленное.")
+        await _send_message(session, chat_id, "Спасибо! Файл отмечен как отправленный вручную.")
         return
 
     await _answer_callback_query(session, callback_id, "Неизвестная команда.")

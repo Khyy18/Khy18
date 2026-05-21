@@ -55,6 +55,8 @@ CATEGORIES: list[str] = [c.strip() for c in _categories_env.split(",") if c.stri
 # Пути для сохранения состояния откликов и жизненного цикла заказов
 DEDUP_PATH = os.getenv("FREELANCE_DEDUP_PATH", "freelance_responded.json")
 ORDER_LIFECYCLE_PATH = os.getenv("FREELANCE_ORDER_LIFECYCLE_PATH", "freelance_order_lifecycle.json")
+ORDER_COMPLETION_ENABLED = os.getenv("FREELANCE_ORDER_COMPLETION_ENABLED", "true").lower() in ("1", "true", "yes")
+DELIVERABLES_PATH = os.getenv("FREELANCE_DELIVERABLES_PATH", "freelance_deliverables")
 
 
 def load_dynamic_settings() -> dict[str, Any]:

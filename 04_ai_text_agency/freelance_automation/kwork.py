@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
-
-from playwright.async_api import Browser, Page, async_playwright
+import os
+import random
+from typing import Any, Optional
 
 from freelance_automation.base import FreelancePlatform, Order
+from freelance_automation.config import DELIVERABLES_PATH
 from freelance_automation.stealth import (
     StealthConfig,
     apply_stealth,
@@ -27,14 +28,16 @@ class KworkPlatform(FreelancePlatform):
     PROJECTS_URL = "https://kwork.ru/projects"
 
     def __init__(self, stealth_config: Optional[StealthConfig] = None) -> None:
-        self._browser: Optional[Browser] = None
-        self._page: Optional[Page] = None
-        self._playwright = None
+        self._browser: Any = None
+        self._page: Any = None
+        self._playwright: Any = None
         self.stealth_config = stealth_config
 
     async def login(self, cookies_path: str) -> bool:
         """Авторизация на Kwork через загрузку cookies из JSON файла."""
         try:
+            from playwright.async_api import async_playwright
+
             self._playwright = await async_playwright().start()
 
             # Параметры запуска браузера
@@ -80,7 +83,67 @@ class KworkPlatform(FreelancePlatform):
                 self.stealth_config.min_delay, self.stealth_config.max_delay
             )
 
-    async def fetch_new_orders(self, keywords: list[str] | None = None) -> list[Order]:
+    async def _human_type_text(self, textarea, text: str) -> None:
+        """Ввод текста по-людски, чтобы снизить риск блокировки."""
+        await textarea.click()
+        await self._delay()
+        await textarea.fill("")
+        if len(text) <= 300:
+            await textarea.type(text, delay=random.randint(40, 80))
+        else:
+            # Для длинных текстов печатаем частями, чтобы не зависнуть.
+            for chunk in [text[i : i + 200] for i in range(0, len(text), 200)]:
+                await textarea.type(chunk, delay=random.randint(30, 70))
+                await self._delay()
+
+    async def _extract_category_from_card(self, card) -> Optional[str]:
+        """Попытаться извлечь категорию заказа из карточки Kwork."""
+        selectors = [
+            ".wants-card__category",
+            ".wants-card__tags",
+            ".card__category",
+            ".wants-card__header-body .category",
+        ]
+        for selector in selectors:
+            el = await card.query_selector(selector)
+            if el:
+                text = (await el.inner_text() or "").strip()
+                if text:
+                    return text
+        return None
+
+    async def _infer_category(self, title: str, description: str) -> Optional[str]:
+        """Инферировать категорию из текста заказа, если она не указана явно."""
+        text = f"{title} {description}".lower()
+        category_keywords = {
+            "telegram": ["telegram", "бот", "бота", "ботов"],
+            "парсинг": ["парс", "scrapy", "парсер"],
+            "веб": ["django", "flask", "веб", "frontend", "backend", "api"],
+            "мобильное": ["flutter", "ios", "android", "мобильн"],
+            "маркетинг": ["реклама", "marketing", "seo"],
+        }
+        for category, keywords in category_keywords.items():
+            if any(keyword in text for keyword in keywords):
+                return category
+        return None
+
+    async def _scroll_page(self) -> None:
+        """Небольшая прокрутка страницы для имитации просмотра."""
+        if not self._page:
+            return
+        try:
+            await self._page.mouse.wheel(0, random.randint(200, 500))
+            await self._delay()
+            await self._page.mouse.wheel(0, random.randint(-150, 150))
+            await self._delay()
+        except Exception:
+            pass
+
+    async def fetch_new_orders(
+        self,
+        keywords: list[str] | None = None,
+        categories: list[str] | None = None,
+    ) -> list[Order]:
         """Получение новых заказов со страницы проектов Kwork."""
         if not self._page:
             log.error("browser_not_initialized", platform="kwork.ru")
@@ -119,6 +182,9 @@ class KworkPlatform(FreelancePlatform):
 
                 url = href if href.startswith("http") else f"{self.BASE_URL}{href}"
                 order_id = href.split("/")[-1] if href else title[:20]
+                category = await self._extract_category_from_card(card)
+                if not category:
+                    category = await self._infer_category(title, description)
 
                 order = Order(
                     id=order_id,
@@ -126,13 +192,20 @@ class KworkPlatform(FreelancePlatform):
                     description=description,
                     budget=budget,
                     url=url,
+                    category=category,
                 )
 
-                # Фильтрация по ключевым словам
                 if keywords:
                     text_lower = f"{title} {description}".lower()
                     if not any(kw.lower() in text_lower for kw in keywords):
                         continue
+
+                if categories:
+                    category_lower = (category or "").lower()
+                    if not any(cat.lower() in category_lower for cat in categories):
+                        text_lower = f"{title} {description}".lower()
+                        if not any(cat.lower() in text_lower for cat in categories):
+                            continue
 
                 orders.append(order)
 
@@ -187,7 +260,9 @@ class KworkPlatform(FreelancePlatform):
                 return False
 
             await self._delay()
-            await textarea.fill(response_text)
+            await self._scroll_page()
+            await self._delay()
+            await self._human_type_text(textarea, response_text)
 
             # Отправка формы
             submit_btn = await self._page.query_selector(".wants-offer-form button[type='submit']")
@@ -200,6 +275,100 @@ class KworkPlatform(FreelancePlatform):
             return True
         except Exception as e:
             log.error("response_failed", platform="kwork.ru", error=str(e))
+            return False
+
+    async def check_order_status(self, order: Order) -> str:
+        """Проверка статуса заказа на Kwork."""
+        if not self._page:
+            log.error("browser_not_initialized", platform="kwork.ru")
+            return "pending"
+
+        try:
+            await self._page.goto(order.url)
+            await self._delay()
+            await self._page.wait_for_timeout(3000)
+
+            page_text = (await self._page.content()).lower()
+            if "заказ принят" in page_text or "заказ одобрен" in page_text or "выбран" in page_text:
+                return "accepted"
+            if "отклонен" in page_text or "отменен" in page_text or "не выбран" in page_text:
+                return "rejected"
+
+            # Попробуем найти кнопку подтверждения заказа исполнителем
+            accept_btn = await self._page.query_selector("button:has-text('Принять заказ')")
+            if accept_btn:
+                await self._delay()
+                await accept_btn.click()
+                await self._page.wait_for_timeout(2000)
+                return "accepted"
+
+            return "pending"
+        except Exception as e:
+            log.error("check_order_status_failed", platform="kwork.ru", error=str(e))
+            return "pending"
+
+    async def _attach_deliverable_file(self, file_path: str) -> bool:
+        if not self._page:
+            return False
+
+        try:
+            file_input = await self._page.query_selector("input[type=file]")
+            if not file_input:
+                attach_button = await self._page.query_selector(
+                    "button:has-text('Прикрепить'), button:has-text('Добавить файл'), button:has-text('Attach file')"
+                )
+                if attach_button:
+                    await self._delay()
+                    await attach_button.click()
+                    await self._delay()
+                    file_input = await self._page.query_selector("input[type=file]")
+
+            if file_input and os.path.exists(file_path):
+                await file_input.set_input_files(file_path)
+                await self._delay()
+                return True
+        except Exception as e:
+            log.warning("file_attachment_failed", platform="kwork.ru", error=str(e))
+        return False
+
+    async def deliver_order(self, order: Order, completion_text: str) -> bool:
+        """Отправка готового результата клиенту на Kwork."""
+        if not self._page:
+            log.error("browser_not_initialized", platform="kwork.ru")
+            return False
+
+        try:
+            await self._page.goto(order.url)
+            await self._delay()
+            await self._page.wait_for_timeout(3000)
+
+            zip_path = os.path.join(DELIVERABLES_PATH, order.id, "deliverable.zip")
+            if os.path.exists(zip_path):
+                attached = await self._attach_deliverable_file(zip_path)
+                if not attached:
+                    try:
+                        from freelance_automation.telegram_admin import send_manual_file_upload_alert
+
+                        await send_manual_file_upload_alert(order.id, zip_path, "kwork")
+                    except Exception as exc:
+                        log.warning("manual_upload_alert_failed", platform="kwork.ru", error=str(exc))
+
+            textarea = await self._page.query_selector("textarea, .chat-input textarea, .message-form textarea")
+            if not textarea:
+                log.warning("completion_textarea_not_found", platform="kwork.ru")
+                return False
+
+            await self._human_type_text(textarea, completion_text)
+            send_btn = await self._page.query_selector("button:has-text('Отправить'), button:has-text('Отправить сообщение'), button:has-text('Send')")
+            if send_btn:
+                await self._delay()
+                await send_btn.click()
+                await self._page.wait_for_timeout(2000)
+
+            log.info("order_delivered", platform="kwork.ru", order_id=order.id)
+            return True
+        except Exception as e:
+            log.error("delivery_failed", platform="kwork.ru", error=str(e))
             return False
 
     async def close(self) -> None:

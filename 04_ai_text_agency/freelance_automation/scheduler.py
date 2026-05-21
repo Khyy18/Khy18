@@ -13,6 +13,7 @@ from freelance_automation.config import (
     DEDUP_PATH,
     MAX_RESPONSES_PER_HOUR,
     ORDER_LIFECYCLE_PATH,
+    ORDER_COMPLETION_ENABLED,
     RESPONSE_TEMPLATES,
     SCAN_INTERVAL_MINUTES,
     load_dynamic_settings,
@@ -95,6 +96,8 @@ class FreelanceScheduler:
         self._order_lifecycle[order.id] = {
             "status": status,
             "title": order.title,
+            "description": order.description,
+            "budget": order.budget,
             "category": order.category,
             "url": order.url,
             "platform": platform_name,
@@ -142,6 +145,106 @@ class FreelanceScheduler:
         order_text = f"{order.title} {order.description}".lower()
         return any(keyword.lower() in order_text for keyword in self.keywords)
 
+    def _build_order_from_lifecycle(self, order_id: str, data: dict[str, Any]) -> Order:
+        return Order(
+            id=order_id,
+            title=str(data.get("title", "")),
+            description=str(data.get("description", "")),
+            budget=float(data["budget"]) if data.get("budget") is not None else None,
+            url=str(data.get("url", "")),
+            category=data.get("category"),
+        )
+
+    async def _process_pending_orders(self, session: Any) -> None:
+        pending = [
+            (order_id, data)
+            for order_id, data in self._order_lifecycle.items()
+            if data.get("status") == "awaiting_acceptance"
+        ]
+
+        if not pending:
+            return
+
+        for order_id, data in pending:
+            platform_name = data.get("platform", "")
+            platform = next(
+                (p for p in self.platforms if p.__class__.__name__ == platform_name),
+                None,
+            )
+            if platform is None and len(self.platforms) == 1:
+                platform = self.platforms[0]
+            order = self._build_order_from_lifecycle(order_id, data)
+            if platform is None:
+                log.warning("pending_order_platform_missing", order_id=order_id, platform=platform_name)
+                continue
+
+            try:
+                status = await platform.check_order_status(order)
+            except Exception as exc:
+                log.warning("check_order_status_failed", order_id=order_id, platform=platform_name, error=str(exc))
+                append_admin_error(
+                    source="check_order_status",
+                    message=f"Не удалось проверить статус заказа {order_id}",
+                    details=str(exc),
+                )
+                continue
+
+            if status == "accepted":
+                self._record_order_status(order, "accepted", platform_name)
+                if ORDER_COMPLETION_ENABLED:
+                    from freelance_automation.order_executor import OrderExecutor
+
+                    executor = OrderExecutor()
+                    try:
+                        completion_text = await executor.generate_completion_text(
+                            session, order, platform_name
+                        )
+                        executor.save_deliverable(order, completion_text)
+                    except Exception as exc:
+                        log.error("order_execution_failed", order_id=order_id, error=str(exc))
+                        completion_text = (
+                            "Здравствуйте! Заказ выполнен. "
+                            "Готов обсудить детали и внести изменения по вашему фидбэку."
+                        )
+                else:
+                    from freelance_automation.ai_responder import AIResponder
+
+                    responder = AIResponder()
+                    try:
+                        completion_text = await responder.generate_completion(session, order, platform_name)
+                    except Exception as exc:
+                        log.error("completion_generation_failed", order_id=order_id, error=str(exc))
+                        completion_text = (
+                            "Здравствуйте! Заказ выполнен. "
+                            "Готов обсудить детали и внести изменения по вашему фидбэку."
+                        )
+
+                try:
+                    delivered = await platform.deliver_order(order, completion_text)
+                except Exception as exc:
+                    delivered = False
+                    log.warning("deliver_order_failed", order_id=order_id, error=str(exc))
+                    append_admin_error(
+                        source="deliver_order",
+                        message=f"Не удалось отправить готовый заказ {order_id}",
+                        details=str(exc),
+                    )
+
+                if delivered:
+                    self._record_order_status(order, "completed", platform_name)
+                    log.info("order_completed", order_id=order_id)
+                else:
+                    self._record_order_status(order, "delivery_failed", platform_name)
+                    log.warning("order_delivery_failed", order_id=order_id)
+                continue
+
+            if status == "rejected":
+                self._record_order_status(order, "rejected", platform_name)
+                log.info("order_rejected", order_id=order_id)
+                continue
+
+            log.debug("order_still_pending", order_id=order_id, status=status)
+
     async def run_once(self, session: Optional[Any] = None) -> None:
         """Один цикл сканирования всех платформ и отправки откликов."""
         self._refresh_filters()
@@ -151,8 +254,10 @@ class FreelanceScheduler:
             import aiohttp
 
             async with aiohttp.ClientSession() as managed_session:
+                await self._process_pending_orders(managed_session)
                 await self._scan_platforms(managed_session)
         else:
+            await self._process_pending_orders(session)
             await self._scan_platforms(session)
 
     async def _scan_platforms(self, session: Any) -> None:
@@ -222,7 +327,7 @@ class FreelanceScheduler:
                     self._responses_this_hour.append(datetime.now(timezone.utc))
                     self._responded_order_ids.add(order.id)
                     self._save_dedup()
-                    self._record_order_status(order, "responded", platform_name)
+                    self._record_order_status(order, "awaiting_acceptance", platform_name)
                     log.info("response_sent", order_title=order.title)
                 else:
                     self._record_order_status(order, "response_failed", platform_name)
