@@ -41,11 +41,20 @@ async def run_health_server() -> None:
 
 async def run_freelance_scheduler() -> None:
     """Запуск планировщика фриланс-откликов."""
-    from freelance_automation.config import KEYWORDS, PLATFORMS
+    from freelance_automation.config import CATEGORIES, KEYWORDS
+    from freelance_automation.factory import build_platforms
     from freelance_automation.scheduler import FreelanceScheduler
 
-    scheduler = FreelanceScheduler(platforms=PLATFORMS, keywords=KEYWORDS)
-    await scheduler.run_forever()
+    platforms = await build_platforms()
+    if not platforms:
+        return
+
+    scheduler = FreelanceScheduler(
+        platforms=platforms,
+        keywords=KEYWORDS,
+        categories=CATEGORIES,
+    )
+    await scheduler.run_loop()
 
 
 async def run_alert_monitor() -> None:
@@ -57,6 +66,13 @@ async def run_alert_monitor() -> None:
     mgr = AlertManager()
     async with aiohttp.ClientSession() as session:
         await mgr.run_loop(session)
+
+
+async def run_restart_watcher(shutdown_event: asyncio.Event) -> None:
+    """Watch for a Telegram-requested restart and trigger graceful shutdown."""
+    from freelance_automation.telegram_admin import watch_restart_request
+
+    await watch_restart_request(shutdown_event)
 
 
 async def run_task_queue_worker() -> None:
@@ -106,6 +122,7 @@ async def main() -> None:
         asyncio.create_task(run_freelance_scheduler(), name="freelance"),
         asyncio.create_task(run_alert_monitor(), name="alerts"),
         asyncio.create_task(run_task_queue_worker(), name="task_queue"),
+        asyncio.create_task(run_restart_watcher(shutdown_event), name="restart_watcher"),
     ]
 
     # Ждём сигнала завершения

@@ -1,6 +1,13 @@
 """Конфигурация модуля автоматизации фриланса."""
 
+import json
 import os
+from typing import Any
+
+DYNAMIC_SETTINGS_PATH = os.getenv("FREELANCE_DYNAMIC_SETTINGS_PATH", "freelance_override.json")
+ERROR_STATE_PATH = os.getenv("FREELANCE_ADMIN_ERROR_PATH", "freelance_admin_errors.json")
+SERVICE_RESTART_REQUEST_PATH = os.getenv("FREELANCE_SERVICE_RESTART_PATH", "freelance_restart_request.json")
+ERROR_HISTORY_LIMIT = int(os.getenv("FREELANCE_ADMIN_ERROR_HISTORY_LIMIT", "20"))
 
 # Интервал сканирования (минуты)
 SCAN_INTERVAL_MINUTES = 5
@@ -40,3 +47,22 @@ RESPONSE_TEMPLATES = [
 # Ключевые слова для фильтрации заказов (из переменной окружения, через запятую)
 _keywords_env = os.getenv("FREELANCE_KEYWORDS", "")
 KEYWORDS: list[str] = [k.strip() for k in _keywords_env.split(",") if k.strip()]
+
+# Категории заказов для приоритизации и фильтрации
+_categories_env = os.getenv("FREELANCE_CATEGORIES", "")
+CATEGORIES: list[str] = [c.strip() for c in _categories_env.split(",") if c.strip()]
+
+# Пути для сохранения состояния откликов и жизненного цикла заказов
+DEDUP_PATH = os.getenv("FREELANCE_DEDUP_PATH", "freelance_responded.json")
+ORDER_LIFECYCLE_PATH = os.getenv("FREELANCE_ORDER_LIFECYCLE_PATH", "freelance_order_lifecycle.json")
+
+
+def load_dynamic_settings() -> dict[str, Any]:
+    try:
+        with open(DYNAMIC_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return {}
