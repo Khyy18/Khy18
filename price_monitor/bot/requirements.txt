@@ -1,0 +1,11 @@
+aiogram>=3.4
+aiosqlite>=0.19
+httpx>=0.25
+apscheduler>=3.10
+pydantic>=2.5
+pydantic-settings>=2.1
+openai>=1.10
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29
+tenacity>=8.2
+redis[hiredis]>=5.0
