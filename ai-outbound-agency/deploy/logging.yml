@@ -1,0 +1,49 @@
+# Docker Logging Configuration for AI Outbound Agency
+# Reference config - not loaded by Python directly.
+# LOG_LEVEL env var controls application log level (default: INFO).
+
+# Docker json-file logging driver with rotation
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+    tag: "{{.Name}}"
+
+# Loki configuration (for centralized log aggregation)
+loki:
+  url: http://loki:3100/loki/api/v1/push
+  labels:
+    app: ai-outbound-agency
+    environment: production
+  batching:
+    batch_size: 102400
+    batch_wait: 1s
+
+# Promtail configuration (log shipper to Loki)
+promtail:
+  server:
+    http_listen_port: 9080
+    grpc_listen_port: 0
+  positions:
+    filename: /tmp/positions.yaml
+  clients:
+    - url: http://loki:3100/loki/api/v1/push
+  scrape_configs:
+    - job_name: docker
+      static_configs:
+        - targets:
+            - localhost
+          labels:
+            job: ai-outbound-agency
+            __path__: /var/log/containers/*.log
+      pipeline_stages:
+        - docker: {}
+        - json:
+            expressions:
+              level: level
+              msg: msg
+              correlation_id: correlation_id
+        - labels:
+            level:
+            correlation_id:

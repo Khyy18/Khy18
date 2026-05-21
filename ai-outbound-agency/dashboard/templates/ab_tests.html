@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block title %}A/B Tests - AI Outbound Agency{% endblock %}
+{% block page_title %}A/B Test Results{% endblock %}
+
+{% block content %}
+<div id="ab-tests-app" class="space-y-8">
+    <!-- Active Tests -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Active Tests</h3>
+        <div id="active-tests" class="space-y-6">
+            <p class="text-gray-500">Loading active tests...</p>
+        </div>
+    </div>
+
+    <!-- Historical Tests -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Completed Tests</h3>
+        <div id="completed-tests" class="space-y-4">
+            <p class="text-gray-500">Loading completed tests...</p>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', async () => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) {
+        window.location.href = '/login';
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/optimizer/ab-tests', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!resp.ok) throw new Error('Failed to fetch');
+        const data = await resp.json();
+        renderTests(data);
+    } catch (err) {
+        document.getElementById('active-tests').innerHTML =
+            '<p class="text-red-500">Failed to load A/B test data</p>';
+    }
+});
+
+function calculateSignificance(variantA, variantB) {
+    // Simple z-test for proportions
+    const nA = variantA.sends || 1;
+    const nB = variantB.sends || 1;
+    const pA = (variantA.replies || 0) / nA;
+    const pB = (variantB.replies || 0) / nB;
+    const pPool = ((variantA.replies || 0) + (variantB.replies || 0)) / (nA + nB);
+    const se = Math.sqrt(pPool * (1 - pPool) * (1/nA + 1/nB));
+    if (se === 0) return 1;
+    const z = Math.abs(pA - pB) / se;
+    // Approximate p-value from z-score
+    const p = Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
+    return p;
+}
+
+function renderTests(data) {
+    const tests = data.tests || data || [];
+    const active = tests.filter(t => t.status === 'running');
+    const completed = tests.filter(t => t.status === 'completed');
+
+    // Render active tests
+    const activeContainer = document.getElementById('active-tests');
+    if (active.length === 0) {
+        activeContainer.innerHTML = '<p class="text-gray-500">No active tests</p>';
+    } else {
+        activeContainer.innerHTML = active.map(test => renderTestCard(test, true)).join('');
+    }
+
+    // Render completed tests
+    const completedContainer = document.getElementById('completed-tests');
+    if (completed.length === 0) {
+        completedContainer.innerHTML = '<p class="text-gray-500">No completed tests</p>';
+    } else {
+        completedContainer.innerHTML = completed.map(test => renderTestCard(test, false)).join('');
+    }
+}
+
+function renderTestCard(test, showPromote) {
+    const variants = test.variants || [];
+    let bestVariant = null;
+    let bestRate = -1;
+
+    variants.forEach(v => {
+        const rate = v.sends > 0 ? (v.replies || 0) / v.sends : 0;
+        if (rate > bestRate) {
+            bestRate = rate;
+            bestVariant = v.key || v.name;
+        }
+    });
+
+    // Check significance between first two variants
+    let isSignificant = false;
+    if (variants.length >= 2) {
+        const pValue = calculateSignificance(variants[0], variants[1]);
+        isSignificant = pValue < 0.05;
+    }
+
+    const variantsHtml = variants.map(v => {
+        const isWinner = (v.key || v.name) === bestVariant;
+        return `
+            <div class="border rounded p-4 ${isWinner ? 'border-green-500 bg-green-50' : 'border-gray-200'}">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="font-medium">${v.key || v.name || 'Variant'}</span>
+                    ${isWinner ? '<span class="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">Winner</span>' : ''}
+                </div>
+                <div class="grid grid-cols-4 gap-2 text-sm">
+                    <div><span class="text-gray-500">Sends:</span> ${v.sends || 0}</div>
+                    <div><span class="text-gray-500">Opens:</span> ${v.opens || 0}</div>
+                    <div><span class="text-gray-500">Clicks:</span> ${v.clicks || 0}</div>
+                    <div><span class="text-gray-500">Replies:</span> ${v.replies || 0}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    return `
+        <div class="border rounded-lg p-4 space-y-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h4 class="font-semibold text-gray-800">${test.name}</h4>
+                    <p class="text-sm text-gray-500">Campaign: ${test.campaign_name || 'N/A'}</p>
+                </div>
+                <div class="flex items-center space-x-2">
+                    ${isSignificant ? '<span class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">Significant (p&lt;0.05)</span>' : '<span class="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded-full">Not significant</span>'}
+                    ${showPromote ? `<button onclick="promoteWinner('${test.id}')" class="px-3 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">Promote Winner</button>` : ''}
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                ${variantsHtml}
+            </div>
+        </div>
+    `;
+}
+
+async function promoteWinner(testId) {
+    const token = localStorage.getItem('auth_token');
+    try {
+        const resp = await fetch(`/api/optimizer/ab-tests/${testId}/promote`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (resp.ok) {
+            location.reload();
+        } else {
+            alert('Failed to promote winner');
+        }
+    } catch (err) {
+        alert('Error promoting winner');
+    }
+}
+</script>
+{% endblock %}

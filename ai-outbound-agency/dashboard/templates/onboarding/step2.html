@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onboarding - Step 2 of 3</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/static/app.js" defer></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="max-w-3xl mx-auto p-8">
+        <!-- Step Indicator -->
+        <div class="flex items-center justify-center mb-8">
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center">
+                    <span class="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center text-sm font-bold">&#10003;</span>
+                    <span class="ml-2 text-sm text-green-600">Setup</span>
+                </div>
+                <div class="w-12 h-0.5 bg-green-500"></div>
+                <div class="flex items-center">
+                    <span class="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">2</span>
+                    <span class="ml-2 text-sm font-medium text-blue-600">Preview</span>
+                </div>
+                <div class="w-12 h-0.5 bg-gray-300"></div>
+                <div class="flex items-center">
+                    <span class="w-8 h-8 rounded-full bg-gray-300 text-gray-600 flex items-center justify-center text-sm font-bold">3</span>
+                    <span class="ml-2 text-sm text-gray-500">Launch</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loading" class="text-center py-16">
+            <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent"></div>
+            <p class="mt-4 text-gray-600">Generating your campaign plan...</p>
+        </div>
+
+        <!-- Preview Content -->
+        <div id="preview-content" class="hidden">
+            <div class="bg-white rounded-lg shadow-md p-8 mb-6">
+                <h1 class="text-2xl font-bold text-gray-900 mb-2">Your Campaign Preview</h1>
+                <p class="text-gray-600 mb-6">Review your AI-generated campaign. You can regenerate or confirm to activate.</p>
+
+                <div class="space-y-6">
+                    <div>
+                        <h2 class="text-lg font-semibold text-gray-800">Campaign Name</h2>
+                        <p id="campaign-name" class="text-gray-700 mt-1"></p>
+                    </div>
+
+                    <div>
+                        <h2 class="text-lg font-semibold text-gray-800">Value Proposition</h2>
+                        <p id="value-proposition" class="text-gray-700 mt-1"></p>
+                    </div>
+
+                    <div>
+                        <h2 class="text-lg font-semibold text-gray-800">ICP Summary</h2>
+                        <div id="icp-summary" class="mt-1 bg-gray-50 rounded p-3 text-sm text-gray-700"></div>
+                    </div>
+
+                    <div>
+                        <h2 class="text-lg font-semibold text-gray-800 mb-3">Email Sequence</h2>
+                        <div id="sequence-preview" class="space-y-3"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="error-message" class="hidden bg-red-50 text-red-700 p-3 rounded mb-4"></div>
+
+            <div class="flex space-x-4">
+                <button id="regenerate-btn" onclick="regenerate()"
+                    class="flex-1 bg-gray-200 text-gray-800 py-3 px-4 rounded-md font-medium hover:bg-gray-300 transition">
+                    Regenerate
+                </button>
+                <button id="confirm-btn" onclick="confirmCampaign()"
+                    class="flex-1 bg-blue-600 text-white py-3 px-4 rounded-md font-medium hover:bg-blue-700 transition">
+                    Confirm &amp; Activate
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const token = localStorage.getItem('token');
+
+        async function generatePreview() {
+            document.getElementById('loading').classList.remove('hidden');
+            document.getElementById('preview-content').classList.add('hidden');
+
+            try {
+                const resp = await fetch('/api/onboarding/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + (token || ''),
+                    },
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.detail || 'Generation failed');
+                }
+
+                const data = await resp.json();
+                renderPreview(data);
+            } catch (err) {
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('preview-content').classList.remove('hidden');
+                const errorDiv = document.getElementById('error-message');
+                errorDiv.textContent = err.message;
+                errorDiv.classList.remove('hidden');
+            }
+        }
+
+        function renderPreview(data) {
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('preview-content').classList.remove('hidden');
+
+            document.getElementById('campaign-name').textContent = data.campaign_name || '';
+            document.getElementById('value-proposition').textContent = data.value_proposition || '';
+
+            const icp = data.icp_filter || {};
+            document.getElementById('icp-summary').innerHTML =
+                '<p><strong>Industry:</strong> ' + (icp.industry || 'N/A') + '</p>' +
+                '<p><strong>Company Size:</strong> ' + (icp.company_size || 'N/A') + '</p>' +
+                '<p><strong>Titles:</strong> ' + (icp.titles || 'N/A') + '</p>';
+
+            const seqContainer = document.getElementById('sequence-preview');
+            seqContainer.innerHTML = '';
+            (data.sequence || []).forEach(function(step, i) {
+                const div = document.createElement('div');
+                div.className = 'border border-gray-200 rounded p-4 cursor-pointer';
+                div.innerHTML =
+                    '<div class="flex justify-between items-center" onclick="this.parentElement.querySelector(\'.step-body\').classList.toggle(\'hidden\')">' +
+                    '<h3 class="font-medium text-gray-800">Step ' + (i + 1) + ': ' + (step.step_type || '') + '</h3>' +
+                    '<span class="text-gray-400 text-sm">Click to expand</span></div>' +
+                    '<div class="step-body hidden mt-3 space-y-2">' +
+                    '<p class="text-sm"><strong>Subject:</strong> ' + (step.subject || '') + '</p>' +
+                    '<p class="text-sm text-gray-600">' + (step.body || '') + '</p></div>';
+                seqContainer.appendChild(div);
+            });
+        }
+
+        async function regenerate() {
+            const btn = document.getElementById('regenerate-btn');
+            btn.disabled = true;
+            btn.textContent = 'Regenerating...';
+            await generatePreview();
+            btn.disabled = false;
+            btn.textContent = 'Regenerate';
+        }
+
+        async function confirmCampaign() {
+            const btn = document.getElementById('confirm-btn');
+            btn.disabled = true;
+            btn.textContent = 'Activating...';
+
+            try {
+                const resp = await fetch('/api/onboarding/confirm', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + (token || ''),
+                    },
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.detail || 'Activation failed');
+                }
+
+                window.location.href = '/onboarding/complete';
+            } catch (err) {
+                const errorDiv = document.getElementById('error-message');
+                errorDiv.textContent = err.message;
+                errorDiv.classList.remove('hidden');
+                btn.disabled = false;
+                btn.textContent = 'Confirm & Activate';
+            }
+        }
+
+        // Auto-generate on page load
+        generatePreview();
+    </script>
+</body>
+</html>
