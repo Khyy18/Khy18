@@ -96,8 +96,16 @@ class SubscriptionStatus(str, enum.Enum):
 class PlanName(str, enum.Enum):
     starter = "starter"
     growth = "growth"
-    scale = "scale"
+    agency = "agency"
     enterprise = "enterprise"
+
+
+class OnboardingStep(str, enum.Enum):
+    tenant_created = "tenant_created"
+    smtp_connected = "smtp_connected"
+    icp_uploaded = "icp_uploaded"
+    campaign_activated = "campaign_activated"
+    completed = "completed"
 
 
 # ---------- Utility ----------
@@ -120,6 +128,9 @@ class Tenant(Base):
     domain = Column(String, nullable=False)
     settings = Column(JSONB, default=dict)
     brand_settings = Column(JSONB, default=dict)
+    onboarding_step = Column(
+        Enum(OnboardingStep), default=OnboardingStep.tenant_created, nullable=True
+    )
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
     leads = relationship("Lead", back_populates="tenant")
@@ -272,6 +283,7 @@ class Plan(Base):
     emails_limit = Column(Integer, nullable=False)
     linkedin_limit = Column(Integer, nullable=False)
     campaigns_limit = Column(Integer, nullable=False)
+    domains_limit = Column(Integer, nullable=False, default=1)
     price_cents = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
@@ -348,6 +360,7 @@ class Webhook(Base):
     url = Column(String, nullable=False)
     events = Column(JSONB, default=list)
     secret = Column(String, nullable=False)
+    template_type = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
     is_active = Column(Boolean, default=True, nullable=False)
 

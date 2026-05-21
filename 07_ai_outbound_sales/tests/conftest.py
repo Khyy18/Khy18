@@ -341,6 +341,7 @@ def make_plan(**kwargs) -> Plan:
         "emails_limit": 1000,
         "linkedin_limit": 100,
         "campaigns_limit": 5,
+        "domains_limit": 1,
         "price_cents": 2900,
         "created_at": datetime.now(timezone.utc),
     }

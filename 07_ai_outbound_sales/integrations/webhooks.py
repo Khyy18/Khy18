@@ -16,6 +16,82 @@ from core.models import Webhook
 logger = logging.getLogger(__name__)
 
 
+# ---------- CRM Payload Templates ----------
+
+
+def hubspot_contact_payload(
+    lead_data: dict,
+    conversation_history: list,
+    score: float,
+    channel: str,
+) -> dict:
+    """Format payload according to HubSpot contact creation API."""
+    notes = "; ".join(
+        entry.get("message", "") for entry in conversation_history
+    ) if conversation_history else ""
+    return {
+        "properties": {
+            "email": lead_data.get("email", ""),
+            "firstname": lead_data.get("first_name", ""),
+            "lastname": lead_data.get("last_name", ""),
+            "company": lead_data.get("company", ""),
+            "jobtitle": lead_data.get("title", ""),
+            "lead_score": score,
+            "lead_source": "ai_outbound",
+            "last_channel": channel,
+            "conversation_notes": notes,
+        }
+    }
+
+
+def amocrm_contact_payload(
+    lead_data: dict,
+    conversation_history: list,
+    score: float,
+    channel: str,
+) -> dict:
+    """Format payload according to AmoCRM contact creation API."""
+    first_name = lead_data.get("first_name", "")
+    last_name = lead_data.get("last_name", "")
+    name = f"{first_name} {last_name}".strip()
+    return {
+        "name": name,
+        "custom_fields_values": [
+            {"field_code": "EMAIL", "values": [{"value": lead_data.get("email", "")}]},
+            {"field_code": "COMPANY", "values": [{"value": lead_data.get("company", "")}]},
+            {"field_code": "POSITION", "values": [{"value": lead_data.get("title", "")}]},
+            {"field_code": "LEAD_SCORE", "values": [{"value": score}]},
+        ],
+        "_embedded": {
+            "tags": [
+                {"name": "ai_outbound"},
+                {"name": channel},
+            ]
+        },
+    }
+
+
+def format_webhook_payload(
+    webhook: "Webhook",
+    lead_data: dict,
+    conversation_history: list,
+    score: float,
+    channel: str,
+) -> dict:
+    """Dispatch to the appropriate template based on webhook.template_type."""
+    if webhook.template_type == "hubspot":
+        return hubspot_contact_payload(lead_data, conversation_history, score, channel)
+    elif webhook.template_type == "amocrm":
+        return amocrm_contact_payload(lead_data, conversation_history, score, channel)
+    # Generic payload
+    return {
+        "lead": lead_data,
+        "conversation_history": conversation_history,
+        "score": score,
+        "channel": channel,
+    }
+
+
 class OutgoingWebhookDispatcher:
     """Dispatches events to registered webhook URLs with HMAC signing and retry."""
 

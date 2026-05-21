@@ -153,6 +153,16 @@ async def subscribe(
     return {"checkout_url": checkout.get("url", "")}
 
 
+@router.post("/checkout", response_model=CheckoutSessionResponse)
+async def checkout(
+    data: SubscribeRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Create a Stripe Checkout Session (alias for /subscribe)."""
+    return await subscribe(data=data, current_user=current_user, session=session)
+
+
 @router.post("/change-plan", response_model=SubscriptionResponse)
 async def change_plan(
     data: ChangePlanRequest,

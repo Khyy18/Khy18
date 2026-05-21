@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weekly Performance Report</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f6f9; font-family: Arial, Helvetica, sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f6f9; padding: 20px 0;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="background-color: #1a73e8; padding: 30px 40px; text-align: center;">
+                            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700;">Weekly Performance Report</h1>
+                        </td>
+                    </tr>
+                    <!-- Period -->
+                    <tr>
+                        <td style="padding: 20px 40px 10px 40px; text-align: center;">
+                            <p style="color: #5f6368; margin: 0; font-size: 14px;">{{ report.period }}</p>
+                        </td>
+                    </tr>
+                    <!-- Metrics Table -->
+                    <tr>
+                        <td style="padding: 20px 40px;">
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                                <tr style="background-color: #f8f9fa;">
+                                    <th style="padding: 12px 16px; text-align: left; font-size: 13px; color: #5f6368; border-bottom: 2px solid #e0e0e0;">Metric</th>
+                                    <th style="padding: 12px 16px; text-align: center; font-size: 13px; color: #5f6368; border-bottom: 2px solid #e0e0e0;">This Week</th>
+                                    <th style="padding: 12px 16px; text-align: center; font-size: 13px; color: #5f6368; border-bottom: 2px solid #e0e0e0;">Last Week</th>
+                                    <th style="padding: 12px 16px; text-align: center; font-size: 13px; color: #5f6368; border-bottom: 2px solid #e0e0e0;">Change</th>
+                                </tr>
+                                {% set metric_labels = [
+                                    ("leads_contacted", "Leads Contacted"),
+                                    ("emails_sent", "Emails Sent"),
+                                    ("open_rate", "Open Rate"),
+                                    ("reply_rate", "Reply Rate"),
+                                    ("meetings_booked", "Meetings Booked"),
+                                    ("hot_leads", "Hot Leads")
+                                ] %}
+                                {% for key, label in metric_labels %}
+                                {% set m = report.metrics[key] %}
+                                {% set delta = m.delta_percent %}
+                                {% if key in ("open_rate", "reply_rate") %}
+                                    {% set current_display = "%.1f%%"|format(m.current) %}
+                                    {% set previous_display = "%.1f%%"|format(m.previous) %}
+                                {% else %}
+                                    {% set current_display = m.current %}
+                                    {% set previous_display = m.previous %}
+                                {% endif %}
+                                {% if delta >= 0 %}
+                                    {% set arrow = "&#9650;" %}
+                                    {% set color = "#0d9488" %}
+                                    {% set delta_display = "+%.1f%%"|format(delta) %}
+                                {% else %}
+                                    {% set arrow = "&#9660;" %}
+                                    {% set color = "#dc2626" %}
+                                    {% set delta_display = "%.1f%%"|format(delta) %}
+                                {% endif %}
+                                <tr>
+                                    <td style="padding: 12px 16px; font-size: 14px; color: #202124; border-bottom: 1px solid #e0e0e0;">{{ label }}</td>
+                                    <td style="padding: 12px 16px; text-align: center; font-size: 14px; color: #202124; font-weight: 600; border-bottom: 1px solid #e0e0e0;">{{ current_display }}</td>
+                                    <td style="padding: 12px 16px; text-align: center; font-size: 14px; color: #5f6368; border-bottom: 1px solid #e0e0e0;">{{ previous_display }}</td>
+                                    <td style="padding: 12px 16px; text-align: center; font-size: 14px; color: {{ color }}; font-weight: 600; border-bottom: 1px solid #e0e0e0;">{{ arrow }} {{ delta_display }}</td>
+                                </tr>
+                                {% endfor %}
+                            </table>
+                        </td>
+                    </tr>
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 30px 40px; text-align: center; background-color: #f8f9fa; border-top: 1px solid #e0e0e0;">
+                            <p style="color: #5f6368; margin: 0; font-size: 12px;">AI Outbound Agency - Automated Weekly Report</p>
+                            <p style="color: #9aa0a6; margin: 4px 0 0 0; font-size: 11px;">Generated on {{ report.generated_at[:10] }}</p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

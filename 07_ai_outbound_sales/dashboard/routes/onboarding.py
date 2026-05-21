@@ -5,13 +5,28 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+import aiosmtplib
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import Campaign, CampaignStatus, Sequence, Tenant, User
+from core.models import (
+    Campaign,
+    CampaignStatus,
+    OnboardingStep,
+    Sequence,
+    Tenant,
+    User,
+)
 from dashboard.auth import get_current_user
+from dashboard.schemas import (
+    OnboardingStatusResponse,
+    OnboardingStep1Request,
+    OnboardingStep2Request,
+    OnboardingStep3Request,
+    OnboardingStep4Request,
+)
 
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
@@ -275,3 +290,239 @@ async def onboarding_confirm(
     """Activate the generated draft campaign."""
     service = OnboardingService(session=session)
     return await service.confirm_campaign(tenant_id=current_user.tenant_id)
+
+
+# ---------- Step-based Onboarding Flow ----------
+
+# Ordered list of steps for progression tracking
+_STEP_ORDER = [
+    OnboardingStep.tenant_created,
+    OnboardingStep.smtp_connected,
+    OnboardingStep.icp_uploaded,
+    OnboardingStep.campaign_activated,
+    OnboardingStep.completed,
+]
+
+
+def _steps_completed(current_step: OnboardingStep) -> list[str]:
+    """Return list of step values that have been completed (all before current)."""
+    idx = _STEP_ORDER.index(current_step)
+    return [s.value for s in _STEP_ORDER[:idx]]
+
+
+@router.get("/status")
+async def onboarding_status(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> OnboardingStatusResponse:
+    """Return current onboarding step for the tenant."""
+    result = await session.execute(
+        select(Tenant).where(Tenant.id == current_user.tenant_id)
+    )
+    tenant = result.scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+    current = tenant.onboarding_step or OnboardingStep.tenant_created
+    return OnboardingStatusResponse(
+        current_step=current.value,
+        steps_completed=_steps_completed(current),
+        tenant_id=str(tenant.id),
+    )
+
+
+@router.post("/step1")
+async def onboarding_step1(
+    data: OnboardingStep1Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Step 1: Validate and store tenant info (company_name, domain)."""
+    result = await session.execute(
+        select(Tenant).where(Tenant.id == current_user.tenant_id)
+    )
+    tenant = result.scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+
+    current = tenant.onboarding_step or OnboardingStep.tenant_created
+    if current != OnboardingStep.tenant_created:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Step 1 already completed. Current step: " + current.value,
+        )
+
+    tenant.name = data.company_name
+    tenant.domain = data.domain
+    tenant.onboarding_step = OnboardingStep.smtp_connected
+    await session.flush()
+
+    return {"status": "ok", "next_step": "smtp_connected"}
+
+
+@router.post("/step2")
+async def onboarding_step2(
+    data: OnboardingStep2Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Step 2: Test SMTP connection and store config."""
+    result = await session.execute(
+        select(Tenant).where(Tenant.id == current_user.tenant_id)
+    )
+    tenant = result.scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+
+    current = tenant.onboarding_step or OnboardingStep.tenant_created
+    if current != OnboardingStep.smtp_connected:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Complete previous steps first. Current step: " + current.value,
+        )
+
+    # Test SMTP connection and authentication
+    try:
+        smtp = aiosmtplib.SMTP(
+            hostname=data.smtp_host, port=data.smtp_port, timeout=10
+        )
+        await smtp.connect()
+        try:
+            await smtp.login(data.smtp_user, data.smtp_password)
+        except Exception as auth_exc:
+            await smtp.quit()
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"SMTP authentication failed: {str(auth_exc)}",
+            )
+        await smtp.quit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"SMTP connection failed: {str(exc)}",
+        )
+
+    # Store SMTP config in tenant settings
+    # TODO: SMTP passwords should be encrypted at rest before production deployment.
+    # Consider using a secrets manager or application-level encryption (e.g., Fernet)
+    # for the password field before persisting to the database.
+    settings = dict(tenant.settings) if tenant.settings else {}
+    settings["smtp"] = {
+        "host": data.smtp_host,
+        "port": data.smtp_port,
+        "user": data.smtp_user,
+        "password": data.smtp_password,
+    }
+    tenant.settings = settings
+    tenant.onboarding_step = OnboardingStep.icp_uploaded
+    await session.flush()
+
+    return {"status": "ok", "next_step": "icp_uploaded"}
+
+
+@router.post("/step3")
+async def onboarding_step3(
+    data: OnboardingStep3Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Step 3: Store ICP data."""
+    result = await session.execute(
+        select(Tenant).where(Tenant.id == current_user.tenant_id)
+    )
+    tenant = result.scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+
+    current = tenant.onboarding_step or OnboardingStep.tenant_created
+    if current != OnboardingStep.icp_uploaded:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Complete previous steps first. Current step: " + current.value,
+        )
+
+    # Store ICP data in tenant settings
+    settings = dict(tenant.settings) if tenant.settings else {}
+    settings["icp"] = {
+        "industry": data.industry,
+        "company_size": data.company_size,
+        "titles": data.titles,
+        "geo": data.geo,
+    }
+    tenant.settings = settings
+    tenant.onboarding_step = OnboardingStep.campaign_activated
+    await session.flush()
+
+    return {"status": "ok", "next_step": "campaign_activated"}
+
+
+@router.post("/step4")
+async def onboarding_step4(
+    data: OnboardingStep4Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(_get_session),
+) -> dict:
+    """Step 4: Create and activate a campaign from ICP data."""
+    result = await session.execute(
+        select(Tenant).where(Tenant.id == current_user.tenant_id)
+    )
+    tenant = result.scalar_one_or_none()
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found"
+        )
+
+    current = tenant.onboarding_step or OnboardingStep.tenant_created
+    if current != OnboardingStep.campaign_activated:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Complete previous steps first. Current step: " + current.value,
+        )
+
+    # Get ICP data from settings
+    settings = dict(tenant.settings) if tenant.settings else {}
+    icp_data = settings.get("icp", {})
+
+    # Create sequence
+    sequence = Sequence(
+        tenant_id=tenant.id,
+        name=f"{data.campaign_name} Sequence",
+        steps=[
+            {"step_type": "initial", "delay_days": 0, "subject": "Introduction", "body": "Hello"},
+            {"step_type": "follow_up_1", "delay_days": 3, "subject": "Following up", "body": "Checking in"},
+            {"step_type": "follow_up_2", "delay_days": 6, "subject": "Last note", "body": "One more thought"},
+        ],
+    )
+    session.add(sequence)
+    await session.flush()
+    await session.refresh(sequence)
+
+    # Create campaign from ICP data
+    campaign = Campaign(
+        tenant_id=tenant.id,
+        name=data.campaign_name,
+        icp_filter=icp_data,
+        sequence_id=sequence.id,
+        status=CampaignStatus.active,
+    )
+    session.add(campaign)
+    await session.flush()
+    await session.refresh(campaign)
+
+    tenant.onboarding_step = OnboardingStep.completed
+    await session.flush()
+
+    return {
+        "status": "ok",
+        "campaign_id": str(campaign.id),
+        "message": "Campaign activated! Onboarding complete.",
+    }
